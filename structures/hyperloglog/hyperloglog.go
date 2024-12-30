@@ -1,4 +1,4 @@
-package hll
+package hyperloglog
 
 import (
 	"crypto/sha256"
@@ -87,5 +87,4 @@ func trailingZeroBits(value uint64) uint8 {
 
 // TODO: Serijalizacija
 // TODO: Deserijalizacija
-// TODO: napisati testove
 // (pogledati primer 5 sa trecih vezbi, i nalik toga napisati funkcije)
