@@ -29,8 +29,8 @@ func (bf *BloomFilter) Add(item string) {
 	data := []byte(item)
 	for i := uint32(0); i < bf.k; i++ {
 		hash := bf.h[i].Hash(data) % uint64(bf.m) // Indeks bita u nizu bitova
-		bit_mask := byte(1 << (hash % 8))         // Bajt koji na odredjenom bitu ima 1 a na ostalim 0
-		bf.b[hash/8] |= bit_mask                  // Setuje tacno jedan bit na 1
+		bitMask := byte(1 << (hash % 8))          // Bajt koji na odredjenom bitu ima 1 a na ostalim 0
+		bf.b[hash/8] |= bitMask                   // Setuje tacno jedan bit na 1
 	}
 }
 
@@ -39,8 +39,8 @@ func (bf *BloomFilter) Contains(item string) bool {
 	data := []byte(item)
 	for i := uint32(0); i < bf.k; i++ {
 		hash := bf.h[i].Hash(data) % uint64(bf.m) // Indeks bita u nizu bitova
-		bit_mask := byte(1 << (hash % 8))         // Bajt koji na odredjenom bitu ima 1 a na ostalim 0
-		if bf.b[hash/8]&bit_mask == 0 {           // Proverava da li je bit 0
+		bitMask := byte(1 << (hash % 8))          // Bajt koji na odredjenom bitu ima 1 a na ostalim 0
+		if bf.b[hash/8]&bitMask == 0 {            // Proverava da li je bit 0
 			return false // Cim jeste znamo ZASIGURNO da podatak nije u BloomFileru
 		}
 	}

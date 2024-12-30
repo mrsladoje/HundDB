@@ -13,7 +13,7 @@ const (
 )
 
 type HLL struct {
-	m   uint64
+	m   uint32
 	p   uint8
 	reg []uint8
 }
@@ -22,7 +22,7 @@ func NewHLL(precision uint8) *HLL {
 	if precision < HLL_MIN_PRECISION || precision > HLL_MAX_PRECISION {
 		panic("precision must be between 4 and 16")
 	}
-	m := uint64(1 << precision) 
+	m := uint32(1 << precision)
 	return &HLL{
 		m:   m,
 		p:   precision,
@@ -30,14 +30,13 @@ func NewHLL(precision uint8) *HLL {
 	}
 }
 
-func (hll *HLL) Add(value []byte) {
-	hash := sha256.Sum256(value)
-	x := binary.BigEndian.Uint64(hash[:8])
-	j := firstKbits(x, hll.p)
-	w := x << hll.p
-	zeroCount := trailingZeroBits(w) + 1
-	if zeroCount > hll.reg[j] {
-		hll.reg[j] = zeroCount
+func (hll *HLL) Add(item string) {
+	rawHash := sha256.Sum256([]byte(item))
+	hash := binary.BigEndian.Uint64(rawHash[:8])
+	regBucket := firstKbits(hash, hll.p)
+	zeroCount := trailingZeroBits(hash) + 1
+	if zeroCount > hll.reg[regBucket] {
+		hll.reg[regBucket] = zeroCount
 	}
 }
 
@@ -47,18 +46,15 @@ func (hll *HLL) Estimate() float64 {
 		sum += 1.0 / math.Pow(2.0, float64(val))
 	}
 	alpha := 0.7213 / (1.0 + 1.079/float64(hll.m))
-	rawEstimate := alpha * float64(hll.m*hll.m) / sum
+	estimate := alpha * float64(hll.m*hll.m) / sum
 
 	emptyRegs := hll.emptyCount()
-	if rawEstimate <= 2.5*float64(hll.m) && emptyRegs > 0 {
+	if estimate <= 2.5*float64(hll.m) && emptyRegs > 0 {
 		return float64(hll.m) * math.Log(float64(hll.m)/float64(emptyRegs))
+	} else if estimate > 1.0/30.0*math.Pow(2.0, 32.0) {
+		return -math.Pow(2.0, 32.0) * math.Log(1.0-estimate/math.Pow(2.0, 32.0))
 	}
-
-	if rawEstimate > 1.0/30.0*math.Pow(2.0, 32.0) {
-		return -math.Pow(2.0, 32.0) * math.Log(1.0-rawEstimate/math.Pow(2.0, 32.0))
-	}
-
-	return rawEstimate
+	return estimate
 }
 
 func (hll *HLL) emptyCount() int {
