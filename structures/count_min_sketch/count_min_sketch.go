@@ -1,4 +1,4 @@
-package main
+package count_min_sketch
 
 type CMS struct {
 	// Radi sa uint32 kako je on efektivnije resenje za kolicinu podataka naseg projekta
