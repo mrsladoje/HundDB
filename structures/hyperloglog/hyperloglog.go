@@ -13,16 +13,17 @@ const (
 )
 
 type HLL struct {
-	m   uint32
-	p   uint8
-	reg []uint8
+	m   uint32  // m - velicina niza reg, 2^p
+	p   uint8   // p - pripada [4, 16], odreduje na osnovu koliko prvih p bitova hasha se pravi bucket za reg
+	reg []uint8 // reg - niz najduize zaredjanih 0 bitova + 1 na kraju hasha za taj bucket
 }
 
+// Kreira novu instancu HyperLogLoga
 func NewHLL(precision uint8) *HLL {
 	if precision < HLL_MIN_PRECISION || precision > HLL_MAX_PRECISION {
 		panic("precision must be between 4 and 16")
 	}
-	m := uint32(1 << precision)
+	m := uint32(1 << precision) // ekvivalento sa 2^p
 	return &HLL{
 		m:   m,
 		p:   precision,
@@ -30,6 +31,8 @@ func NewHLL(precision uint8) *HLL {
 	}
 }
 
+// Dodaje element tako sto u zeljeni bucket stavlja vrednost zaredjanih nula bitova
+// na kraju + 1 ukoliko je veci od vec prisutne vrednosti
 func (hll *HLL) Add(item string) {
 	rawHash := sha256.Sum256([]byte(item))
 	hash := binary.BigEndian.Uint64(rawHash[:8])
@@ -40,6 +43,7 @@ func (hll *HLL) Add(item string) {
 	}
 }
 
+// Pretopostavlja koliko ima elemenata u HyperLogLog-u na osnovu verovatnoce, sa malom greskom
 func (hll *HLL) Estimate() float64 {
 	sum := 0.0
 	for _, val := range hll.reg {
@@ -57,6 +61,8 @@ func (hll *HLL) Estimate() float64 {
 	return estimate
 }
 
+// Pomocna funkcija
+// Vraca broj registara u kojima je nula
 func (hll *HLL) emptyCount() int {
 	count := 0
 	for _, val := range hll.reg {
@@ -67,10 +73,19 @@ func (hll *HLL) emptyCount() int {
 	return count
 }
 
+// Pomocna funkcija
+// Vraca index bucketa na onsovu prvih p bitova
 func firstKbits(value uint64, k uint8) uint64 {
 	return value >> (64 - k)
 }
 
+// Pomocna funkcija
+// Vraca broj zaredjanih nula bitova na kraju vrednosti
 func trailingZeroBits(value uint64) uint8 {
 	return uint8(bits.TrailingZeros64(value))
 }
+
+// TODO: Serijalizacija
+// TODO: Deserijalizacija
+// TODO: napisati testove
+// (pogledati primer 5 sa trecih vezbi, i nalik toga napisati funkcije)
