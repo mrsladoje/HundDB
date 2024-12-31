@@ -36,8 +36,8 @@ func NewHLL(precision uint8) *HLL {
 
 // Add inserts an element into the HyperLogLog by updating the corresponding register.
 // item: the element to be added to the HyperLogLog.
-func (hll *HLL) Add(item string) {
-	rawHash := sha256.Sum256([]byte(item))
+func (hll *HLL) Add(item []byte) {
+	rawHash := sha256.Sum256(item)
 	hash := binary.BigEndian.Uint64(rawHash[:8])
 	regBucket := firstKbits(hash, hll.p)
 	zeroCount := trailingZeroBits(hash) + 1

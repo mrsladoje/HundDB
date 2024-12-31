@@ -30,21 +30,19 @@ func NewCMS(epsilon float64, delta float64) *CMS {
 
 // Add inserts an element into the Count-Min Sketch by incrementing the corresponding cells in the table.
 // item: the element to be added to the sketch.
-func (cms *CMS) Add(item string) {
-	data := []byte(item)
+func (cms *CMS) Add(item []byte) {
 	for i := uint32(0); i < cms.k; i++ {
-		j := cms.h[i].Hash(data) % uint64(cms.m)
+		j := cms.h[i].Hash(item) % uint64(cms.m)
 		cms.table[i][j]++
 	}
 }
 
 // Count estimates the frequency of an element in the Count-Min Sketch.
 // item: the element to be checked.
-func (cms *CMS) Count(item string) uint32 {
-	data := []byte(item)
+func (cms *CMS) Count(item []byte) uint32 {
 	min := uint32(4294967295) // Initialize to max uint32 value
 	for i := uint32(0); i < cms.k; i++ {
-		j := cms.h[i].Hash(data) % uint64(cms.m)
+		j := cms.h[i].Hash(item) % uint64(cms.m)
 		if cms.table[i][j] < min {
 			min = cms.table[i][j]
 		}

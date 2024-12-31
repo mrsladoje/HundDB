@@ -31,10 +31,9 @@ func NewBloomFilter(expectedElements int, falsePositiveRate float64) *BloomFilte
 
 // Add inserts an element into the Bloom Filter by setting the corresponding bits to 1.
 // item: the element to be added to the filter.
-func (bf *BloomFilter) Add(item string) {
-	data := []byte(item)
+func (bf *BloomFilter) Add(item []byte) {
 	for i := uint32(0); i < bf.k; i++ {
-		hash := bf.h[i].Hash(data) % uint64(bf.m)
+		hash := bf.h[i].Hash(item) % uint64(bf.m)
 		bitMask := byte(1 << (hash % 8))
 		bf.b[hash/8] |= bitMask
 	}
@@ -44,10 +43,9 @@ func (bf *BloomFilter) Add(item string) {
 // It can tell with 100% certainty that the element is conitaind, but will tell if it isn't
 // conitaind with false positive rate used as a parameter when creating an instance.
 // item: the element to be checked.
-func (bf *BloomFilter) Contains(item string) bool {
-	data := []byte(item)
+func (bf *BloomFilter) Contains(item []byte) bool {
 	for i := uint32(0); i < bf.k; i++ {
-		hash := bf.h[i].Hash(data) % uint64(bf.m)
+		hash := bf.h[i].Hash(item) % uint64(bf.m)
 		bitMask := byte(1 << (hash % 8))
 		if bf.b[hash/8]&bitMask == 0 {
 			return false
