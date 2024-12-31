@@ -12,18 +12,21 @@ const (
 	HLL_MAX_PRECISION = 16
 )
 
+// HLL is a probabilistic data structure used to estimate the cardinality of a set.
+// It works with uint32 for efficiency given the data size in our project.
 type HLL struct {
-	m   uint32  // m - velicina niza reg, 2^p
-	p   uint8   // p - pripada [4, 16], odreduje na osnovu koliko prvih p bitova hasha se pravi bucket za reg
-	reg []uint8 // reg - niz najduize zaredjanih 0 bitova + 1 na kraju hasha za taj bucket
+	m   uint32  // Size of the register array, 2^p
+	p   uint8   // Precision, determines the number of bits used for the bucket index
+	reg []uint8 // Array of registers, each storing the maximum number of trailing zero bits + 1
 }
 
-// Kreira novu instancu HyperLogLoga
+// NewHLL creates a new instance of a HyperLogLog.
+// precision: the precision parameter, must be between 4 and 16.
 func NewHLL(precision uint8) *HLL {
 	if precision < HLL_MIN_PRECISION || precision > HLL_MAX_PRECISION {
 		panic("precision must be between 4 and 16")
 	}
-	m := uint32(1 << precision) // ekvivalento sa 2^p
+	m := uint32(1 << precision) // Equivalent to 2^p
 	return &HLL{
 		m:   m,
 		p:   precision,
@@ -31,8 +34,8 @@ func NewHLL(precision uint8) *HLL {
 	}
 }
 
-// Dodaje element tako sto u zeljeni bucket stavlja vrednost zaredjanih nula bitova
-// na kraju + 1 ukoliko je veci od vec prisutne vrednosti
+// Add inserts an element into the HyperLogLog by updating the corresponding register.
+// item: the element to be added to the HyperLogLog.
 func (hll *HLL) Add(item string) {
 	rawHash := sha256.Sum256([]byte(item))
 	hash := binary.BigEndian.Uint64(rawHash[:8])
@@ -43,7 +46,7 @@ func (hll *HLL) Add(item string) {
 	}
 }
 
-// Pretopostavlja koliko ima elemenata u HyperLogLog-u na osnovu verovatnoce, sa malom greskom
+// Estimate estimates the cardinality of the set represented by the HyperLogLog.
 func (hll *HLL) Estimate() float64 {
 	sum := 0.0
 	for _, val := range hll.reg {
@@ -61,8 +64,7 @@ func (hll *HLL) Estimate() float64 {
 	return estimate
 }
 
-// Pomocna funkcija
-// Vraca broj registara u kojima je nula
+// emptyCount returns the number of registers that are zero.
 func (hll *HLL) emptyCount() int {
 	count := 0
 	for _, val := range hll.reg {
@@ -73,14 +75,12 @@ func (hll *HLL) emptyCount() int {
 	return count
 }
 
-// Pomocna funkcija
-// Vraca index bucketa na onsovu prvih p bitova
+// firstKbits returns the first k bits of the value.
 func firstKbits(value uint64, k uint8) uint64 {
 	return value >> (64 - k)
 }
 
-// Pomocna funkcija
-// Vraca broj zaredjanih nula bitova na kraju vrednosti
+// trailingZeroBits returns the number of trailing zero bits in the value.
 func trailingZeroBits(value uint64) uint8 {
 	return uint8(bits.TrailingZeros64(value))
 }
