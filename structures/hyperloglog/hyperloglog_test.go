@@ -41,7 +41,7 @@ func TestAddAndEstimate(t *testing.T) {
 	for _, test := range tests {
 		hll := NewHLL(test.precision)
 		for _, elem := range test.elements {
-			hll.Add(elem)
+			hll.Add([]byte(elem))
 		}
 
 		estimate := hll.Estimate()
@@ -67,7 +67,7 @@ func TestEmptyCount(t *testing.T) {
 	for _, test := range tests {
 		hll := NewHLL(test.precision)
 		for _, elem := range test.elements {
-			hll.Add(elem)
+			hll.Add([]byte(elem))
 		}
 
 		emptyCount := hll.emptyCount()
