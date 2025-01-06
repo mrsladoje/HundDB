@@ -54,3 +54,8 @@ func NewMerkleTree(blocks []string) *MerkleTree {
 	return &MerkleTree{nodes[0]}
 
 }
+
+//TODO: Compare merkle trees
+//TODO: Traverse tree
+//TODO: Serialization
+//TODO: Derialization
