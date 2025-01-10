@@ -1,9 +1,9 @@
 package sim_hash
 
 import (
+	"encoding/binary"
 	"hash/fnv"
 	"math/bits"
-	"strings"
 )
 
 // GenerateWordFrequency generates a frequency map of words in the text.
@@ -11,7 +11,7 @@ import (
 // TODO: maybe should be implemented using CMS, will consult with TA
 func GenerateWordFrequency(text string) map[string]uint32 {
 	wordFrequency := make(map[string]uint32)
-	words := strings.Fields(strings.ToLower(text)) // TODO: MAKE A UTILS TOKENIZER
+	words := processText(text)
 	for _, word := range words {
 		wordFrequency[word]++
 	}
@@ -59,8 +59,17 @@ func HammingDistance(fingerprint1, fingerprint2 uint64) uint8 {
 	return uint8(bits.OnesCount64(diff))
 }
 
-// TODO: Serijalizacija
-// TODO: Deserijalizacija
-// TODO: Napisati testove (pogledati primer 5 sa trecih vezbi, i nalik toga napisati funkcije)
+func Serialize(fingerprint uint64) []byte {
+	size := 8
+	data := make([]byte, size)
+	binary.LittleEndian.PutUint64(data, fingerprint)
+	return data
+}
+
+func Deserialize(data []byte) uint64 {
+	return binary.LittleEndian.Uint64(data)
+
+// TODO: Serijalizacija, vrv treba promeniti, ili dodati save funkciju u neki utils
+// TODO: Deserijalizacija, vrv treba promeniti
 
 // TODO: TEK Kada odradimo sve strukture ujediniti hash u jedan hash fajl, da nema nepotrebih ponavljanja
