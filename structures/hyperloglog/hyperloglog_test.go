@@ -123,3 +123,45 @@ func TestTrailingZeroBits(t *testing.T) {
 		}
 	}
 }
+func TestSerializationDeserialization(t *testing.T) {
+	hll := NewHLL(10)
+	elements := []string{"apple", "banana", "cherry"}
+	for _, elem := range elements {
+		hll.Add([]byte(elem))
+	}
+
+	serialized := hll.Serialize()
+	newHLL := &HLL{}
+	err := newHLL.Deserialize(serialized)
+	if err != nil {
+		t.Fatalf("Deserialize failed: %v", err)
+	}
+
+	if newHLL.p != hll.p || newHLL.m != hll.m {
+		t.Errorf("Deserialized HLL does not match original: p=%d, m=%d", newHLL.p, newHLL.m)
+	}
+
+	if !equalRegisters(hll.reg, newHLL.reg) {
+		t.Error("Registers do not match after deserialization")
+	}
+}
+
+func equalRegisters(a, b []uint8) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestEstimateEmptyRegisters(t *testing.T) {
+	hll := NewHLL(10)
+	estimate := hll.Estimate()
+	if estimate != 0 {
+		t.Errorf("Expected estimate for empty HLL to be 0, got %f", estimate)
+	}
+}
