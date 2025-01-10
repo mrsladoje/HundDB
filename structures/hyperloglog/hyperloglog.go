@@ -3,6 +3,7 @@ package hyperloglog
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"math/bits"
 )
@@ -85,6 +86,45 @@ func trailingZeroBits(value uint64) uint8 {
 	return uint8(bits.TrailingZeros64(value))
 }
 
-// TODO: Serijalizacija
-// TODO: Deserijalizacija
-// (pogledati primer 5 sa trecih vezbi, i nalik toga napisati funkcije)
+// Serialize converts the HLL structure into a byte slice.
+func (hll *HLL) Serialize() []byte {
+	// The first byte stores the precision (p)
+	data := []byte{hll.p}
+	
+	// The next 4 bytes store the size (m)
+	mBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(mBytes, hll.m)
+	data = append(data, mBytes...)
+	
+	// Append the register values (reg)
+	data = append(data, hll.reg...)
+	return data
+}
+
+// Deserialize initializes an HLL structure from a byte slice.
+func (hll *HLL) Deserialize(data []byte) error {
+	// Check if there are enough bytes for precision and size
+	if len(data) < 5 {
+		return fmt.Errorf("invalid data length")
+	}
+
+	// The first byte represents the precision
+	hll.p = data[0]
+	// The next 4 bytes represent the size (m)
+	hll.m = binary.LittleEndian.Uint32(data[1:5])
+	
+	// The remaining bytes are the registers
+	expectedLength := int(5 + hll.m)
+	if len(data) != expectedLength {
+		return fmt.Errorf("data length mismatch: expected %d bytes, got %d bytes", expectedLength, len(data))
+	}
+
+	hll.reg = make([]uint8, hll.m)
+	copy(hll.reg, data[5:])
+	return nil
+}
+
+
+
+
+
