@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The test returs false, due to rounding issues
+// The test returns false, due to rounding issues
 func TestNewBloomFilter(t *testing.T) {
 	tests := []struct {
 		expectedElements  int

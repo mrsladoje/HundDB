@@ -7,8 +7,8 @@ import (
 )
 
 // BloomFilter is a probabilistic data structure that efficiently tests whether an element is in a set.
-// It can tell with 100% certainty that the element is conitaind, but will tell if it isn't
-// conitaind with false positive rate used as a parameter when creating an instance.
+// It can tell with 100% certainty that the element is contained, but will tell if it isn't
+// contained with false positive rate used as a parameter when creating an instance.
 // It works with uint32 for efficiency given the data size in our project.
 type BloomFilter struct {
 	m uint32         // Size of the bit array
@@ -42,8 +42,8 @@ func (bf *BloomFilter) Add(item []byte) {
 }
 
 // Contains checks if an item is in the Bloom Filter.
-// It can tell with 100% certainty that the element is conitaind, but will tell if it isn't
-// conitaind with false positive rate used as a parameter when creating an instance.
+// It can tell with 100% certainty that the element is contained, but will tell if it isn't
+// contained with false positive rate used as a parameter when creating an instance.
 // item: the element to be checked.
 func (bf *BloomFilter) Contains(item []byte) bool {
 	for i := uint32(0); i < bf.k; i++ {
