@@ -68,6 +68,7 @@ func Serialize(fingerprint uint64) []byte {
 
 func Deserialize(data []byte) uint64 {
 	return binary.LittleEndian.Uint64(data)
+}
 
 // TODO: Serijalizacija, vrv treba promeniti, ili dodati save funkciju u neki utils
 // TODO: Deserijalizacija, vrv treba promeniti

@@ -1,3 +1,5 @@
-module github.com/mrsladoje/HundDB.git
+//cSpell:ignore hund
+
+module hund_db
 
 go 1.23.2
