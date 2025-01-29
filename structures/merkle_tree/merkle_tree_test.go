@@ -1,7 +1,8 @@
 package merkle_tree
 
+//cSpell:ignore merkle
+
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"testing"
 )
@@ -12,9 +13,9 @@ func TestNewMerkleTree(t *testing.T) {
 		blocks       []string
 		expectedRoot string
 	}{
-		{[]string{"block1", "block2", "block3", "block4"}, computeExpectedRootHash([]string{"block1", "block2", "block3", "block4"})},
-		{[]string{"block1", "block2", "block3"}, computeExpectedRootHash([]string{"block1", "block2", "block3"})},
-		{[]string{"block1"}, computeExpectedRootHash([]string{"block1"})},
+		{[]string{"block1", "block2", "block3", "block4"}, "eae5935f45caf2924b95ca42f623023e857c2d8a4953fd5a41509c0040fdc6c3"},
+		{[]string{"block1", "block2", "block3"}, "b7acd0f2addac5607313fd9f0eeb8b769d083c945d12a975ae90a972644f48ad"},
+		{[]string{"block1"}, "9a59c5f8229aab55e9f855173ef94485aab8497eea0588f365c871d6d0561722"},
 		{[]string{}, ""},
 	}
 
@@ -32,36 +33,90 @@ func TestNewMerkleTree(t *testing.T) {
 			t.Fatal("Expected non-nil MerkleTree")
 		}
 
-		actualRootHash := hex.EncodeToString(tree.merkleRoot.hashedValue)
+		actualRootHash := hex.EncodeToString(tree.merkleRoot.hashedValue[:])
 		if actualRootHash != test.expectedRoot {
 			t.Errorf("Expected root hash %s, got %s", test.expectedRoot, actualRootHash)
 		}
 	}
 }
 
-// computeExpectedRootHash computes the expected root hash for the given blocks.
-func computeExpectedRootHash(blocks []string) string {
-	if len(blocks) == 0 {
-		return ""
+// TestHeight tests the Height method of the MerkleTree.
+func TestHeight(t *testing.T) {
+	tests := []struct {
+		blocks         []string
+		expectedHeight uint64
+	}{
+		{[]string{"block1", "block2", "block3", "block4"}, 3},
+		{[]string{"block1", "block2", "block3"}, 3},
+		{[]string{"block1"}, 1},
+		{[]string{}, 0},
 	}
 
-	var nodes [][]byte
-	for _, block := range blocks {
-		hash := sha256.Sum256([]byte(block))
-		nodes = append(nodes, hash[:])
+	for _, test := range tests {
+		tree := NewMerkleTree(test.blocks)
+
+		if len(test.blocks) == 0 {
+			if tree != nil {
+				t.Fatal("Expected nil MerkleTree for empty blocks")
+			}
+			continue
+		}
+
+		if tree == nil {
+			t.Fatal("Expected non-nil MerkleTree")
+		}
+
+		actualHeight := tree.Height()
+		if actualHeight != test.expectedHeight {
+			t.Errorf("Expected height %d, got %d", test.expectedHeight, actualHeight)
+		}
+	}
+}
+
+// TestMaxNumOfNodes tests the MaxNumOfNodes method of the MerkleTree.
+func TestMaxNumOfNodes(t *testing.T) {
+	tests := []struct {
+		blocks           []string
+		expectedMaxNodes uint64
+	}{
+		{[]string{"block1", "block2", "block3", "block4"}, 7},
+		{[]string{"block1", "block2", "block3"}, 7},
+		{[]string{"block1"}, 1},
+		{[]string{}, 0},
 	}
 
-	for len(nodes) > 1 {
-		if len(nodes)%2 == 1 {
-			nodes = append(nodes, nodes[len(nodes)-1])
+	for _, test := range tests {
+		tree := NewMerkleTree(test.blocks)
+
+		if len(test.blocks) == 0 {
+			if tree != nil {
+				t.Fatal("Expected nil MerkleTree for empty blocks")
+			}
+			continue
 		}
-		var newNodes [][]byte
-		for i := 0; i < len(nodes); i += 2 {
-			combinedHash := append(nodes[i], nodes[i+1]...)
-			hash := sha256.Sum256(combinedHash)
-			newNodes = append(newNodes, hash[:])
+
+		if tree == nil {
+			t.Fatal("Expected non-nil MerkleTree")
 		}
-		nodes = newNodes
+
+		actualMaxNodes := tree.MaxNumOfNodes()
+		if actualMaxNodes != test.expectedMaxNodes {
+			t.Errorf("Expected max nodes %d, got %d", test.expectedMaxNodes, actualMaxNodes)
+		}
 	}
-	return hex.EncodeToString(nodes[0])
+}
+
+// TestValidate tests the Validate method of the MerkleTree.
+func TestValidate(t *testing.T) {
+	tree1 := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
+	tree2 := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
+	tree3 := NewMerkleTree([]string{"block1", "block2", "block3"})
+
+	if !tree1.Validate(tree2) {
+		t.Error("Expected tree1 to validate tree2")
+	}
+
+	if tree1.Validate(tree3) {
+		t.Error("Expected tree1 not to validate tree3")
+	}
 }
