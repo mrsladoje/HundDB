@@ -1,8 +1,10 @@
 package bloom_filter
 
+//cSpell:ignore hund
+
 import (
 	"encoding/binary"
-	"errors"
+	sh "hund_db/utils/seeded_hash"
 	"math"
 )
 
@@ -11,10 +13,10 @@ import (
 // contained with false positive rate used as a parameter when creating an instance.
 // It works with uint32 for efficiency given the data size in our project.
 type BloomFilter struct {
-	m uint32         // Size of the bit array
-	k uint32         // Number of hash functions
-	h []HashWithSeed // Array of hash functions
-	b []byte         // Byte array representing the bit array
+	m uint32            // Size of the bit array
+	k uint32            // Number of hash functions
+	h []sh.HashWithSeed // Array of hash functions
+	b []byte            // Byte array representing the bit array
 }
 
 // NewBloomFilter creates a new instance of a Bloom Filter.
@@ -26,9 +28,19 @@ func NewBloomFilter(expectedElements int, falsePositiveRate float64) *BloomFilte
 	return &BloomFilter{
 		m: uint32(m),
 		k: uint32(k),
-		h: CreateHashFunctions(uint32(k)),
+		h: sh.CreateHashFunctions(uint64(k)),
 		b: make([]byte, uint32(math.Ceil(float64(m)/8))), // Calculate the length of the byte array
 	}
+}
+
+// Calculates m value
+func CalculateM(expectedElements int, falsePositiveRate float64) uint {
+	return uint(math.Ceil(float64(expectedElements) * math.Abs(math.Log(falsePositiveRate)) / math.Pow(math.Log(2), float64(2))))
+}
+
+// Calculates k value
+func CalculateK(expectedElements int, m uint) uint {
+	return uint(math.Ceil((float64(m) / float64(expectedElements)) * math.Log(2)))
 }
 
 // Add inserts an element into the Bloom Filter by setting the corresponding bits to 1.
@@ -61,65 +73,43 @@ func (bf *BloomFilter) Contains(item []byte) bool {
 // The format is as follows:
 // - 4 bytes for the size of the bit array (m)
 // - 4 bytes for the number of hash functions (k)
-// - For each hash function:
-//   - 4 bytes for the length of the seed
-//   - Seed bytes
-//
-// - Bit array bytes
+// - 8 bytes for each Seed of a hash function
+// - (m rounded up to 0 of 8 module) bytes, representing the main byte array
 func (bf *BloomFilter) Serialize() []byte {
-	totalSize := 8 + len(bf.b)
-	for _, hash := range bf.h {
-		totalSize += 4 + len(hash.Seed)
-	}
-
+	// totalSize is the size of the whole bloom filter structure
+	totalSize := 8 + 8*bf.k + uint32(len(bf.b))
 	data := make([]byte, totalSize)
-	offset := 0
-	binary.LittleEndian.PutUint32(data[offset:], bf.m)
-	offset += 4
-	binary.LittleEndian.PutUint32(data[offset:], bf.k)
-	offset += 4
 
+	binary.LittleEndian.PutUint32(data[0:4], bf.m)
+	binary.LittleEndian.PutUint32(data[4:8], bf.k)
+
+	offset := 8
 	for _, hash := range bf.h {
-		binary.LittleEndian.PutUint32(data[offset:], uint32(len(hash.Seed)))
-		offset += 4
-
-		copy(data[offset:], hash.Seed)
-		offset += len(hash.Seed)
+		copy(data[offset:offset+8], hash.Serialize())
+		offset += 8
 	}
 	copy(data[offset:], bf.b)
+
 	return data
 }
 
 // Deserialize creates a new Bloom Filter from a byte array.
-// The byte array should contain the size of the bit array, the number of hash functions, the seeds of the hash functions, and the bit array.
-func Deserialize(data []byte) (*BloomFilter, error) {
-	if len(data) < 8 {
-		return nil, errors.New("data is too short")
-	}
+// The byte array contains the size of the bit array, the number of hash functions, the seeds of the hash functions, and the bit array.
+// The format is as follows:
+// - 4 bytes for the size of the bit array (m)
+// - 4 bytes for the number of hash functions (k)
+// - 8 bytes for each Seed of a hash function
+// - (m rounded up to 0 of 8 module) bytes, representing the main byte array
+func Deserialize(data []byte) *BloomFilter {
 	offset := 0
 	m := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
 	k := binary.LittleEndian.Uint32(data[offset:])
 	offset += 4
-
-	h := make([]HashWithSeed, k)
+	h := make([]sh.HashWithSeed, k)
 	for i := uint32(0); i < k; i++ {
-		if offset+4 > len(data) {
-			return nil, errors.New("data is too short")
-		}
-		seedLen := binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-
-		if offset+int(seedLen) > len(data) {
-			return nil, errors.New("data is too short")
-		}
-		seed := make([]byte, seedLen)
-		copy(seed, data[offset:offset+int(seedLen)])
-		offset += int(seedLen)
-		h[i] = HashWithSeed{Seed: seed}
-	}
-	if offset > len(data) {
-		return nil, errors.New("data is too short")
+		h[i] = sh.Deserialize(data[offset : offset+8])
+		offset += 8
 	}
 	b := make([]byte, len(data)-offset)
 	copy(b, data[offset:])
@@ -128,7 +118,5 @@ func Deserialize(data []byte) (*BloomFilter, error) {
 		k: k,
 		h: h,
 		b: b,
-	}, nil
+	}
 }
-
-// TODO: Kada odradimo sve strukture ujediniti hash u jedan hash fajl, da nema nepotrebih ponavljanja

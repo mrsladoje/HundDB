@@ -1,13 +1,18 @@
 package count_min_sketch
 
+import (
+	sh "hund_db/utils/seeded_hash"
+	"math"
+)
+
 // CMS is a probabilistic data structure that efficiently counts the frequency of elements in a set.
 // It can over-estimate the count by the desired error rate passed as a parameter when creating an instance
 // It works with uint32 for efficiency given the data size in our project.
 type CMS struct {
-	m     uint32         // Size of the sets (columns)
-	k     uint32         // Number of hash functions (rows)
-	h     []HashWithSeed // Array of hash functions
-	table [][]uint32     // Table of uint32 values
+	m     uint32            // Size of the sets (columns)
+	k     uint32            // Number of hash functions (rows)
+	h     []sh.HashWithSeed // Array of hash functions
+	table [][]uint32        // Table of uint32 values
 }
 
 // NewCMS creates a new instance of a Count-Min Sketch.
@@ -23,9 +28,19 @@ func NewCMS(epsilon float64, delta float64) *CMS {
 	return &CMS{
 		m:     uint32(m),
 		k:     uint32(k),
-		h:     CreateHashFunctions(k),
+		h:     sh.CreateHashFunctions(uint64(k)),
 		table: matrix,
 	}
+}
+
+// Calculates m value
+func CalculateM(epsilon float64) uint {
+	return uint(math.Ceil(math.E / epsilon))
+}
+
+// Calculates k value
+func CalculateK(delta float64) uint {
+	return uint(math.Ceil(math.Log(math.E / delta)))
 }
 
 // Add inserts an element into the Count-Min Sketch by incrementing the corresponding cells in the table.
