@@ -1,5 +1,7 @@
 package count_min_sketch
 
+//cSpell:ignore hund
+
 import (
 	"encoding/binary"
 	sh "hund_db/utils/seeded_hash"
@@ -117,7 +119,6 @@ func Deserialize(data []byte) *CMS {
 
 	table := make([][]uint32, k)
 	for i := uint32(0); i < k; i++ {
-
 		row := make([]uint32, m)
 		for j := uint32(0); j < m; j++ {
 			row[j] = binary.LittleEndian.Uint32(data[offset:])

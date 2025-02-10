@@ -1,7 +1,10 @@
 package sim_hash
 
+//cSpell:ignore hund
+
 import (
 	"hash/fnv"
+	"hund_db/utils/tokenizer"
 	"math/bits"
 )
 
@@ -10,7 +13,7 @@ import (
 // TODO: maybe should be implemented using CMS, will consult with TA
 func GenerateWordFrequency(text string) map[string]uint32 {
 	wordFrequency := make(map[string]uint32)
-	words := processText(text)
+	words := tokenizer.ProcessText(text)
 	for _, word := range words {
 		wordFrequency[word]++
 	}

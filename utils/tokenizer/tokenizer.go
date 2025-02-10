@@ -1,11 +1,11 @@
-package sim_hash
+package tokenizer
 
 import (
 	"regexp"
 	"strings"
 )
 
-func processText(text string) []string {
+func ProcessText(text string) []string {
 	text = strings.ToLower(text)
 	text = strings.ReplaceAll(text, "'", "")
 	reg := regexp.MustCompile(`[^\w\s]`)
