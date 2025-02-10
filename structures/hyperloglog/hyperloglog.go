@@ -106,18 +106,6 @@ func (hll *HLL) Serialize() []byte {
 	return data
 }
 
-// // The first byte stores the precision (p)
-// data := []byte{hll.p}
-
-// // The next 4 bytes store the size (m)
-// mBytes := make([]byte, 4)
-// binary.LittleEndian.PutUint32(mBytes, hll.m)
-// data = append(data, mBytes...)
-
-// // Append the register values (reg)
-// data = append(data, hll.reg...)
-// return data
-
 // Deserialize initializes an HLL structure from a byte slice.
 // The byte slice returned contains the size of the uint8 slice, precision as the uint8, the uint8 slice.
 // The format is as follows:
