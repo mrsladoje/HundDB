@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// TODO: This isn't good, needs to be improved and redone, not a priority as of now
 func ProcessText(text string) []string {
 	text = strings.ToLower(text)
 	text = strings.ReplaceAll(text, "'", "")
