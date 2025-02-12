@@ -3,6 +3,7 @@ package merkle_tree
 //cSpell:ignore merkle
 
 import (
+	"container/list"
 	"crypto/md5"
 	"math"
 )
@@ -61,10 +62,10 @@ func NewMerkleTree(blocks []string) *MerkleTree {
 
 // Height calculates the height of the Merkle tree. Runs in O(logN) time.
 // The height of a tree is the number of nodes on the longest path from the root to a leaf,
-// including the root itself. Tree that is only made out of the root has height of 1.
+// excluding the root. Tree that is only made out of the root has height of 0.
 // returns: The height of the Merkle tree as a uint64.
 func (mTree *MerkleTree) Height() uint64 {
-	var height uint64 = 1
+	var height uint64 = 0
 	currentNode := mTree.merkleRoot
 	for currentNode.leftChild != nil {
 		currentNode = currentNode.leftChild
@@ -74,11 +75,21 @@ func (mTree *MerkleTree) Height() uint64 {
 }
 
 // MaxNumOfNodes calculates the maximum number of nodes that could possibly be present in this merkle tree.
+// The formula used to get it is: 2^(h+1) - 1
 // It bases its approach on the preposition that the tree is a perfect binary tree, and if not it has a smaller number
 // of nodes based on the Merkle Tree creation algorithm.
 // returns: The max possible number of nodes for a Merkle tree of this height
 func (mTree *MerkleTree) MaxNumOfNodes() uint64 {
-	return uint64(math.Pow(2, float64(mTree.Height()))) - 1
+	return uint64(math.Pow(2, float64(mTree.Height())+1)) - 1
+}
+
+// MaxNumOfLeafs calculates the maximum number of leaf nodes that could possibly be present in this merkle tree.
+// The formula used to get it is: 2^h
+// It bases its approach on the preposition that the tree is a perfect binary tree, and if not it has a smaller number
+// of nodes based on the Merkle Tree creation algorithm.
+// returns: The max possible number of nodes for a Merkle tree of this height
+func (mTree *MerkleTree) MaxNumOfLeafs() uint64 {
+	return uint64(math.Pow(2, float64(mTree.Height())))
 }
 
 // TODO: Enhance the validation so it compares down to the leafs
@@ -96,6 +107,23 @@ func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) bool {
 // TODO: Serialization (all nodes)
 // TODO: Deserialization (check when empty to go down a level)
 
-// TODO: Traversal function so the code of the serialization is more elegant
-func (mTree *MerkleTree) Traverse() {
+// BFS(Breadth First Search) is a method of the Merkle Tree struct that will
+// traverse the tree level by level, from left to right, starting from the root and going down to the leafs.
+// The method takes in a method of a Merkle Node as a parameter, so the code is more elegant,
+// rather then returning a slice of nodes in BFS order.
+func (mTree *MerkleTree) BFS(visit func(*MerkleNode)) {
+	queue := list.New()
+	queue.PushBack(mTree.merkleRoot)
+
+	for queue.Len() != 0 {
+		currentNode := queue.Remove(queue.Front()).(*MerkleNode)
+		visit(currentNode)
+		if currentNode.leftChild != nil {
+			queue.PushBack(currentNode.leftChild)
+		}
+		if currentNode.rightChild != nil {
+			queue.PushBack(currentNode.rightChild)
+		}
+	}
+
 }
