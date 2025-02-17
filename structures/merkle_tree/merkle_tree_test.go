@@ -3,24 +3,33 @@ package merkle_tree
 //cSpell:ignore merkle
 
 import (
+	"bytes"
 	"encoding/hex"
+	"fmt"
 	"testing"
 )
 
-// TestNewMerkleTree tests the NewMerkleTree function.
 func TestNewMerkleTree(t *testing.T) {
 	tests := []struct {
 		blocks       []string
 		expectedRoot string
 	}{
-		{[]string{"block1", "block2", "block3", "block4"}, "eae5935f45caf2924b95ca42f623023e857c2d8a4953fd5a41509c0040fdc6c3"},
-		{[]string{"block1", "block2", "block3"}, "b7acd0f2addac5607313fd9f0eeb8b769d083c945d12a975ae90a972644f48ad"},
-		{[]string{"block1"}, "9a59c5f8229aab55e9f855173ef94485aab8497eea0588f365c871d6d0561722"},
+		{[]string{"block1", "block2", "block3", "block4"}, "52b6ec49b1ed0eed625adcef9073f0c2"},
+		{[]string{"block1", "block2", "block3"}, "ac491d1ea728dc2fb488cf3bc8b3a898"},
+		{[]string{"block1", "block2"}, "423a3d793bb8c91da536a90361dc09ff"},
+		{[]string{"block1"}, "9dd085e96a8813854138d29b8a6fdf58"},
 		{[]string{}, ""},
 	}
 
 	for _, test := range tests {
-		tree := NewMerkleTree(test.blocks)
+		tree, err := NewMerkleTree(test.blocks)
+		if err != nil {
+			if err != ErrEmptyTree {
+				t.Error(err.Error())
+			} else {
+				continue
+			}
+		}
 
 		if len(test.blocks) == 0 {
 			if tree != nil {
@@ -46,14 +55,16 @@ func TestHeight(t *testing.T) {
 		blocks         []string
 		expectedHeight uint64
 	}{
-		{[]string{"block1", "block2", "block3", "block4"}, 3},
-		{[]string{"block1", "block2", "block3"}, 3},
-		{[]string{"block1"}, 1},
-		{[]string{}, 0},
+		{[]string{"block1", "block2", "block3", "block4"}, 2},
+		{[]string{"block1", "block2", "block3"}, 2},
+		{[]string{"block1"}, 0},
 	}
 
 	for _, test := range tests {
-		tree := NewMerkleTree(test.blocks)
+		tree, err := NewMerkleTree(test.blocks)
+		if err != nil {
+			t.Error(err.Error())
+		}
 
 		if len(test.blocks) == 0 {
 			if tree != nil {
@@ -82,11 +93,13 @@ func TestMaxNumOfNodes(t *testing.T) {
 		{[]string{"block1", "block2", "block3", "block4"}, 7},
 		{[]string{"block1", "block2", "block3"}, 7},
 		{[]string{"block1"}, 1},
-		{[]string{}, 0},
 	}
 
 	for _, test := range tests {
-		tree := NewMerkleTree(test.blocks)
+		tree, err := NewMerkleTree(test.blocks)
+		if err != nil {
+			t.Error(err.Error())
+		}
 
 		if len(test.blocks) == 0 {
 			if tree != nil {
@@ -108,9 +121,18 @@ func TestMaxNumOfNodes(t *testing.T) {
 
 // TestValidate tests the Validate method of the MerkleTree.
 func TestValidate(t *testing.T) {
-	tree1 := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
-	tree2 := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
-	tree3 := NewMerkleTree([]string{"block1", "block2", "block3"})
+	tree1, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
+	if err != nil {
+		t.Error(err.Error())
+	}
+	tree2, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
+	if err != nil {
+		t.Error(err.Error())
+	}
+	tree3, err := NewMerkleTree([]string{"block1", "block2", "block3"})
+	if err != nil {
+		t.Error(err.Error())
+	}
 
 	if !tree1.Validate(tree2) {
 		t.Error("Expected tree1 to validate tree2")
@@ -118,5 +140,137 @@ func TestValidate(t *testing.T) {
 
 	if tree1.Validate(tree3) {
 		t.Error("Expected tree1 not to validate tree3")
+	}
+}
+
+// Test BFS Traversal
+func TestBFS(t *testing.T) {
+	blocks := []string{"A", "B", "C", "D"}
+	tree, err := NewMerkleTree(blocks)
+	if err != nil {
+		t.Error(err.Error())
+	}
+
+	var bfsHashes [][]byte
+	tree.BFS(func(node *MerkleNode) {
+		bfsHashes = append(bfsHashes, node.hashedValue[:])
+	})
+
+	expectedHashes := [][]byte{
+		tree.merkleRoot.hashedValue[:],
+		tree.merkleRoot.leftChild.hashedValue[:],
+		tree.merkleRoot.rightChild.hashedValue[:],
+		tree.merkleRoot.leftChild.leftChild.hashedValue[:],
+		tree.merkleRoot.leftChild.rightChild.hashedValue[:],
+		tree.merkleRoot.rightChild.leftChild.hashedValue[:],
+		tree.merkleRoot.rightChild.rightChild.hashedValue[:],
+	}
+
+	for i := range expectedHashes {
+		if i >= len(bfsHashes) {
+			t.Errorf("BFS traversal did not visit all expected nodes")
+			break
+		}
+		if string(bfsHashes[i]) != string(expectedHashes[i]) {
+			t.Errorf("BFS order mismatch at index %d", i)
+		}
+	}
+}
+
+// Test DFS Traversal
+func TestDFS(t *testing.T) {
+	blocks := []string{"A", "B", "C", "D"}
+	tree, err := NewMerkleTree(blocks)
+	if err != nil {
+		t.Error(err.Error())
+	}
+
+	var dfsHashes [][]byte
+	tree.DFS(func(node *MerkleNode) {
+		dfsHashes = append(dfsHashes, node.hashedValue[:])
+	})
+
+	expectedHashes := [][]byte{
+		tree.merkleRoot.hashedValue[:],
+		tree.merkleRoot.leftChild.hashedValue[:],
+		tree.merkleRoot.leftChild.leftChild.hashedValue[:],
+		tree.merkleRoot.leftChild.rightChild.hashedValue[:],
+		tree.merkleRoot.rightChild.hashedValue[:],
+		tree.merkleRoot.rightChild.leftChild.hashedValue[:],
+		tree.merkleRoot.rightChild.rightChild.hashedValue[:],
+	}
+
+	for i := range expectedHashes {
+		if i >= len(dfsHashes) {
+			t.Errorf("DFS traversal did not visit all expected nodes")
+			break
+		}
+		if string(dfsHashes[i]) != string(expectedHashes[i]) {
+			t.Errorf("DFS order mismatch at index %d", i)
+		}
+	}
+}
+
+// Test Serialization & Deserialization
+func TestSerializeDeserialize(t *testing.T) {
+	tests := []struct {
+		blocks []string
+	}{
+		{[]string{"block1", "block2", "block3", "block4"}},
+		{[]string{"block1", "block2", "block3"}},
+		{[]string{"block1", "block2"}},
+		{[]string{"block1"}},
+	}
+
+	for _, test := range tests {
+
+		originalTree, err := NewMerkleTree(test.blocks)
+		if err != nil {
+			t.Error(err.Error())
+		}
+		var dfsOriginalHashes [][]byte
+		originalTree.DFS(func(node *MerkleNode) {
+			dfsOriginalHashes = append(dfsOriginalHashes, node.hashedValue[:])
+		})
+
+		serializedData := originalTree.Serialize()
+
+		deserializedTree := Deserialize(serializedData)
+		var dfsCopyHashes [][]byte
+		deserializedTree.DFS(func(node *MerkleNode) {
+			dfsCopyHashes = append(dfsCopyHashes, node.hashedValue[:])
+		})
+
+		if len(dfsOriginalHashes) != len(dfsCopyHashes) {
+			t.Errorf("Expected deserializes tree to have the same number of nodes as the original")
+		}
+
+		for i := 0; i < len(dfsOriginalHashes); i++ {
+			if !bytes.Equal(dfsOriginalHashes[i], dfsCopyHashes[i]) {
+				t.Errorf("Expected serialized-deserialized tree to match original")
+				fmt.Println("ORIGINAL:", hex.EncodeToString(dfsOriginalHashes[i]), "\nCOPY: ", hex.EncodeToString(dfsCopyHashes[i]))
+				if i >= len(dfsOriginalHashes)-1 {
+					fmt.Println()
+				}
+			}
+		}
+
+		deserializedData := deserializedTree.Serialize()
+
+		if len(deserializedData) != len(serializedData) {
+			t.Errorf("Expected deserializes data to have the same number of bytes as the original")
+		}
+
+		if !bytes.Equal(serializedData, deserializedData) {
+			t.Errorf("Expected serialized-deserialized data to match original")
+			fmt.Println("Original data: \t", hex.EncodeToString(serializedData))
+			fmt.Println("Copy data: \t", hex.EncodeToString(deserializedData))
+
+			// Detailed report
+			for i := 0; i < len(serializedData); i += 16 {
+				fmt.Println("Original data: \t", hex.EncodeToString(serializedData[i:i+16]))
+				fmt.Println("Copy data: \t", hex.EncodeToString(deserializedData[i:i+16]))
+			}
+		}
 	}
 }

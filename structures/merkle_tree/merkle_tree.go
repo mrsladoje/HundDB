@@ -5,8 +5,11 @@ package merkle_tree
 import (
 	"container/list"
 	"crypto/md5"
+	"errors"
 	"math"
 )
+
+var ErrEmptyTree = errors.New("cannot create Merkle tree from empty data")
 
 // MerkleNode represents a node in the Merkle tree.
 // Each node contains a hashed value and pointers to its left and right children.
@@ -27,10 +30,10 @@ type MerkleTree struct {
 // NewMerkleTree creates a new Merkle tree from the given blocks, and to make it a binary tree
 // it will add neutral nodes(nil for all attributes) at the right most side of the tree
 // blocks: a slice of blocks with which the Merkle tree will be created.
-// returns: Merkle tree instance or nil if blocks is empty.
-func NewMerkleTree(blocks []string) *MerkleTree {
+// returns: Merkle tree instance and an error if there was no blocks to construct the tree.
+func NewMerkleTree(blocks []string) (*MerkleTree, error) {
 	if len(blocks) == 0 {
-		return nil
+		return nil, ErrEmptyTree
 	}
 
 	// Create leaf nodes
@@ -46,17 +49,21 @@ func NewMerkleTree(blocks []string) *MerkleTree {
 		}
 		newNodes := make([]*MerkleNode, 0, len(nodes)/2)
 		for i := 0; i < len(nodes); i += 2 {
-			left := nodes[i]
-			right := nodes[i+1]
-			combinedHash := make([]byte, 0, 32)
-			combinedHash = append(combinedHash, left.hashedValue[:]...)
-			combinedHash = append(combinedHash, right.hashedValue[:]...)
+			leftNode := nodes[i]
+			rightNode := nodes[i+1]
+			combinedHash := make([]byte, 32)
+			copy(combinedHash[:16], leftNode.hashedValue[:])
+			copy(combinedHash[16:], rightNode.hashedValue[:])
 			hashedValue := md5.Sum(combinedHash)
-			newNodes = append(newNodes, &MerkleNode{hashedValue: hashedValue, leftChild: left, rightChild: right})
+			newNodes = append(newNodes, &MerkleNode{
+				hashedValue: hashedValue,
+				leftChild:   leftNode,
+				rightChild:  rightNode,
+			})
 		}
 		nodes = newNodes
 	}
-	return &MerkleTree{nodes[0]}
+	return &MerkleTree{nodes[0]}, nil
 
 }
 
@@ -95,17 +102,31 @@ func (mTree *MerkleTree) MaxNumOfLeafs() uint64 {
 // TODO: Enhance the validation so it compares down to the leafs
 // Validate method of a Merkle tree compares the roots of the two Merkle trees and returns
 // a bool value to represent the result of the comparison.
+//
+//	func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) bool {
+//		for i := 0; i < 16; i++ {
+//			if mTree.merkleRoot.hashedValue[i] != otherMTree.merkleRoot.hashedValue[i] {
+//				return false
+//			}
+//		}
+//		return true
+//	}
 func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) bool {
-	for i := 0; i < 16; i++ {
-		if mTree.merkleRoot.hashedValue[i] != otherMTree.merkleRoot.hashedValue[i] {
-			return false
-		}
-	}
-	return true
-}
+	var isValid = true
 
-// TODO: Serialization (all nodes)
-// TODO: Deserialization (check when empty to go down a level)
+	mTree.DFS(func(node *MerkleNode) {
+		if otherMTree == nil {
+			isValid = false
+			return
+		}
+		otherNode := otherMTree.merkleRoot
+		if node.hashedValue != otherNode.hashedValue {
+			isValid = false
+		}
+	})
+
+	return isValid
+}
 
 // BFS(Breadth First Search) is a method of the Merkle Tree struct that will
 // traverse the tree level by level, from left to right, starting from the root and going down to the leafs.
@@ -125,5 +146,74 @@ func (mTree *MerkleTree) BFS(visit func(*MerkleNode)) {
 			queue.PushBack(currentNode.rightChild)
 		}
 	}
+}
 
+// DFS(Depth First Search) is a method of the Merkle Tree struct that will
+// traverse the tree in order: parent -> left child -> right child
+// The method takes in a method of a Merkle Node as a parameter, so the code is more elegant,
+// rather then returning a slice of nodes in DFS order.
+func (mTree *MerkleTree) DFS(visit func(*MerkleNode)) {
+	mTree.merkleRoot.DFS(visit)
+}
+
+func (mNode *MerkleNode) DFS(visit func(*MerkleNode)) {
+	visit(mNode)
+	if mNode.leftChild != nil {
+		mNode.leftChild.DFS(visit)
+	}
+	if mNode.rightChild != nil {
+		mNode.rightChild.DFS(visit)
+	}
+
+}
+
+// Serialize, serializes the Merkle Node by taking in
+// the pointer to a byte slice where the data is written
+// The other attributes of the Merkle Node struct are pointers,
+// and they are left out since when deserializing the Merkle Tree
+// we cant allocate that memory piece for the Node.
+// The structure is handled by the traversal method.
+func (mNode *MerkleNode) Serialize(data *[]byte) {
+	*data = append(*data, mNode.hashedValue[:]...)
+}
+
+// Serialize, serializes the whole Merkle Tree into a byte slice.
+// The order is by depth first search.
+// The method allocates the max num of possible nodes for that tree
+// since continuous reallocation of the slice could be time expensive.
+func (mTree *MerkleTree) Serialize() []byte {
+	data := make([]byte, 0, mTree.MaxNumOfNodes()*16)
+	mTree.DFS(func(node *MerkleNode) {
+		node.Serialize(&data)
+	})
+	return data
+}
+
+// Deserialize, deserializes the merkle tree from the byte slice using its
+// recursive helper function DeserializeDFS.
+// It returns a Merkle Tree instance.
+func Deserialize(data []byte) *MerkleTree {
+	offset := 0
+	root := DeserializeDFS(data, &offset)
+	return &MerkleTree{merkleRoot: root}
+}
+
+// DeserializeDFS is a helper recursive helper function of the Deserialize function.
+// It takes in the byte slice from whose content will be the merkle tree made and an
+// offset, a pointer to an int value. The serialized data was in a DFS order, so the
+// deserialization reads in that order too. It returns the pointer to a Root Merkle Node.
+func DeserializeDFS(data []byte, offset *int) *MerkleNode {
+	if *offset >= len(data) {
+		return nil
+	}
+
+	var hash [16]byte
+	copy(hash[:], data[*offset:*offset+16])
+	*offset += 16
+
+	node := &MerkleNode{hashedValue: hash}
+	node.leftChild = DeserializeDFS(data, offset)
+	node.rightChild = DeserializeDFS(data, offset)
+
+	return node
 }
