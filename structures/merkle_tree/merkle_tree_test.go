@@ -4,6 +4,7 @@ package merkle_tree
 
 import (
 	"bytes"
+	"crypto/md5"
 	"encoding/hex"
 	"fmt"
 	"testing"
@@ -121,6 +122,7 @@ func TestMaxNumOfNodes(t *testing.T) {
 
 // TestValidate tests the Validate method of the MerkleTree.
 func TestValidate(t *testing.T) {
+
 	tree1, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
 	if err != nil {
 		t.Error(err.Error())
@@ -133,14 +135,44 @@ func TestValidate(t *testing.T) {
 	if err != nil {
 		t.Error(err.Error())
 	}
+	// tree4, err := NewMerkleTree([]string{"block1", "block3"})
+	// if err != nil {
+	// 	t.Error(err.Error())
+	// }
 
-	if !tree1.Validate(tree2) {
-		t.Error("Expected tree1 to validate tree2")
+	same, _, _ := tree1.Validate(tree2)
+	if !same {
+		t.Error("Expected tree1 to be the same as tree2")
 	}
 
-	if tree1.Validate(tree3) {
-		t.Error("Expected tree1 not to validate tree3")
+	same, differences1, differences2 := tree1.Validate(tree3)
+	if same {
+		t.Error("Expected tree1 not to be the same as tree3")
 	}
+	if len(differences1) != len(differences2) {
+		t.Errorf("Expected tree1 to have the same number of differences as tree3, got %d and %d", len(differences1), len(differences2))
+	}
+	if differences1[0].hashedValue != md5.Sum([]byte("block4")) {
+		t.Error("Unexpected difference node!")
+	}
+	if differences2[0].hashedValue != [16]byte{} {
+		t.Error("Unexpected difference node!")
+	}
+
+	// same, differences1, differences2 = tree1.Validate(tree4)
+	// if same {
+	// 	t.Error("Expected tree1 not to be the same as tree4")
+	// }
+	// if len(differences1) != len(differences2) {
+	// 	t.Errorf("Expected tree1 to have the same number of differences as tree4, got %d and %d", len(differences1), len(differences2))
+	// }
+	// if differences1[0].hashedValue != md5.Sum([]byte("block4")) {
+	// 	t.Error("Unexpected difference node!")
+	// }
+	// if differences2[0].hashedValue != [16]byte{} {
+	// 	t.Error("Unexpected difference node!")
+	// }
+
 }
 
 // Test BFS Traversal

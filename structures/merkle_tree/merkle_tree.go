@@ -99,33 +99,38 @@ func (mTree *MerkleTree) MaxNumOfLeafs() uint64 {
 	return uint64(math.Pow(2, float64(mTree.Height())))
 }
 
-// TODO: Enhance the validation so it compares down to the leafs
-// Validate method of a Merkle tree compares the roots of the two Merkle trees and returns
-// a bool value to represent the result of the comparison.
-//
-//	func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) bool {
-//		for i := 0; i < 16; i++ {
-//			if mTree.merkleRoot.hashedValue[i] != otherMTree.merkleRoot.hashedValue[i] {
-//				return false
-//			}
-//		}
-//		return true
-//	}
-func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) bool {
-	var isValid = true
+// TODO: There are issues in this validate logic, when trees have different numbers of leaf nodes, also how should tree
+// validation be done in theory, how should it behave if trees have different heights and different number of leafs.
+// That will be checked and done when the use cases for validation become more clear.
 
-	mTree.DFS(func(node *MerkleNode) {
-		if otherMTree == nil {
-			isValid = false
-			return
-		}
-		otherNode := otherMTree.merkleRoot
-		if node.hashedValue != otherNode.hashedValue {
-			isValid = false
-		}
-	})
+// Validate method of a Merkle tree compares two Merkle trees and returns
+// a bool value to represent the result of the comparison, and two slices of pointers to the
+// leaf nodes that differ in order from left to right.
+func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) (bool, []*MerkleNode, []*MerkleNode) {
 
-	return isValid
+	if mTree.merkleRoot.hashedValue == otherMTree.merkleRoot.hashedValue {
+		return true, nil, nil
+	}
+
+	var mismatchesTree1 []*MerkleNode
+	var mismatchesTree2 []*MerkleNode
+
+	DeepValidate(mTree.merkleRoot, otherMTree.merkleRoot, &mismatchesTree1, &mismatchesTree2)
+	return false, mismatchesTree1, mismatchesTree2
+}
+
+// DeepValidate is a recursive helper function for the Validation method of the merkle tree.
+// More documentation of it will be done when validation is perfected.
+func DeepValidate(mNode, otherMNode *MerkleNode, mismatchesTree1, mismatchesTree2 *[]*MerkleNode) {
+	if mNode.hashedValue == otherMNode.hashedValue {
+		return
+	} else if mNode.leftChild == nil && mNode.rightChild == nil && otherMNode.leftChild == nil && otherMNode.rightChild == nil {
+		*mismatchesTree1 = append(*mismatchesTree1, mNode)
+		*mismatchesTree2 = append(*mismatchesTree2, otherMNode)
+	} else if mNode.hashedValue != [16]byte{} || otherMNode.hashedValue != [16]byte{} {
+		DeepValidate(mNode.leftChild, otherMNode.leftChild, mismatchesTree1, mismatchesTree2)
+		DeepValidate(mNode.rightChild, otherMNode.rightChild, mismatchesTree1, mismatchesTree2)
+	}
 }
 
 // BFS(Breadth First Search) is a method of the Merkle Tree struct that will
