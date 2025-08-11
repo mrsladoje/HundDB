@@ -1,8 +1,11 @@
 package hyperloglog
 
+// cSpell:ignore hyperloglog, Kbits
+
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"math"
 	"math/bits"
 )
@@ -22,16 +25,16 @@ type HLL struct {
 
 // NewHLL creates a new instance of a HyperLogLog.
 // precision: the precision parameter, must be between 4 and 16.
-func NewHLL(precision uint8) *HLL {
+func NewHLL(precision uint8) (*HLL, error) {
 	if precision < HLL_MIN_PRECISION || precision > HLL_MAX_PRECISION {
-		panic("precision must be between 4 and 16")
+		return nil, errors.New("precision out of bounds")
 	}
 	m := uint32(1 << precision) // Equivalent to 2^p
 	return &HLL{
 		m:   m,
 		p:   precision,
 		reg: make([]uint8, m),
-	}
+	}, nil
 }
 
 // Add inserts an element into the HyperLogLog by updating the corresponding register.
@@ -85,6 +88,38 @@ func trailingZeroBits(value uint64) uint8 {
 	return uint8(bits.TrailingZeros64(value))
 }
 
-// TODO: Serijalizacija
-// TODO: Deserijalizacija
-// (pogledati primer 5 sa trecih vezbi, i nalik toga napisati funkcije)
+// Serialize serializes the HyperLogLog into a byte slice.
+// The byte slice returned contains the size of the uint8 slice, precision as the uint8, the uint8 slice.
+// The format is as follows:
+// - 4 bytes for the size of the register array (m)
+// - 1 byte for the number of of bits used for the bucket index (p)
+// - m bytes, representing the slice of registers
+func (hll *HLL) Serialize() []byte {
+	// totalSize is the size of the whole bloom filter structure
+	totalSize := 5 + hll.m
+	data := make([]byte, totalSize)
+
+	binary.LittleEndian.PutUint32(data[0:4], hll.m)
+	data[4] = hll.p
+	copy(data[5:], hll.reg)
+
+	return data
+}
+
+// Deserialize initializes an HLL structure from a byte slice.
+// The byte slice returned contains the size of the uint8 slice, precision as the uint8, the uint8 slice.
+// The format is as follows:
+// - 4 bytes for the size of the register array (m)
+// - 1 byte for the number of of bits used for the bucket index (p)
+// - m bytes, representing the slice of registers
+func Deserialize(data []byte) *HLL {
+	m := binary.LittleEndian.Uint32(data[0:4])
+	p := data[4]
+	reg := make([]uint8, m)
+	copy(reg, data[5:])
+	return &HLL{
+		m:   m,
+		p:   p,
+		reg: reg,
+	}
+}

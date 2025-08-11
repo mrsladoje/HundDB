@@ -1,6 +1,9 @@
 package hyperloglog
 
+// cSpell:ignore hyperloglog, Kbits
+
 import (
+	"bytes"
 	"testing"
 )
 
@@ -16,7 +19,10 @@ func TestNewHLL(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		hll := NewHLL(test.precision)
+		hll, err := NewHLL(test.precision)
+		if err != nil {
+			t.Fatalf("Failed to create HLL: %v", err)
+		}
 		if hll.p != test.expectedP {
 			t.Errorf("Expected precision %d, got %d", test.expectedP, hll.p)
 		}
@@ -39,7 +45,10 @@ func TestAddAndEstimate(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		hll := NewHLL(test.precision)
+		hll, err := NewHLL(test.precision)
+		if err != nil {
+			t.Fatalf("Failed to create HLL: %v", err)
+		}
 		for _, elem := range test.elements {
 			hll.Add([]byte(elem))
 		}
@@ -65,7 +74,10 @@ func TestEmptyCount(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		hll := NewHLL(test.precision)
+		hll, err := NewHLL(test.precision)
+		if err != nil {
+			t.Fatalf("Failed to create HLL: %v", err)
+		}
 		for _, elem := range test.elements {
 			hll.Add([]byte(elem))
 		}
@@ -121,5 +133,45 @@ func TestTrailingZeroBits(t *testing.T) {
 		if result != test.expected {
 			t.Errorf("trailingZeroBits(%b) = %d; expected %d", test.value, result, test.expected)
 		}
+	}
+}
+
+func TestHLLSerialization(t *testing.T) {
+	// Create a new HyperLogLog instance with precision 10
+	hllOriginal, err := NewHLL(10)
+	if err != nil {
+		t.Fatalf("Failed to create HLL: %v", err)
+	}
+
+	// Add some elements to it
+	hllOriginal.Add([]byte("apple"))
+	hllOriginal.Add([]byte("banana"))
+	hllOriginal.Add([]byte("cherry"))
+
+	// Serialize the HyperLogLog
+	serializedData := hllOriginal.Serialize()
+
+	// Create a new HyperLogLog instance and deserialize into it
+	hllDeserialized := Deserialize(serializedData)
+
+	// Check if precision and size match
+	if hllOriginal.p != hllDeserialized.p {
+		t.Errorf("Precision mismatch: expected %d, got %d", hllOriginal.p, hllDeserialized.p)
+	}
+
+	if hllOriginal.m != hllDeserialized.m {
+		t.Errorf("Size mismatch: expected %d, got %d", hllOriginal.m, hllDeserialized.m)
+	}
+
+	// Check if registers match
+	if !bytes.Equal(hllOriginal.reg, hllDeserialized.reg) {
+		t.Errorf("Register mismatch: original and deserialized data are different")
+	}
+
+	// Ensure the serialized data matches the deserialized structure
+	deserializedData := hllDeserialized.Serialize()
+	if !bytes.Equal(serializedData, deserializedData) {
+		t.Errorf("Serialized data mismatch: original vs deserialized")
+		t.Errorf("Serialized data len mismatch: original %d vs deserialized %d", len(serializedData), len(deserializedData))
 	}
 }
