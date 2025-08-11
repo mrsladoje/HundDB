@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/mrsladoje/HundDB/model"
+	"hunddb/model"
 )
 
 const (

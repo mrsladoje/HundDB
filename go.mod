@@ -1,3 +1,3 @@
-module github.com/mrsladoje/HundDB
+module hunddb
 
 go 1.23.2

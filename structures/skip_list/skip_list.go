@@ -1,4 +1,4 @@
-package skiplist
+package skip_list
 
 import (
 	"bytes"

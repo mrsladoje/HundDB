@@ -1,11 +1,10 @@
 package sim_hash
 
-//cSpell:ignore hund
-
 import (
 	"hash/fnv"
-	"hund_db/utils/tokenizer"
 	"math/bits"
+
+	"hunddb/utils/tokenizer"
 )
 
 // GenerateWordFrequency generates a frequency map of words in the text.

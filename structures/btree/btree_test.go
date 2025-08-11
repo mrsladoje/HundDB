@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mrsladoje/HundDB/model"
+	"hunddb/model"
 )
 
 // Helper function to create a test record

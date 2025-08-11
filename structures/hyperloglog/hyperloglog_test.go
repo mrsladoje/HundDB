@@ -1,7 +1,5 @@
 package hyperloglog
 
-// cSpell:ignore hyperloglog, Kbits
-
 import (
 	"bytes"
 	"testing"

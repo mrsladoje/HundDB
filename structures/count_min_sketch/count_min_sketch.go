@@ -1,11 +1,10 @@
 package count_min_sketch
 
-//cSpell:ignore hund
-
 import (
 	"encoding/binary"
-	sh "hund_db/utils/seeded_hash"
 	"math"
+
+	sh "hunddb/utils/seeded_hash"
 )
 
 // CMS is a probabilistic data structure that efficiently counts the frequency of elements in a set.

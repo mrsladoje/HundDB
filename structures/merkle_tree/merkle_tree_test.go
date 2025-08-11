@@ -1,7 +1,5 @@
 package merkle_tree
 
-//cSpell:ignore merkle
-
 import (
 	"bytes"
 	"crypto/md5"

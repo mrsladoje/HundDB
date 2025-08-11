@@ -1,7 +1,5 @@
 package hyperloglog
 
-// cSpell:ignore hyperloglog, Kbits
-
 import (
 	"crypto/sha256"
 	"encoding/binary"

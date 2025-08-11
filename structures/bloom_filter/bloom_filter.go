@@ -1,11 +1,10 @@
 package bloom_filter
 
-//cSpell:ignore hund
-
 import (
 	"encoding/binary"
-	sh "hund_db/utils/seeded_hash"
 	"math"
+
+	sh "hunddb/utils/seeded_hash"
 )
 
 // BloomFilter is a probabilistic data structure that efficiently tests whether an element is in a set.
