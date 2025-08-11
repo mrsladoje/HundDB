@@ -1,4 +1,4 @@
-package main
+package count_min_sketch
 
 import (
 	"math"
