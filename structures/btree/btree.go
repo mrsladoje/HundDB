@@ -5,8 +5,9 @@ package btree
 import (
 	"bytes"
 	"fmt"
-	"hund-db/model"
 	"sort"
+
+	"github.com/mrsladoje/HundDB/model"
 )
 
 const (

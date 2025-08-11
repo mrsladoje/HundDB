@@ -2,10 +2,11 @@ package btree
 
 import (
 	"fmt"
-	"hund-db/model"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/mrsladoje/HundDB/model"
 )
 
 // Helper function to create a test record
