@@ -45,6 +45,9 @@ type BTree struct {
 
 	// stats tracks tree statistics for compaction decisions
 	stats *TreeStats
+
+	// compacting flag to prevent recursive compaction
+	compacting bool
 }
 
 // TreeStats maintains statistics about the B-tree for compaction decisions.
@@ -122,8 +125,8 @@ func (bt *BTree) Put(record *model.Record) error {
 		bt.updateStats(record, false)
 	}
 
-	// Check if compaction is needed
-	if bt.needsCompaction() {
+	// Check if compaction is needed (but not if we're already compacting)
+	if !bt.compacting && bt.needsCompaction() {
 		bt.compact()
 	}
 
@@ -144,13 +147,10 @@ func (bt *BTree) Delete(key []byte) bool {
 
 	node, index := bt.search(key, bt.root)
 	if node != nil && index >= 0 && !node.records[index].IsDeleted() {
+		// Mark as deleted and update stats
 		node.records[index].MarkDeleted()
-		bt.updateStats(node.records[index], true)
-
-		// Check if compaction is needed
-		if bt.needsCompaction() {
-			bt.compact()
-		}
+		bt.stats.ActiveRecords--
+		bt.stats.TombstonedRecords++
 
 		return true
 	}
@@ -315,9 +315,14 @@ func (bt *BTree) needsCompaction() bool {
 
 // compact rebuilds the tree removing all tombstoned records.
 func (bt *BTree) compact() {
-	if bt.root == nil {
+	if bt.root == nil || bt.compacting {
 		return
 	}
+
+	bt.compacting = true
+	defer func() {
+		bt.compacting = false
+	}()
 
 	// Collect all active records
 	var activeRecords []*model.Record
@@ -328,12 +333,30 @@ func (bt *BTree) compact() {
 		return bytes.Compare(activeRecords[i].Key, activeRecords[j].Key) < 0
 	})
 
-	// Rebuild tree
+	// Rebuild tree - reset everything
 	bt.root = nil
-	bt.stats = &TreeStats{}
+	bt.stats = &TreeStats{
+		TotalRecords:      0,
+		TombstonedRecords: 0,
+		ActiveRecords:     0,
+	}
 
+	// Re-insert only active records
 	for _, record := range activeRecords {
-		bt.Put(record)
+		// Make sure the record is not marked as tombstoned
+		record.Tombstone = false
+
+		if bt.root == nil {
+			bt.root = &Node{
+				isLeaf:  true,
+				records: []*model.Record{record},
+			}
+		} else {
+			bt.insertRecord(bt.root, record)
+		}
+		// Update stats - each record should be active
+		bt.stats.TotalRecords++
+		bt.stats.ActiveRecords++
 	}
 }
 
@@ -359,9 +382,11 @@ func (bt *BTree) collectActiveRecords(node *Node, records *[]*model.Record) {
 // updateStats updates tree statistics when adding/modifying records.
 func (bt *BTree) updateStats(record *model.Record, isDeleting bool) {
 	if isDeleting {
+		// This path is used when marking records as deleted
 		bt.stats.TombstonedRecords++
 		bt.stats.ActiveRecords--
 	} else {
+		// This path is used when adding new records
 		bt.stats.TotalRecords++
 		if record.IsDeleted() {
 			bt.stats.TombstonedRecords++
