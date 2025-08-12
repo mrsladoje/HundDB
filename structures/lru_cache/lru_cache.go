@@ -3,6 +3,7 @@ package lru_cache
 import (
 	"container/list"
 	"errors"
+	mdl "hunddb/model"
 )
 
 var (
@@ -16,7 +17,7 @@ var (
 // LRUCache is a generic Least Recently Used cache implementation (Used for read path and for block manager)
 // K is the key type (string for records, disk location for blocks)
 // V is the value type (any value for records, block data for disk blocks)
-type LRUCache[K comparable, V any] struct {
+type LRUCache[K string | mdl.BlockLocation, V any] struct {
 	capacity uint32
 	size     uint32
 
@@ -35,7 +36,7 @@ type listItem[K comparable, V any] struct {
 }
 
 // NewLRUCache creates a new LRU cache with the specified capacity
-func NewLRUCache[K comparable, V any](capacity uint32) *LRUCache[K, V] {
+func NewLRUCache[K string | mdl.BlockLocation, V any](capacity uint32) *LRUCache[K, V] {
 	return &LRUCache[K, V]{
 		capacity:   capacity,
 		size:       0,

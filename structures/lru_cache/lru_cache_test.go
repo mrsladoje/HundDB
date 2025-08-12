@@ -323,12 +323,12 @@ func TestLRUCache_DifferentTypes(t *testing.T) {
 	}
 
 	// Test with int keys and string values
-	intCache := NewLRUCache[int, string](2)
+	intCache := NewLRUCache[string, string](2)
 
-	intCache.Put(1, "one")
-	intCache.Put(2, "two")
+	intCache.Put("1", "one")
+	intCache.Put("2", "two")
 
-	value2, err := intCache.Get(1)
+	value2, err := intCache.Get("1")
 	if err != nil {
 		t.Errorf("Get operation failed: %v", err)
 	}
