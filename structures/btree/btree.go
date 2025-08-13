@@ -3,11 +3,9 @@
 package btree
 
 import (
-	"bytes"
 	"fmt"
-	"sort"
-
 	"hunddb/model"
+	"sort"
 )
 
 const (
@@ -77,7 +75,7 @@ func NewBTree(order int) *BTree {
 //
 // Returns:
 //   - *model.Record: the record if found and not tombstoned, nil otherwise
-func (bt *BTree) Get(key []byte) *model.Record {
+func (bt *BTree) Get(key string) *model.Record {
 	if bt.root == nil {
 		return nil
 	}
@@ -140,7 +138,7 @@ func (bt *BTree) Put(record *model.Record) error {
 //
 // Returns:
 //   - bool: true if the record was found and marked as deleted, false otherwise
-func (bt *BTree) Delete(key []byte) bool {
+func (bt *BTree) Delete(key string) bool {
 	if bt.root == nil {
 		return false
 	}
@@ -167,7 +165,7 @@ func (bt *BTree) Delete(key []byte) bool {
 // Returns:
 //   - *Node: node containing the key if found, nil otherwise
 //   - int: index of the record in the node if found, -1 otherwise
-func (bt *BTree) search(key []byte, node *Node) (*Node, int) {
+func (bt *BTree) search(key string, node *Node) (*Node, int) {
 	if node == nil {
 		return nil, -1
 	}
@@ -176,7 +174,7 @@ func (bt *BTree) search(key []byte, node *Node) (*Node, int) {
 	index := bt.findKeyIndex(node, key)
 
 	// If exact match found
-	if index < len(node.records) && bytes.Equal(key, node.records[index].Key) {
+	if index < len(node.records) && key == node.records[index].Key {
 		return node, index
 	}
 
@@ -194,9 +192,9 @@ func (bt *BTree) search(key []byte, node *Node) (*Node, int) {
 }
 
 // findKeyIndex finds the appropriate index for a key in a node using binary search.
-func (bt *BTree) findKeyIndex(node *Node, key []byte) int {
+func (bt *BTree) findKeyIndex(node *Node, key string) int {
 	return sort.Search(len(node.records), func(i int) bool {
-		return bytes.Compare(node.records[i].Key, key) >= 0
+		return node.records[i].Key >= key
 	})
 }
 
@@ -330,7 +328,7 @@ func (bt *BTree) compact() {
 
 	// Sort records by key
 	sort.Slice(activeRecords, func(i, j int) bool {
-		return bytes.Compare(activeRecords[i].Key, activeRecords[j].Key) < 0
+		return activeRecords[i].Key < activeRecords[j].Key
 	})
 
 	// Rebuild tree - reset everything
