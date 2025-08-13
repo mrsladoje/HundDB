@@ -2,19 +2,16 @@ package block_manager
 
 import (
 	"errors"
-	"fmt"
 	mdl "hunddb/model"
 	"hunddb/structures/lru_cache"
 	"io"
 	"os"
 )
 
-var (
-	instance           *BlockManager
-	ErrBlockNotRead    = errors.New("block not read successfully")
-	ErrBlockNotWritten = errors.New("block not written successfully")
-)
+var instance *BlockManager
 
+// TODO: Fragmentation will be handled in wal.
+// TODO: Figure out interaction with SSTable
 // BlockManager manages disk I/O operations at block level
 // Implements singleton pattern
 type BlockManager struct {
@@ -26,7 +23,7 @@ type BlockManager struct {
 func GetBlockManager() *BlockManager {
 	if instance == nil {
 		// TODO: load from config the block size and cache size,
-		//  since config will be singleton no function params are needed
+		// since config will be singleton no function params are needed
 		// For now dummy values are present
 		instance = &BlockManager{
 			blockSize:  1024 * uint16(4),
@@ -45,7 +42,7 @@ func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) (*mdl.Block, error
 
 	block, err := bm.readBlockFromDisk(location)
 	if err != nil {
-		return nil, ErrBlockNotRead
+		return nil, errors.New("block not read successfully")
 	}
 
 	bm.blockCache.Put(location, block)
@@ -54,21 +51,13 @@ func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) (*mdl.Block, error
 
 // WriteBlock writes a block to disk and updates cache
 func (bm *BlockManager) WriteBlock(location mdl.BlockLocation, data []byte) error {
-	if len(data) > int(bm.blockSize) {
-		return fmt.Errorf("data size %d exceeds block size %d", len(data), bm.blockSize)
-	}
-
-	// Pad data to block size
-	blockData := make([]byte, int(bm.blockSize))
-	copy(blockData, data)
-
-	err := bm.writeBlockToDisk(location, blockData)
+	err := bm.writeBlockToDisk(location, data)
 	if err != nil {
-		return ErrBlockNotWritten
+		return errors.New("block not written successfully")
 	}
 	bm.blockCache.Put(location, &mdl.Block{
 		Location: location,
-		Data:     blockData,
+		Data:     data,
 	})
 
 	return nil

@@ -10,11 +10,9 @@ var (
 	ErrKeyNotFound = errors.New("key not found")
 )
 
-// TODO: Figure out the type of the block disk location for the key (string | disk location).
-
 // TODO: Add capacity of lru to config, validating it and setting the default value
 
-// LRUCache is a generic Least Recently Used cache implementation (Used for read path and for block manager)
+// LRUCache is a generic Least Recently Used cache implementation (Used for read path cache and for block manager)
 // K is the key type (string for records, disk location for blocks)
 // V is the value type (any value for records, block data for disk blocks)
 type LRUCache[K string | mdl.BlockLocation, V any] struct {
@@ -49,8 +47,8 @@ func NewLRUCache[K string | mdl.BlockLocation, V any](capacity uint32) *LRUCache
 func (lru *LRUCache[K, V]) Get(key K) (V, error) {
 	node, exists := lru.cache_map[key]
 	if !exists {
-		var zero V
-		return zero, ErrKeyNotFound
+		var emptyVal V
+		return emptyVal, ErrKeyNotFound
 	}
 	lru.cache_list.MoveToFront(node)
 	return node.Value.(*listItem[K, V]).value, nil
@@ -118,8 +116,8 @@ func (lru *LRUCache[K, V]) Contains(key K) bool {
 func (lru *LRUCache[K, V]) Peek(key K) (V, error) {
 	element, exists := lru.cache_map[key]
 	if !exists {
-		var zero V
-		return zero, ErrKeyNotFound
+		var emptyValue V
+		return emptyValue, ErrKeyNotFound
 	}
 
 	item := element.Value.(*listItem[K, V])

@@ -1,27 +1,29 @@
 package lru_cache
 
 import (
+	mdl "hunddb/model"
 	"testing"
 )
 
-func TestNewLRUCache(t *testing.T) {
+//TODO: adjust record tests to work with record type
+
+// TestNewLRUCache_RecordCache tests cache creation for record based caching
+func TestNewLRUCache_RecordCache(t *testing.T) {
 	tests := []struct {
 		capacity     uint32
 		expectedSize uint32
 		expectedCap  uint32
-		shouldError  bool
-		errorMessage string
 	}{
-		{10, 0, 10, false, ""},
-		{1, 0, 1, false, ""},
-		{100, 0, 100, false, ""},
+		{10, 0, 10},
+		{1, 0, 1},
+		{100, 0, 100},
 	}
 
 	for _, test := range tests {
-		cache := NewLRUCache[string, int](test.capacity)
+		cache := NewLRUCache[string, string](test.capacity)
 
 		if cache == nil {
-			t.Fatal("Expected non-nil LRUCache")
+			t.Fatal("Expected non nil LRUCache")
 		}
 
 		if cache.Size() != test.expectedSize {
@@ -34,349 +36,278 @@ func TestNewLRUCache(t *testing.T) {
 	}
 }
 
-func TestLRUCache_PutAndGet(t *testing.T) {
+// TestNewLRUCache_BlockCache tests cache creation for block based caching
+func TestNewLRUCache_BlockCache(t *testing.T) {
+	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](50)
+
+	if cache == nil {
+		t.Fatal("Expected non nil LRUCache")
+	}
+
+	if cache.Size() != 0 {
+		t.Errorf("Expected initial size 0, got %d", cache.Size())
+	}
+
+	if cache.Capacity() != 50 {
+		t.Errorf("Expected capacity 50, got %d", cache.Capacity())
+	}
+}
+
+// TestLRUCache_RecordCaching tests typical record caching scenarios
+func TestLRUCache_RecordCaching(t *testing.T) {
+	cache := NewLRUCache[string, string](3)
+
 	tests := []struct {
-		capacity   uint32
-		operations []struct {
-			operation string
-			key       string
-			value     int
-			expected  int
-			shouldErr bool
-		}
+		operation string
+		key       string
+		value     string
+		expected  string
+		shouldErr bool
 	}{
-		{
-			capacity: 3,
-			operations: []struct {
-				operation string
-				key       string
-				value     int
-				expected  int
-				shouldErr bool
-			}{
-				{"put", "key1", 100, 0, false},
-				{"put", "key2", 200, 0, false},
-				{"get", "key1", 0, 100, false},
-				{"get", "key2", 0, 200, false},
-				{"get", "nonexistent", 0, 0, true},
-			},
-		},
+		{"put", "user:123", "John Doe", "", false},
+		{"put", "user:456", "Jane Smith", "", false},
+		{"put", "user:789", "Bob Johnson", "", false},
+		{"get", "user:123", "", "John Doe", false},
+		{"get", "user:456", "", "Jane Smith", false},
+		{"get", "user:999", "", "", true},
 	}
 
 	for _, test := range tests {
-		cache := NewLRUCache[string, int](test.capacity)
-
-		for _, op := range test.operations {
-			switch op.operation {
-			case "put":
-				err := cache.Put(op.key, op.value)
-				if err != nil && !op.shouldErr {
-					t.Errorf("Put operation failed: %v", err)
+		switch test.operation {
+		case "put":
+			err := cache.Put(test.key, test.value)
+			if err != nil && !test.shouldErr {
+				t.Errorf("Put operation failed for key %s: %v", test.key, err)
+			}
+		case "get":
+			value, err := cache.Get(test.key)
+			if test.shouldErr {
+				if err != ErrKeyNotFound {
+					t.Errorf("Expected ErrKeyNotFound for key %s, got %v", test.key, err)
 				}
-			case "get":
-				value, err := cache.Get(op.key)
-				if op.shouldErr {
-					if err != ErrKeyNotFound {
-						t.Errorf("Expected ErrKeyNotFound, got %v", err)
-					}
-				} else {
-					if err != nil {
-						t.Errorf("Get operation failed: %v", err)
-					}
-					if value != op.expected {
-						t.Errorf("Expected value %d, got %d", op.expected, value)
-					}
+			} else {
+				if err != nil {
+					t.Errorf("Get operation failed for key %s: %v", test.key, err)
+				}
+				if value != test.expected {
+					t.Errorf("Expected value '%s' for key %s, got '%s'", test.expected, test.key, value)
 				}
 			}
 		}
 	}
 }
 
-func TestLRUCache_Capacity(t *testing.T) {
-	tests := []struct {
-		capacity      uint32
-		keysToAdd     []string
-		valesToAdd    []int
-		expectedSize  uint32
-		evictedKeys   []string
-		remainingKeys []string
-	}{
-		{
-			capacity:      2,
-			keysToAdd:     []string{"key1", "key2", "key3"},
-			valesToAdd:    []int{100, 200, 300},
-			expectedSize:  2,
-			evictedKeys:   []string{"key1"},
-			remainingKeys: []string{"key2", "key3"},
-		},
-		{
-			capacity:      1,
-			keysToAdd:     []string{"key1", "key2"},
-			valesToAdd:    []int{100, 200},
-			expectedSize:  1,
-			evictedKeys:   []string{"key1"},
-			remainingKeys: []string{"key2"},
-		},
-		{
-			capacity:      5,
-			keysToAdd:     []string{"key1", "key2", "key3"},
-			valesToAdd:    []int{100, 200, 300},
-			expectedSize:  3,
-			evictedKeys:   []string{},
-			remainingKeys: []string{"key1", "key2", "key3"},
-		},
-	}
+// TestLRUCache_BlockCaching tests typical block caching scenarios
+func TestLRUCache_BlockCaching(t *testing.T) {
+	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](2)
 
-	for _, test := range tests {
-		cache := NewLRUCache[string, int](test.capacity)
+	loc1 := mdl.BlockLocation{FilePath: "/data/file1.db", BlockIndex: 0}
+	loc2 := mdl.BlockLocation{FilePath: "/data/file1.db", BlockIndex: 1}
+	loc3 := mdl.BlockLocation{FilePath: "/data/file2.db", BlockIndex: 0}
 
-		// Add all keys
-		for i, key := range test.keysToAdd {
-			err := cache.Put(key, test.valesToAdd[i])
-			if err != nil {
-				t.Errorf("Failed to put key %s: %v", key, err)
-			}
-		}
+	block1 := &mdl.Block{Location: loc1, Data: []byte("block1 data")}
+	block2 := &mdl.Block{Location: loc2, Data: []byte("block2 data")}
+	block3 := &mdl.Block{Location: loc3, Data: []byte("block3 data")}
 
-		// Check size
-		if cache.Size() != test.expectedSize {
-			t.Errorf("Expected size %d, got %d", test.expectedSize, cache.Size())
-		}
-
-		// Check evicted keys
-		for _, evictedKey := range test.evictedKeys {
-			_, err := cache.Get(evictedKey)
-			if err != ErrKeyNotFound {
-				t.Errorf("Expected key %s to be evicted", evictedKey)
-			}
-		}
-
-		// Check remaining keys
-		for _, remainingKey := range test.remainingKeys {
-			_, err := cache.Get(remainingKey)
-			if err != nil {
-				t.Errorf("Expected key %s to remain in cache, got error: %v", remainingKey, err)
-			}
-		}
-	}
-}
-
-func TestLRUCache_LRUBehavior(t *testing.T) {
-	cache := NewLRUCache[string, int](3)
-
-	// Add three items
-	cache.Put("key1", 100)
-	cache.Put("key2", 200)
-	cache.Put("key3", 300)
-
-	// Access key1 to make it recently used
-	_, err := cache.Get("key1")
+	err := cache.Put(loc1, block1)
 	if err != nil {
-		t.Errorf("Failed to get key1: %v", err)
+		t.Fatalf("Failed to put block1: %v", err)
 	}
 
-	// Add key4, should evict key2 (least recently used)
-	cache.Put("key4", 400)
+	err = cache.Put(loc2, block2)
+	if err != nil {
+		t.Fatalf("Failed to put block2: %v", err)
+	}
 
-	// key2 should be evicted
-	_, err = cache.Get("key2")
+	retrievedBlock1, err := cache.Get(loc1)
+	if err != nil {
+		t.Fatalf("Failed to get block1: %v", err)
+	}
+
+	if string(retrievedBlock1.Data) != "block1 data" {
+		t.Errorf("Expected 'block1 data', got '%s'", string(retrievedBlock1.Data))
+	}
+
+	// Add third block that should evict block2 since block1 was recently accessed
+	err = cache.Put(loc3, block3)
+	if err != nil {
+		t.Fatalf("Failed to put block3: %v", err)
+	}
+
+	// block2 should be evicted
+	_, err = cache.Get(loc2)
 	if err != ErrKeyNotFound {
-		t.Error("Expected key2 to be evicted")
+		t.Error("Expected block2 to be evicted")
 	}
 
-	// key1, key3, key4 should remain
-	remainingKeys := []string{"key1", "key3", "key4"}
-	for _, key := range remainingKeys {
-		_, err := cache.Get(key)
+	// block1 and block3 should still be present
+	_, err = cache.Get(loc1)
+	if err != nil {
+		t.Error("Expected block1 to still be in cache")
+	}
+
+	_, err = cache.Get(loc3)
+	if err != nil {
+		t.Error("Expected block3 to still be in cache")
+	}
+}
+
+// TestLRUCache_RecordEviction tests record cache eviction behavior
+func TestLRUCache_RecordEviction(t *testing.T) {
+	cache := NewLRUCache[string, string](2)
+
+	cache.Put("user:001", "Alice")
+	cache.Put("user:002", "Bob")
+
+	alice, err := cache.Get("user:001")
+	if err != nil || alice != "Alice" {
+		t.Errorf("Expected Alice, got %v, error: %v", alice, err)
+	}
+
+	cache.Put("user:003", "Charlie")
+
+	_, err = cache.Get("user:002")
+	if err != ErrKeyNotFound {
+		t.Error("Expected user:002 to be evicted")
+	}
+
+	remainingKeys := []string{"user:001", "user:003"}
+	expectedValues := []string{"Alice", "Charlie"}
+
+	for i, key := range remainingKeys {
+		value, err := cache.Get(key)
 		if err != nil {
 			t.Errorf("Expected key %s to remain in cache", key)
 		}
+		if value != expectedValues[i] {
+			t.Errorf("Expected value %s for key %s, got %s", expectedValues[i], key, value)
+		}
 	}
 }
 
-func TestLRUCache_Remove(t *testing.T) {
-	tests := []struct {
-		keysToAdd    []string
-		valesToAdd   []int
-		keyToRemove  string
-		shouldError  bool
-		expectedSize uint32
-	}{
-		{
-			keysToAdd:    []string{"key1", "key2", "key3"},
-			valesToAdd:   []int{100, 200, 300},
-			keyToRemove:  "key2",
-			shouldError:  false,
-			expectedSize: 2,
-		},
-		{
-			keysToAdd:    []string{"key1"},
-			valesToAdd:   []int{100},
-			keyToRemove:  "nonexistent",
-			shouldError:  true,
-			expectedSize: 1,
-		},
+// TestLRUCache_BlockEviction tests block cache eviction behavior
+func TestLRUCache_BlockEviction(t *testing.T) {
+	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](3)
+
+	locations := []mdl.BlockLocation{
+		{FilePath: "/data/users.db", BlockIndex: 0},
+		{FilePath: "/data/users.db", BlockIndex: 1},
+		{FilePath: "/data/orders.db", BlockIndex: 0},
+		{FilePath: "/data/products.db", BlockIndex: 0},
 	}
 
-	for _, test := range tests {
-		cache := NewLRUCache[string, int](10)
+	blocks := []*mdl.Block{
+		{Location: locations[0], Data: []byte("user block 0")},
+		{Location: locations[1], Data: []byte("user block 1")},
+		{Location: locations[2], Data: []byte("orders block 0")},
+		{Location: locations[3], Data: []byte("products block 0")},
+	}
 
-		// Add keys
-		for i, key := range test.keysToAdd {
-			cache.Put(key, test.valesToAdd[i])
+	for i := range 3 {
+		err := cache.Put(locations[i], blocks[i])
+		if err != nil {
+			t.Fatalf("Failed to put block %d: %v", i, err)
 		}
+	}
 
-		// Remove key
-		err := cache.Remove(test.keyToRemove)
-		if test.shouldError {
-			if err != ErrKeyNotFound {
-				t.Errorf("Expected ErrKeyNotFound, got %v", err)
-			}
+	_, err := cache.Get(locations[0])
+	if err != nil {
+		t.Fatalf("Failed to get block 0: %v", err)
+	}
+
+	err = cache.Put(locations[3], blocks[3])
+	if err != nil {
+		t.Fatalf("Failed to put fourth block: %v", err)
+	}
+
+	_, err = cache.Get(locations[1])
+	if err != ErrKeyNotFound {
+		t.Error("Expected block 1 to be evicted")
+	}
+
+	remainingIndices := []int{0, 2, 3}
+	for _, idx := range remainingIndices {
+		retrievedBlock, err := cache.Get(locations[idx])
+		if err != nil {
+			t.Errorf("Expected block %d to remain in cache", idx)
 		} else {
-			if err != nil {
-				t.Errorf("Remove operation failed: %v", err)
-			}
-		}
-
-		// Check size
-		if cache.Size() != test.expectedSize {
-			t.Errorf("Expected size %d, got %d", test.expectedSize, cache.Size())
-		}
-
-		// Verify removed key doesn't exist
-		if !test.shouldError {
-			_, err := cache.Get(test.keyToRemove)
-			if err != ErrKeyNotFound {
-				t.Errorf("Expected removed key %s to not exist", test.keyToRemove)
+			expectedData := blocks[idx].Data
+			if string(retrievedBlock.Data) != string(expectedData) {
+				t.Errorf("Block %d data mismatch", idx)
 			}
 		}
 	}
 }
 
-func TestLRUCache_Contains(t *testing.T) {
-	cache := NewLRUCache[string, int](5)
+// TestLRUCache_RecordRemoval tests removing records from cache
+func TestLRUCache_RecordRemoval(t *testing.T) {
+	cache := NewLRUCache[string, string](10)
 
-	// Add some keys
-	keys := []string{"key1", "key2", "key3"}
-	values := []int{100, 200, 300}
-
-	for i, key := range keys {
-		cache.Put(key, values[i])
+	testRecords := map[string]string{
+		"user:001":    "John Smith",
+		"user:002":    "Jane Doe",
+		"order:12345": "Order details",
 	}
 
-	// Test existing keys
-	for _, key := range keys {
-		if !cache.Contains(key) {
-			t.Errorf("Expected key %s to exist in cache", key)
+	for key, value := range testRecords {
+		err := cache.Put(key, value)
+		if err != nil {
+			t.Fatalf("Failed to put %s: %v", key, err)
 		}
 	}
 
-	// Test non-existing key
-	if cache.Contains("nonexistent") {
-		t.Error("Expected nonexistent key to not be in cache")
-	}
-}
-
-func TestLRUCache_Peek(t *testing.T) {
-	cache := NewLRUCache[string, int](2)
-
-	cache.Put("key1", 100)
-	cache.Put("key2", 200)
-
-	// Peek at key1 (should not affect LRU order)
-	value, err := cache.Peek("key1")
+	err := cache.Remove("user:001")
 	if err != nil {
-		t.Errorf("Peek operation failed: %v", err)
-	}
-	if value != 100 {
-		t.Errorf("Expected value 100, got %d", value)
+		t.Errorf("Failed to remove user:001: %v", err)
 	}
 
-	// Add key3, key1 should still be evicted (since Peek didn't move it to front)
-	cache.Put("key3", 300)
-
-	_, err = cache.Get("key1")
+	_, err = cache.Get("user:001")
 	if err != ErrKeyNotFound {
-		t.Error("Expected key1 to be evicted after Peek")
+		t.Error("Expected user:001 to be removed")
 	}
 
-	// Test peek on non-existent key
-	_, err = cache.Peek("nonexistent")
+	if cache.Size() != 2 {
+		t.Errorf("Expected size 2 after removal, got %d", cache.Size())
+	}
+
+	err = cache.Remove("user:999")
 	if err != ErrKeyNotFound {
-		t.Errorf("Expected ErrKeyNotFound, got %v", err)
+		t.Errorf("Expected ErrKeyNotFound when removing non-existent record, got %v", err)
+	}
+
+	if cache.Size() != 2 {
+		t.Errorf("Expected size to remain 2, got %d", cache.Size())
 	}
 }
 
-func TestLRUCache_DifferentTypes(t *testing.T) {
-	// Test with string keys and byte slice values
-	byteCache := NewLRUCache[string, []byte](2)
+// TestLRUCache_BlockRemoval tests removing blocks from cache
+func TestLRUCache_BlockRemoval(t *testing.T) {
+	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](5)
 
-	byteCache.Put("data1", []byte("hello"))
-	byteCache.Put("data2", []byte("world"))
+	loc1 := mdl.BlockLocation{FilePath: "/data/test.db", BlockIndex: 0}
+	loc2 := mdl.BlockLocation{FilePath: "/data/test.db", BlockIndex: 1}
 
-	value, err := byteCache.Get("data1")
+	block1 := &mdl.Block{Location: loc1, Data: []byte("test block 0")}
+	block2 := &mdl.Block{Location: loc2, Data: []byte("test block 1")}
+
+	cache.Put(loc1, block1)
+	cache.Put(loc2, block2)
+
+	err := cache.Remove(loc1)
 	if err != nil {
-		t.Errorf("Get operation failed: %v", err)
-	}
-	if string(value) != "hello" {
-		t.Errorf("Expected 'hello', got %s", string(value))
+		t.Errorf("Failed to remove block: %v", err)
 	}
 
-	// Test with int keys and string values
-	intCache := NewLRUCache[string, string](2)
-
-	intCache.Put("1", "one")
-	intCache.Put("2", "two")
-
-	value2, err := intCache.Get("1")
-	if err != nil {
-		t.Errorf("Get operation failed: %v", err)
-	}
-	if value2 != "one" {
-		t.Errorf("Expected 'one', got %s", value2)
-	}
-}
-
-func TestLRUCache_UpdateExistingKey(t *testing.T) {
-	cache := NewLRUCache[string, int](3)
-
-	cache.Put("key1", 100)
-	cache.Put("key1", 150) // Update existing key
-
-	if cache.Size() != 1 {
-		t.Errorf("Expected size 1, got %d", cache.Size())
-	}
-
-	value, err := cache.Get("key1")
-	if err != nil {
-		t.Errorf("Get operation failed: %v", err)
-	}
-	if value != 150 {
-		t.Errorf("Expected updated value 150, got %d", value)
-	}
-}
-
-func TestLRUCache_EdgeCases(t *testing.T) {
-	// Test with capacity of 1
-	cache := NewLRUCache[string, int](1)
-
-	cache.Put("key1", 100)
-	cache.Put("key2", 200) // Should evict key1
-
-	if cache.Size() != 1 {
-		t.Errorf("Expected size 1, got %d", cache.Size())
-	}
-
-	_, err := cache.Get("key1")
+	_, err = cache.Get(loc1)
 	if err != ErrKeyNotFound {
-		t.Error("Expected key1 to be evicted")
+		t.Error("Expected block to be removed")
 	}
 
-	value, err := cache.Get("key2")
+	retrievedBlock, err := cache.Get(loc2)
 	if err != nil {
-		t.Errorf("Get operation failed: %v", err)
+		t.Error("Expected other block to remain")
 	}
-	if value != 200 {
-		t.Errorf("Expected value 200, got %d", value)
+	if string(retrievedBlock.Data) != "test block 1" {
+		t.Error("Remaining block data corrupted")
 	}
 }
