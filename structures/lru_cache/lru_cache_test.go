@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-//TODO: adjust record tests to work with record type
-
 // TestNewLRUCache_RecordCache tests cache creation for record based caching
 func TestNewLRUCache_RecordCache(t *testing.T) {
 	tests := []struct {
@@ -20,7 +18,7 @@ func TestNewLRUCache_RecordCache(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		cache := NewLRUCache[string, string](test.capacity)
+		cache := NewLRUCache[string, *mdl.Record](test.capacity)
 
 		if cache == nil {
 			t.Fatal("Expected non nil LRUCache")
@@ -38,7 +36,7 @@ func TestNewLRUCache_RecordCache(t *testing.T) {
 
 // TestNewLRUCache_BlockCache tests cache creation for block based caching
 func TestNewLRUCache_BlockCache(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](50)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](50)
 
 	if cache == nil {
 		t.Fatal("Expected non nil LRUCache")
@@ -55,32 +53,33 @@ func TestNewLRUCache_BlockCache(t *testing.T) {
 
 // TestLRUCache_RecordCaching tests typical record caching scenarios
 func TestLRUCache_RecordCaching(t *testing.T) {
-	cache := NewLRUCache[string, string](3)
+	cache := NewLRUCache[string, *mdl.Record](3)
 
 	tests := []struct {
-		operation string
-		key       string
-		value     string
-		expected  string
-		shouldErr bool
+		operation   string
+		key         string
+		record      *mdl.Record
+		expectedKey string
+		expectedVal []byte
+		shouldErr   bool
 	}{
-		{"put", "user:123", "John Doe", "", false},
-		{"put", "user:456", "Jane Smith", "", false},
-		{"put", "user:789", "Bob Johnson", "", false},
-		{"get", "user:123", "", "John Doe", false},
-		{"get", "user:456", "", "Jane Smith", false},
-		{"get", "user:999", "", "", true},
+		{"put", "user:123", mdl.NewRecord("user:123", []byte("John Doe"), 1000, false), "", nil, false},
+		{"put", "user:456", mdl.NewRecord("user:456", []byte("Jane Smith"), 1001, false), "", nil, false},
+		{"put", "user:789", mdl.NewRecord("user:789", []byte("Bob Johnson"), 1002, false), "", nil, false},
+		{"get", "user:123", nil, "user:123", []byte("John Doe"), false},
+		{"get", "user:456", nil, "user:456", []byte("Jane Smith"), false},
+		{"get", "user:999", nil, "", nil, true},
 	}
 
 	for _, test := range tests {
 		switch test.operation {
 		case "put":
-			err := cache.Put(test.key, test.value)
+			err := cache.Put(test.key, test.record)
 			if err != nil && !test.shouldErr {
 				t.Errorf("Put operation failed for key %s: %v", test.key, err)
 			}
 		case "get":
-			value, err := cache.Get(test.key)
+			record, err := cache.Get(test.key)
 			if test.shouldErr {
 				if err != ErrKeyNotFound {
 					t.Errorf("Expected ErrKeyNotFound for key %s, got %v", test.key, err)
@@ -89,8 +88,11 @@ func TestLRUCache_RecordCaching(t *testing.T) {
 				if err != nil {
 					t.Errorf("Get operation failed for key %s: %v", test.key, err)
 				}
-				if value != test.expected {
-					t.Errorf("Expected value '%s' for key %s, got '%s'", test.expected, test.key, value)
+				if record.Key != test.expectedKey {
+					t.Errorf("Expected key '%s' for key %s, got '%s'", test.expectedKey, test.key, record.Key)
+				}
+				if string(record.Value) != string(test.expectedVal) {
+					t.Errorf("Expected value '%s' for key %s, got '%s'", string(test.expectedVal), test.key, string(record.Value))
 				}
 			}
 		}
@@ -99,22 +101,22 @@ func TestLRUCache_RecordCaching(t *testing.T) {
 
 // TestLRUCache_BlockCaching tests typical block caching scenarios
 func TestLRUCache_BlockCaching(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](2)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](2)
 
 	loc1 := mdl.BlockLocation{FilePath: "/data/file1.db", BlockIndex: 0}
 	loc2 := mdl.BlockLocation{FilePath: "/data/file1.db", BlockIndex: 1}
 	loc3 := mdl.BlockLocation{FilePath: "/data/file2.db", BlockIndex: 0}
 
-	block1 := &mdl.Block{Location: loc1, Data: []byte("block1 data")}
-	block2 := &mdl.Block{Location: loc2, Data: []byte("block2 data")}
-	block3 := &mdl.Block{Location: loc3, Data: []byte("block3 data")}
+	block1Data := []byte("block1 data")
+	block2Data := []byte("block2 data")
+	block3Data := []byte("block3 data")
 
-	err := cache.Put(loc1, block1)
+	err := cache.Put(loc1, block1Data)
 	if err != nil {
 		t.Fatalf("Failed to put block1: %v", err)
 	}
 
-	err = cache.Put(loc2, block2)
+	err = cache.Put(loc2, block2Data)
 	if err != nil {
 		t.Fatalf("Failed to put block2: %v", err)
 	}
@@ -124,12 +126,12 @@ func TestLRUCache_BlockCaching(t *testing.T) {
 		t.Fatalf("Failed to get block1: %v", err)
 	}
 
-	if string(retrievedBlock1.Data) != "block1 data" {
-		t.Errorf("Expected 'block1 data', got '%s'", string(retrievedBlock1.Data))
+	if string(retrievedBlock1) != "block1 data" {
+		t.Errorf("Expected 'block1 data', got '%s'", string(retrievedBlock1))
 	}
 
 	// Add third block that should evict block2 since block1 was recently accessed
-	err = cache.Put(loc3, block3)
+	err = cache.Put(loc3, block3Data)
 	if err != nil {
 		t.Fatalf("Failed to put block3: %v", err)
 	}
@@ -154,17 +156,21 @@ func TestLRUCache_BlockCaching(t *testing.T) {
 
 // TestLRUCache_RecordEviction tests record cache eviction behavior
 func TestLRUCache_RecordEviction(t *testing.T) {
-	cache := NewLRUCache[string, string](2)
+	cache := NewLRUCache[string, *mdl.Record](2)
 
-	cache.Put("user:001", "Alice")
-	cache.Put("user:002", "Bob")
+	aliceRecord := mdl.NewRecord("user:001", []byte("Alice"), 1000, false)
+	bobRecord := mdl.NewRecord("user:002", []byte("Bob"), 1001, false)
+	charlieRecord := mdl.NewRecord("user:003", []byte("Charlie"), 1002, false)
+
+	cache.Put("user:001", aliceRecord)
+	cache.Put("user:002", bobRecord)
 
 	alice, err := cache.Get("user:001")
-	if err != nil || alice != "Alice" {
-		t.Errorf("Expected Alice, got %v, error: %v", alice, err)
+	if err != nil || string(alice.Value) != "Alice" {
+		t.Errorf("Expected Alice, got %v, error: %v", string(alice.Value), err)
 	}
 
-	cache.Put("user:003", "Charlie")
+	cache.Put("user:003", charlieRecord)
 
 	_, err = cache.Get("user:002")
 	if err != ErrKeyNotFound {
@@ -175,19 +181,19 @@ func TestLRUCache_RecordEviction(t *testing.T) {
 	expectedValues := []string{"Alice", "Charlie"}
 
 	for i, key := range remainingKeys {
-		value, err := cache.Get(key)
+		record, err := cache.Get(key)
 		if err != nil {
 			t.Errorf("Expected key %s to remain in cache", key)
 		}
-		if value != expectedValues[i] {
-			t.Errorf("Expected value %s for key %s, got %s", expectedValues[i], key, value)
+		if string(record.Value) != expectedValues[i] {
+			t.Errorf("Expected value %s for key %s, got %s", expectedValues[i], key, string(record.Value))
 		}
 	}
 }
 
 // TestLRUCache_BlockEviction tests block cache eviction behavior
 func TestLRUCache_BlockEviction(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](3)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](3)
 
 	locations := []mdl.BlockLocation{
 		{FilePath: "/data/users.db", BlockIndex: 0},
@@ -196,11 +202,11 @@ func TestLRUCache_BlockEviction(t *testing.T) {
 		{FilePath: "/data/products.db", BlockIndex: 0},
 	}
 
-	blocks := []*mdl.Block{
-		{Location: locations[0], Data: []byte("user block 0")},
-		{Location: locations[1], Data: []byte("user block 1")},
-		{Location: locations[2], Data: []byte("orders block 0")},
-		{Location: locations[3], Data: []byte("products block 0")},
+	blocks := [][]byte{
+		[]byte("user block 0"),
+		[]byte("user block 1"),
+		[]byte("orders block 0"),
+		[]byte("products block 0"),
 	}
 
 	for i := range 3 {
@@ -231,8 +237,8 @@ func TestLRUCache_BlockEviction(t *testing.T) {
 		if err != nil {
 			t.Errorf("Expected block %d to remain in cache", idx)
 		} else {
-			expectedData := blocks[idx].Data
-			if string(retrievedBlock.Data) != string(expectedData) {
+			expectedData := blocks[idx]
+			if string(retrievedBlock) != string(expectedData) {
 				t.Errorf("Block %d data mismatch", idx)
 			}
 		}
@@ -241,16 +247,16 @@ func TestLRUCache_BlockEviction(t *testing.T) {
 
 // TestLRUCache_RecordRemoval tests removing records from cache
 func TestLRUCache_RecordRemoval(t *testing.T) {
-	cache := NewLRUCache[string, string](10)
+	cache := NewLRUCache[string, *mdl.Record](10)
 
-	testRecords := map[string]string{
-		"user:001":    "John Smith",
-		"user:002":    "Jane Doe",
-		"order:12345": "Order details",
+	testRecords := map[string]*mdl.Record{
+		"user:001":    mdl.NewRecord("user:001", []byte("John Smith"), 1000, false),
+		"user:002":    mdl.NewRecord("user:002", []byte("Jane Doe"), 1001, false),
+		"order:12345": mdl.NewRecord("order:12345", []byte("Order details"), 1002, false),
 	}
 
-	for key, value := range testRecords {
-		err := cache.Put(key, value)
+	for key, record := range testRecords {
+		err := cache.Put(key, record)
 		if err != nil {
 			t.Fatalf("Failed to put %s: %v", key, err)
 		}
@@ -282,16 +288,16 @@ func TestLRUCache_RecordRemoval(t *testing.T) {
 
 // TestLRUCache_BlockRemoval tests removing blocks from cache
 func TestLRUCache_BlockRemoval(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](5)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](5)
 
 	loc1 := mdl.BlockLocation{FilePath: "/data/test.db", BlockIndex: 0}
 	loc2 := mdl.BlockLocation{FilePath: "/data/test.db", BlockIndex: 1}
 
-	block1 := &mdl.Block{Location: loc1, Data: []byte("test block 0")}
-	block2 := &mdl.Block{Location: loc2, Data: []byte("test block 1")}
+	block1Data := []byte("test block 0")
+	block2Data := []byte("test block 1")
 
-	cache.Put(loc1, block1)
-	cache.Put(loc2, block2)
+	cache.Put(loc1, block1Data)
+	cache.Put(loc2, block2Data)
 
 	err := cache.Remove(loc1)
 	if err != nil {
@@ -307,7 +313,7 @@ func TestLRUCache_BlockRemoval(t *testing.T) {
 	if err != nil {
 		t.Error("Expected other block to remain")
 	}
-	if string(retrievedBlock.Data) != "test block 1" {
+	if string(retrievedBlock) != "test block 1" {
 		t.Error("Remaining block data corrupted")
 	}
 }

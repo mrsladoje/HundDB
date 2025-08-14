@@ -12,7 +12,7 @@ import (
 // Helper function to create a test record
 func createTestRecord(key, value string) *model.Record {
 	return &model.Record{
-		Key:       []byte(key),
+		Key:       key,
 		Value:     []byte(value),
 		Tombstone: false,
 		Timestamp: uint64(time.Now().UnixNano()),
@@ -61,18 +61,18 @@ func TestBTree_PutAndGet_SingleRecord(t *testing.T) {
 	}
 
 	// Test get
-	retrieved := btree.Get([]byte("key1"))
+	retrieved := btree.Get("key1")
 	if retrieved == nil {
 		t.Fatal("Record not found")
 	}
 
-	if string(retrieved.Key) != "key1" || string(retrieved.Value) != "value1" {
+	if retrieved.Key != "key1" || string(retrieved.Value) != "value1" {
 		t.Errorf("Retrieved record doesn't match. Expected key1/value1, got %s/%s",
-			string(retrieved.Key), string(retrieved.Value))
+			retrieved.Key, string(retrieved.Value))
 	}
 
 	// Test non-existent key
-	nonExistent := btree.Get([]byte("nonexistent"))
+	nonExistent := btree.Get("nonexistent")
 	if nonExistent != nil {
 		t.Error("Should return nil for non-existent key")
 	}
@@ -86,8 +86,7 @@ func TestBTree_PutInvalidRecord(t *testing.T) {
 		record *model.Record
 	}{
 		{"Nil record", nil},
-		{"Empty key", &model.Record{Key: []byte{}, Value: []byte("value")}},
-		{"Nil key", &model.Record{Key: nil, Value: []byte("value")}},
+		{"Empty key", &model.Record{Key: "", Value: []byte("value")}},
 	}
 
 	for _, tc := range tests {
@@ -129,7 +128,7 @@ func TestBTree_MultipleInsertions(t *testing.T) {
 
 	// Verify all records can be retrieved
 	for _, r := range records {
-		retrieved := btree.Get([]byte(r.key))
+		retrieved := btree.Get(r.key)
 		if retrieved == nil {
 			t.Errorf("Record %s not found", r.key)
 			continue
@@ -158,16 +157,16 @@ func TestBTree_UpdateExistingRecord(t *testing.T) {
 	btree.Put(record1)
 
 	// Update with new value
-	record2 := createTestRecord("key1", "newvalue1")
+	record2 := createTestRecord("key1", "new value1")
 	btree.Put(record2)
 
 	// Verify updated value
-	retrieved := btree.Get([]byte("key1"))
+	retrieved := btree.Get("key1")
 	if retrieved == nil {
 		t.Fatal("Record not found after update")
 	}
-	if string(retrieved.Value) != "newvalue1" {
-		t.Errorf("Expected newvalue1, got %s", string(retrieved.Value))
+	if string(retrieved.Value) != "new value1" {
+		t.Errorf("Expected new value1, got %s", string(retrieved.Value))
 	}
 
 	// Check that total records count didn't change
@@ -188,27 +187,27 @@ func TestBTree_Delete(t *testing.T) {
 	}
 
 	// Delete a record
-	deleted := btree.Delete([]byte("key3"))
+	deleted := btree.Delete("key3")
 	if !deleted {
 		t.Error("Delete should return true for existing key")
 	}
 
 	// Verify record is not retrievable
-	retrieved := btree.Get([]byte("key3"))
+	retrieved := btree.Get("key3")
 	if retrieved != nil {
 		t.Error("Deleted record should not be retrievable")
 	}
 
 	// Verify other records are still accessible
 	for _, key := range []string{"key1", "key2", "key4", "key5"} {
-		retrieved := btree.Get([]byte(key))
+		retrieved := btree.Get(key)
 		if retrieved == nil {
 			t.Errorf("Record %s should still be accessible", key)
 		}
 	}
 
 	// Test deleting non-existent key
-	deleted = btree.Delete([]byte("nonexistent"))
+	deleted = btree.Delete("nonexistent")
 	if deleted {
 		t.Error("Delete should return false for non-existent key")
 	}
@@ -238,7 +237,7 @@ func TestBTree_Compaction(t *testing.T) {
 	recordsToDelete := int(float64(numRecords) * 0.4) // 40% to ensure threshold is exceeded
 	for i := 0; i < recordsToDelete; i++ {
 		key := fmt.Sprintf("key%d", i)
-		btree.Delete([]byte(key))
+		btree.Delete(key)
 	}
 
 	// Force compaction check by adding another record
@@ -247,7 +246,7 @@ func TestBTree_Compaction(t *testing.T) {
 	// Verify deleted records are no longer retrievable
 	for i := 0; i < recordsToDelete; i++ {
 		key := fmt.Sprintf("key%d", i)
-		retrieved := btree.Get([]byte(key))
+		retrieved := btree.Get(key)
 		if retrieved != nil {
 			t.Errorf("Deleted record %s should not be retrievable after compaction", key)
 		}
@@ -256,7 +255,7 @@ func TestBTree_Compaction(t *testing.T) {
 	// Verify remaining records are still accessible
 	for i := recordsToDelete; i < numRecords; i++ {
 		key := fmt.Sprintf("key%d", i)
-		retrieved := btree.Get([]byte(key))
+		retrieved := btree.Get(key)
 		if retrieved == nil {
 			t.Errorf("Record %s should still be accessible after compaction", key)
 		}
@@ -286,7 +285,7 @@ func TestBTree_LargeDataset(t *testing.T) {
 	// Verify all records can be retrieved
 	for i := 0; i < numRecords; i++ {
 		key := fmt.Sprintf("key%05d", i)
-		retrieved := btree.Get([]byte(key))
+		retrieved := btree.Get(key)
 		if retrieved == nil {
 			t.Errorf("Record %s not found", key)
 		}
@@ -316,7 +315,7 @@ func TestBTree_TombstonedRecordInsertion(t *testing.T) {
 	}
 
 	// Should not be retrievable via Get
-	retrieved := btree.Get([]byte("key1"))
+	retrieved := btree.Get("key1")
 	if retrieved != nil {
 		t.Error("Tombstoned record should not be retrievable via Get")
 	}
@@ -353,8 +352,8 @@ func TestBTree_Stats(t *testing.T) {
 	}
 
 	// Delete some records
-	btree.Delete([]byte("key0"))
-	btree.Delete([]byte("key1"))
+	btree.Delete("key0")
+	btree.Delete("key1")
 
 	stats = btree.GetStats()
 	if stats.TotalRecords != 5 || stats.ActiveRecords != 3 || stats.TombstonedRecords != 2 {
@@ -381,7 +380,7 @@ func TestBTree_SizeAndActiveSize(t *testing.T) {
 
 	// Delete some records
 	for i := 0; i < 3; i++ {
-		btree.Delete([]byte(fmt.Sprintf("key%d", i)))
+		btree.Delete(fmt.Sprintf("key%d", i))
 	}
 
 	if btree.Size() != 10 {
@@ -443,7 +442,7 @@ func BenchmarkBTree_Get(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%05d", i%numRecords)
-		btree.Get([]byte(key))
+		btree.Get(key)
 	}
 }
 
@@ -461,6 +460,6 @@ func BenchmarkBTree_Delete(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%05d", i)
-		btree.Delete([]byte(key))
+		btree.Delete(key)
 	}
 }

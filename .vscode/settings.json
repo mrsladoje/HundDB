@@ -5,6 +5,7 @@
     "tombstoned",
     "merkle",
     "hyperloglog",
-    "Kbits"
+    "Kbits",
+    "memtable"
   ]
 }
