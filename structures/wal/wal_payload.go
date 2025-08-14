@@ -2,7 +2,7 @@ package wal
 
 import (
 	"encoding/binary"
-	"time"
+	mdl "hunddb/model"
 )
 
 const (
@@ -32,8 +32,8 @@ const (
    Note: CRC is handled at the fragment level in WALHeader, not here
 */
 
-// WALPayload represents a Write-Ahead Log payload.
-// CRC integrity checking is handled at the fragment level by WALHeader
+// WALPayload represents a Write-Ahead Log payload containing record data.
+// CRC integrity checking is handled at the fragment level by WALHeader.
 type WALPayload struct {
 	Timestamp uint64 // 8 bytes (Unix timestamp in seconds)
 	Tombstone bool   // 1 byte (deleted flag)
@@ -43,15 +43,15 @@ type WALPayload struct {
 	Value     []byte // Value data
 }
 
-// NewWALPayload creates a new WAL payload.
-func NewWALPayload(key, value []byte, tombstone bool) *WALPayload {
+// NewWALPayload creates a WAL payload from a record.
+func NewWALPayload(record *mdl.Record) *WALPayload {
 	return &WALPayload{
-		Timestamp: uint64(time.Now().Unix()),
-		Tombstone: tombstone,
-		KeySize:   uint64(len(key)),
-		ValueSize: uint64(len(value)),
-		Key:       key,
-		Value:     value,
+		Timestamp: record.Timestamp,
+		Tombstone: record.Tombstone,
+		KeySize:   uint64(len(record.Key)),
+		ValueSize: uint64(len(record.Value)),
+		Key:       []byte(record.Key),
+		Value:     record.Value,
 	}
 }
 
@@ -85,22 +85,19 @@ func (rec *WALPayload) Serialize() []byte {
 // It reads the data in the format defined by the Serialize function.
 // Note: CRC validation is handled at the fragment level, not here
 func Deserialize(data []byte) *WALPayload {
-	Timestamp := binary.LittleEndian.Uint64(data[TIMESTAMP_START:])
-	Tombstone := false
-	if data[TOMBSTONE_START] == 1 {
-		Tombstone = true
-	}
-	KeySize := binary.LittleEndian.Uint64(data[KEY_SIZE_START:])
-	ValueSize := binary.LittleEndian.Uint64(data[VALUE_SIZE_START:])
-	Key := data[KEY_START : KEY_START+KeySize]
-	Value := data[KEY_START+KeySize:]
+	timestamp := binary.LittleEndian.Uint64(data[TIMESTAMP_START:])
+	tombstone := data[TOMBSTONE_START] == 1
+	keySize := binary.LittleEndian.Uint64(data[KEY_SIZE_START:])
+	valueSize := binary.LittleEndian.Uint64(data[VALUE_SIZE_START:])
+	key := data[KEY_START : KEY_START+keySize]
+	value := data[KEY_START+keySize : KEY_START+keySize+valueSize]
 
 	return &WALPayload{
-		Timestamp: Timestamp,
-		Tombstone: Tombstone,
-		KeySize:   KeySize,
-		ValueSize: ValueSize,
-		Key:       Key,
-		Value:     Value,
+		Timestamp: timestamp,
+		Tombstone: tombstone,
+		KeySize:   keySize,
+		ValueSize: valueSize,
+		Key:       key,
+		Value:     value,
 	}
 }

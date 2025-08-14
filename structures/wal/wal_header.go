@@ -37,7 +37,7 @@ const (
 */
 
 // WALHeader represents the header for WAL record fragments.
-// It contains metadata about the fragment including CRC, size, type, and log number.
+// Contains metadata including CRC32 checksum, size, fragment type, and log number.
 type WALHeader struct {
 	CRC       uint32 // 4 bytes (computed over the payload)
 	Size      uint16 // 2 byte (size of payload)
@@ -73,7 +73,7 @@ func (h *WALHeader) Serialize() []byte {
 // It reads the data in the format defined by the Serialize function.
 // Returns nil if the input data is too short (less than 11 bytes).
 func DeserializeWALHeader(data []byte) *WALHeader {
-	if len(data) < 11 {
+	if len(data) < HEADER_TOTAL_SIZE {
 		return nil
 	}
 	return &WALHeader{
