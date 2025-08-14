@@ -27,8 +27,7 @@ type WAL struct {
 }
 
 // NewWAL creates a new WAL instance with the specified directory path and starting log index.
-// TODO: consult with Milos about this, i think system should set the filePath and log number is known?
-// TODO: also, what about reading the last block if system closes?
+// TODO: consult with Milos about this, shouldn't system set the filePath and log number is known? What about reading the last block if system closes?
 // dirPath: the directory where log files will be stored.
 // logIndex: the starting log index for this WAL instance.
 func NewWAL(dirPath string, logIndex uint32) *WAL {

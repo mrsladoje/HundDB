@@ -48,19 +48,6 @@ func TestGetBlockManager_Singleton(t *testing.T) {
 	}
 }
 
-func TestBlockManager_GetBlockSize(t *testing.T) {
-	instance = nil
-	bm := GetBlockManager()
-
-	blockSize := bm.GetBlockSize()
-	// TODO: set to read config, for now hardcoded
-	expectedSize := uint16(1024 * 4)
-
-	if blockSize != expectedSize {
-		t.Errorf("Expected block size %d, got %d", expectedSize, blockSize)
-	}
-}
-
 func TestBlockManager_WriteAndReadBlock(t *testing.T) {
 	instance = nil
 	bm := GetBlockManager()

@@ -10,7 +10,6 @@ import (
 
 var instance *BlockManager
 
-// TODO: Fragmentation will be handled in wal.
 // TODO: Figure out interaction with SSTable
 // BlockManager manages disk I/O operations at block level
 // Implements singleton pattern
