@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"fmt"
 	"hash/crc32"
 	mdl "hunddb/model"
@@ -39,6 +40,8 @@ func NewWAL(dirPath string, logIndex uint32) *WAL {
 		dirPath:            dirPath,
 	}
 }
+
+// TODO: Implement recovery logic to read the last written block and continue from there. It should be called upon startup.
 
 // WriteRecord writes a WAL record to the log, handling both complete and fragmented records.
 func (wal *WAL) WriteRecord(record *mdl.Record) error {
@@ -175,8 +178,9 @@ func (wal *WAL) DeleteOldLogs(lowWatermark uint32) error {
 	if lowWatermark <= 0 {
 		return nil
 	}
-
-	for logNum := uint32(0); logNum < lowWatermark; logNum++ {
+	// TODO: Get first log file index, for now dummy value of 1
+	firstLogFileIndex := uint32(1)
+	for logNum := firstLogFileIndex; logNum < lowWatermark; logNum++ {
 		logFilePath := fmt.Sprintf("%s/wal_%d.log", wal.dirPath, logNum)
 		err := os.Remove(logFilePath)
 		if err != nil && !os.IsNotExist(err) {
@@ -187,59 +191,86 @@ func (wal *WAL) DeleteOldLogs(lowWatermark uint32) error {
 	return nil
 }
 
-// ReadRecords reads and reconstructs all records from the WAL logs.
+// ReconstructMemtable reads and reconstructs all records from the WAL logs.
 // It handles both complete records and fragmented records across multiple blocks.
-// TODO: range blocks should be channel based function from block manager
-// (its an iterator, just like how in python you have yield keyword)
-// that returns blocks from a range with params: (startLog, startBlock, endLog, endBlock)
-// WAL should be able read all logs or logs from a specific range
-func (wal *WAL) ReadRecords() ([]mdl.Record, error) {
-	blocks := make([][]byte, 0)
-	records := make([]mdl.Record, 0)
-
+// This function is designed to be called during database recovery/restart.
+//
+// TODO: When memtable is implemented, pass memtable reference as parameter:
+// TODO: Figure out log range specification (startLogIndex, endLogIndex), probably will need metadata file for wal
+func (wal *WAL) ReconstructMemtable() error {
+	blockManager := bm.GetBlockManager()
 	fragmentBuffer := make([]byte, 0)
-	for _, block := range blocks {
-		offset := 0
 
-		for offset < len(block) {
-			// Check if we hit padding (all zeros)
-			if block[offset] == 0 {
-				break // Rest of block is padding
+	// TODO: Get actual log range - for now read from log 1 to current log
+	startLogIndex := uint32(1)
+	endLogIndex := wal.lastLogIndex
+
+	for logIndex := startLogIndex; logIndex <= endLogIndex; logIndex++ {
+		for blockIndex := uint64(0); blockIndex < LOG_SIZE; blockIndex++ {
+			location := mdl.BlockLocation{
+				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, logIndex),
+				BlockIndex: blockIndex,
 			}
 
-			// Read header
-			header := DeserializeWALHeader(block[offset:])
-			offset += HEADER_TOTAL_SIZE
-
-			// Read record
-			record := block[offset : offset+int(header.Size)]
-			offset += int(header.Size)
-
-			// Verify CRC32 checksum
-			if header.CRC != CRC32(record) {
-				return nil, fmt.Errorf("corrupted record: CRC mismatch")
+			block, err := blockManager.ReadBlock(location)
+			if err != nil {
+				// If we can't read a block, it might not exist or be incomplete
+				continue
 			}
 
-			switch header.Type {
-			case FRAGMENT_FULL:
-				deserializedRecord := mdl.Deserialize(record)
-				fullRecord := mdl.NewRecord(string(deserializedRecord.Key), deserializedRecord.Value, deserializedRecord.Timestamp, deserializedRecord.Tombstone)
-				records = append(records, *fullRecord)
-
-			case FRAGMENT_FIRST, FRAGMENT_MIDDLE:
-				// Start new fragmented record or continue building it
-				fragmentBuffer = append(fragmentBuffer, record...)
-
-			case FRAGMENT_LAST:
-				// Complete fragmented record
-				fragmentBuffer = append(fragmentBuffer, record...)
-				deserializedRecord := mdl.Deserialize(fragmentBuffer)
-				completeRecord := mdl.NewRecord(string(deserializedRecord.Key), deserializedRecord.Value, deserializedRecord.Timestamp, deserializedRecord.Tombstone)
-				records = append(records, *completeRecord)
-
-				fragmentBuffer = fragmentBuffer[:0]
+			err = wal.processBlock(block, &fragmentBuffer)
+			if err != nil {
+				return fmt.Errorf("failed to process block %s:%d: %w", location.FilePath, location.BlockIndex, err)
 			}
 		}
 	}
-	return records, nil
+
+	return nil
+}
+
+// processBlock processes a single WAL block and reconstructs records from it
+func (wal *WAL) processBlock(block []byte, fragmentBuffer *[]byte) error {
+	offset := 0
+
+	for offset < len(block) {
+		// Check if the rest of the block is padding
+		remainingBytes := block[offset:]
+		paddingBytes := make([]byte, len(remainingBytes))
+		if bytes.Equal(remainingBytes, paddingBytes) {
+			break
+		}
+
+		header := DeserializeWALHeader(block[offset:])
+		offset += HEADER_TOTAL_SIZE
+		payload := block[offset : offset+int(header.Size)]
+		offset += int(header.Size)
+
+		if header.CRC != CRC32(payload) {
+			return fmt.Errorf("corrupted record: CRC mismatch")
+		}
+
+		switch header.Type {
+		case FRAGMENT_FULL:
+			record := mdl.Deserialize(payload)
+			// TODO: Insert into memtable when implemented:
+			_ = record // Suppress unused variable warning, remove when used
+
+		case FRAGMENT_FIRST, FRAGMENT_MIDDLE:
+			*fragmentBuffer = append(*fragmentBuffer, payload...)
+
+		case FRAGMENT_LAST:
+			*fragmentBuffer = append(*fragmentBuffer, payload...)
+			record := mdl.Deserialize(*fragmentBuffer)
+			// TODO: Insert into memtable when implemented:
+			_ = record // Suppress unused variable warning, remove when used
+
+			// Clear fragment buffer for next fragmented record
+			*fragmentBuffer = (*fragmentBuffer)[:0]
+
+		default:
+			return fmt.Errorf("unknown fragment type: %d", header.Type)
+		}
+	}
+
+	return nil
 }

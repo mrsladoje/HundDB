@@ -49,6 +49,7 @@ func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) ([]byte, error) {
 }
 
 // WriteBlock writes a block to disk and updates cache
+// TODO: Consult with TA should block manager write to disk only when block cache is full
 func (bm *BlockManager) WriteBlock(location mdl.BlockLocation, data []byte) error {
 	err := bm.writeBlockToDisk(location, data)
 	if err != nil {
