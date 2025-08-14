@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	mdl "hunddb/model"
-	"hunddb/structures/block_manager"
+	bm "hunddb/structures/block_manager"
 	"math"
 	"os"
 )
@@ -42,10 +42,9 @@ func NewWAL(dirPath string, logIndex uint32) *WAL {
 }
 
 // WriteRecord writes a WAL record to the log, handling both complete and fragmented records.
-// payload: the WAL payload to be written.
 func (wal *WAL) WriteRecord(record *mdl.Record) error {
-	serializedPayload := NewWALPayload(record).Serialize()
-	spaceNeeded := HEADER_TOTAL_SIZE + len(serializedPayload)
+	serializedRecord := record.Serialize()
+	spaceNeeded := HEADER_TOTAL_SIZE + len(serializedRecord)
 
 	// Checks if there is enough space left in the block.
 	if int(BLOCK_SIZE)-int(wal.offsetInBlock) < spaceNeeded {
@@ -55,17 +54,17 @@ func (wal *WAL) WriteRecord(record *mdl.Record) error {
 		}
 		// If the record is larger than a whole block, fragment it
 		if spaceNeeded > int(BLOCK_SIZE) {
-			return wal.writeFragmentedRecord(serializedPayload)
+			return wal.writeFragmentedRecord(serializedRecord)
 		}
 	}
-	return wal.writeToBlock(serializedPayload, FRAGMENT_FULL)
+	return wal.writeToBlock(serializedRecord, FRAGMENT_FULL)
 }
 
 // writeFragmentedRecord handles records larger than a single block by splitting them into fragments.
 // All fragments for a record are kept within the same log file.
-func (wal *WAL) writeFragmentedRecord(serializedPayload []byte) error {
-	payloadSize := int(BLOCK_SIZE) - HEADER_TOTAL_SIZE
-	numberOfFragments := int(math.Ceil(float64(len(serializedPayload)) / float64(payloadSize)))
+func (wal *WAL) writeFragmentedRecord(serializedRecord []byte) error {
+	recordSize := int(BLOCK_SIZE) - HEADER_TOTAL_SIZE
+	numberOfFragments := int(math.Ceil(float64(len(serializedRecord)) / float64(recordSize)))
 
 	// Ensure all fragments fit in the current log
 	blocksRemaining := int(LOG_SIZE) - int(wal.blocksInCurrentLog)
@@ -84,18 +83,18 @@ func (wal *WAL) writeFragmentedRecord(serializedPayload []byte) error {
 	// Writes the fragments. For example if a record is 1.5 blocks large, the first fragment + it's header
 	// will be the size of a single block, the second fragment + it's header will be half the size of a block.
 	for i := range numberOfFragments {
-		start := i * payloadSize
-		end := min(start+payloadSize, len(serializedPayload))
+		start := i * recordSize
+		end := min(start+recordSize, len(serializedRecord))
 
-		fragment := serializedPayload[start:end]
-		var payloadType byte = FRAGMENT_MIDDLE
+		fragment := serializedRecord[start:end]
+		var fragmentType byte = FRAGMENT_MIDDLE
 		switch i {
 		case 0:
-			payloadType = FRAGMENT_FIRST
+			fragmentType = FRAGMENT_FIRST
 		case numberOfFragments - 1:
-			payloadType = FRAGMENT_LAST
+			fragmentType = FRAGMENT_LAST
 		}
-		err := wal.writeToBlock(fragment, payloadType)
+		err := wal.writeToBlock(fragment, fragmentType)
 		if err != nil {
 			return err
 		}
@@ -104,24 +103,24 @@ func (wal *WAL) writeFragmentedRecord(serializedPayload []byte) error {
 }
 
 // writeToBlock writes a record or record fragment to the current block with proper header.
-// serializedPayload: the fragment payload to write.
-// payloadType: the fragment type (FULL, FIRST, MIDDLE, LAST).
-func (wal *WAL) writeToBlock(serializedPayload []byte, payloadType byte) error {
+// serializedRecord: the record or record fragment to write.
+// fragmentType: the fragment type (FULL, FIRST, MIDDLE, LAST).
+func (wal *WAL) writeToBlock(serializedRecord []byte, fragmentType byte) error {
 	headerBytes := NewWALHeader(
-		CRC32(serializedPayload),
-		uint16(len(serializedPayload)),
-		payloadType,
+		CRC32(serializedRecord),
+		uint16(len(serializedRecord)),
+		fragmentType,
 		wal.lastLogIndex,
 	).Serialize()
 
-	totalSize := HEADER_TOTAL_SIZE + len(serializedPayload)
+	totalSize := HEADER_TOTAL_SIZE + len(serializedRecord)
 
 	if int(wal.offsetInBlock)+totalSize > int(BLOCK_SIZE) {
 		return fmt.Errorf("not enough space in block to write record")
 	}
 
 	copy(wal.lastBlock[wal.offsetInBlock:], headerBytes)
-	copy(wal.lastBlock[wal.offsetInBlock+HEADER_TOTAL_SIZE:], serializedPayload)
+	copy(wal.lastBlock[wal.offsetInBlock+HEADER_TOTAL_SIZE:], serializedRecord)
 
 	wal.offsetInBlock += uint16(totalSize)
 
@@ -136,7 +135,7 @@ func (wal *WAL) writeToBlock(serializedPayload []byte, payloadType byte) error {
 // TODO: Agree on the correct path to logs
 // flushCurrentAndMakeNewBlock writes the current block to storage and prepares for the next block.
 func (wal *WAL) flushCurrentAndMakeNewBlock() error {
-	err := block_manager.GetBlockManager().WriteBlock(mdl.BlockLocation{
+	err := bm.GetBlockManager().WriteBlock(mdl.BlockLocation{
 		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, wal.lastLogIndex),
 		BlockIndex: uint64(wal.blocksInCurrentLog),
 	}, wal.lastBlock)
@@ -195,53 +194,53 @@ func (wal *WAL) DeleteOldLogs(lowWatermark uint32) error {
 // (its an iterator, just like how in python you have yield keyword)
 // that returns blocks from a range with params: (startLog, startBlock, endLog, endBlock)
 // WAL should be able read all logs or logs from a specific range
-func (wal *WAL) ReadRecords() ([]mdl.Record, error) {
-	blocks := make([][]byte, 0)
-	records := make([]mdl.Record, 0)
+// func (wal *WAL) ReadRecords() ([]mdl.Record, error) {
+// 	blocks := make([][]byte, 0)
+// 	records := make([]mdl.Record, 0)
 
-	fragmentBuffer := make([]byte, 0)
-	for _, block := range blocks {
-		offset := 0
+// 	fragmentBuffer := make([]byte, 0)
+// 	for _, block := range blocks {
+// 		offset := 0
 
-		for offset < len(block) {
-			// Check if we hit padding (all zeros)
-			if block[offset] == 0 {
-				break // Rest of block is padding
-			}
+// 		for offset < len(block) {
+// 			// Check if we hit padding (all zeros)
+// 			if block[offset] == 0 {
+// 				break // Rest of block is padding
+// 			}
 
-			// Read header
-			header := DeserializeWALHeader(block[offset:])
-			offset += HEADER_TOTAL_SIZE
+// 			// Read header
+// 			header := DeserializeWALHeader(block[offset:])
+// 			offset += HEADER_TOTAL_SIZE
 
-			// Read payload
-			payload := block[offset : offset+int(header.Size)]
-			offset += int(header.Size)
+// 			// Read record
+// 			record := block[offset : offset+int(header.Size)]
+// 			offset += int(header.Size)
 
-			// Verify CRC32 checksum
-			if header.CRC != CRC32(payload) {
-				return nil, fmt.Errorf("corrupted record: CRC mismatch")
-			}
+// 			// Verify CRC32 checksum
+// 			if header.CRC != CRC32(record) {
+// 				return nil, fmt.Errorf("corrupted record: CRC mismatch")
+// 			}
 
-			switch header.Type {
-			case FRAGMENT_FULL:
-				payload := Deserialize(payload)
-				record := mdl.NewRecord(string(payload.Key), payload.Value, payload.Timestamp, payload.Tombstone)
-				records = append(records, *record)
+// 			switch header.Type {
+// 			case FRAGMENT_FULL:
+// 				record := mdl.Deserialize(record)
+// 				record := mdl.NewRecord(string(record.Key), record.Value, record.Timestamp, record.Tombstone)
+// 				records = append(records, *record)
 
-			case FRAGMENT_FIRST, FRAGMENT_MIDDLE:
-				// Start new fragmented record or continue building it
-				fragmentBuffer = append(fragmentBuffer, payload...)
+// 			case FRAGMENT_FIRST, FRAGMENT_MIDDLE:
+// 				// Start new fragmented record or continue building it
+// 				fragmentBuffer = append(fragmentBuffer, record...)
 
-			case FRAGMENT_LAST:
-				// Complete fragmented record
-				fragmentBuffer = append(fragmentBuffer, payload...)
-				payload := Deserialize(fragmentBuffer)
-				record := mdl.NewRecord(string(payload.Key), payload.Value, payload.Timestamp, payload.Tombstone)
-				records = append(records, *record)
+// 			case FRAGMENT_LAST:
+// 				// Complete fragmented record
+// 				fragmentBuffer = append(fragmentBuffer, record...)
+// 				record := Deserialize(fragmentBuffer)
+// 				record := mdl.NewRecord(string(record.Key), record.Value, record.Timestamp, record.Tombstone)
+// 				records = append(records, *record)
 
-				fragmentBuffer = fragmentBuffer[:0]
-			}
-		}
-	}
-	return records, nil
-}
+// 				fragmentBuffer = fragmentBuffer[:0]
+// 			}
+// 		}
+// 	}
+// 	return records, nil
+// }
