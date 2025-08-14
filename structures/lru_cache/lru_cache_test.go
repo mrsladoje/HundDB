@@ -38,7 +38,7 @@ func TestNewLRUCache_RecordCache(t *testing.T) {
 
 // TestNewLRUCache_BlockCache tests cache creation for block based caching
 func TestNewLRUCache_BlockCache(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](50)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](50)
 
 	if cache == nil {
 		t.Fatal("Expected non nil LRUCache")
@@ -99,22 +99,22 @@ func TestLRUCache_RecordCaching(t *testing.T) {
 
 // TestLRUCache_BlockCaching tests typical block caching scenarios
 func TestLRUCache_BlockCaching(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](2)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](2)
 
 	loc1 := mdl.BlockLocation{FilePath: "/data/file1.db", BlockIndex: 0}
 	loc2 := mdl.BlockLocation{FilePath: "/data/file1.db", BlockIndex: 1}
 	loc3 := mdl.BlockLocation{FilePath: "/data/file2.db", BlockIndex: 0}
 
-	block1 := &mdl.Block{Location: loc1, Data: []byte("block1 data")}
-	block2 := &mdl.Block{Location: loc2, Data: []byte("block2 data")}
-	block3 := &mdl.Block{Location: loc3, Data: []byte("block3 data")}
+	block1Data := []byte("block1 data")
+	block2Data := []byte("block2 data")
+	block3Data := []byte("block3 data")
 
-	err := cache.Put(loc1, block1)
+	err := cache.Put(loc1, block1Data)
 	if err != nil {
 		t.Fatalf("Failed to put block1: %v", err)
 	}
 
-	err = cache.Put(loc2, block2)
+	err = cache.Put(loc2, block2Data)
 	if err != nil {
 		t.Fatalf("Failed to put block2: %v", err)
 	}
@@ -124,12 +124,12 @@ func TestLRUCache_BlockCaching(t *testing.T) {
 		t.Fatalf("Failed to get block1: %v", err)
 	}
 
-	if string(retrievedBlock1.Data) != "block1 data" {
-		t.Errorf("Expected 'block1 data', got '%s'", string(retrievedBlock1.Data))
+	if string(retrievedBlock1) != "block1 data" {
+		t.Errorf("Expected 'block1 data', got '%s'", string(retrievedBlock1))
 	}
 
 	// Add third block that should evict block2 since block1 was recently accessed
-	err = cache.Put(loc3, block3)
+	err = cache.Put(loc3, block3Data)
 	if err != nil {
 		t.Fatalf("Failed to put block3: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestLRUCache_RecordEviction(t *testing.T) {
 
 // TestLRUCache_BlockEviction tests block cache eviction behavior
 func TestLRUCache_BlockEviction(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](3)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](3)
 
 	locations := []mdl.BlockLocation{
 		{FilePath: "/data/users.db", BlockIndex: 0},
@@ -196,11 +196,11 @@ func TestLRUCache_BlockEviction(t *testing.T) {
 		{FilePath: "/data/products.db", BlockIndex: 0},
 	}
 
-	blocks := []*mdl.Block{
-		{Location: locations[0], Data: []byte("user block 0")},
-		{Location: locations[1], Data: []byte("user block 1")},
-		{Location: locations[2], Data: []byte("orders block 0")},
-		{Location: locations[3], Data: []byte("products block 0")},
+	blocks := [][]byte{
+		[]byte("user block 0"),
+		[]byte("user block 1"),
+		[]byte("orders block 0"),
+		[]byte("products block 0"),
 	}
 
 	for i := range 3 {
@@ -231,8 +231,8 @@ func TestLRUCache_BlockEviction(t *testing.T) {
 		if err != nil {
 			t.Errorf("Expected block %d to remain in cache", idx)
 		} else {
-			expectedData := blocks[idx].Data
-			if string(retrievedBlock.Data) != string(expectedData) {
+			expectedData := blocks[idx]
+			if string(retrievedBlock) != string(expectedData) {
 				t.Errorf("Block %d data mismatch", idx)
 			}
 		}
@@ -282,16 +282,16 @@ func TestLRUCache_RecordRemoval(t *testing.T) {
 
 // TestLRUCache_BlockRemoval tests removing blocks from cache
 func TestLRUCache_BlockRemoval(t *testing.T) {
-	cache := NewLRUCache[mdl.BlockLocation, *mdl.Block](5)
+	cache := NewLRUCache[mdl.BlockLocation, []byte](5)
 
 	loc1 := mdl.BlockLocation{FilePath: "/data/test.db", BlockIndex: 0}
 	loc2 := mdl.BlockLocation{FilePath: "/data/test.db", BlockIndex: 1}
 
-	block1 := &mdl.Block{Location: loc1, Data: []byte("test block 0")}
-	block2 := &mdl.Block{Location: loc2, Data: []byte("test block 1")}
+	block1Data := []byte("test block 0")
+	block2Data := []byte("test block 1")
 
-	cache.Put(loc1, block1)
-	cache.Put(loc2, block2)
+	cache.Put(loc1, block1Data)
+	cache.Put(loc2, block2Data)
 
 	err := cache.Remove(loc1)
 	if err != nil {
@@ -307,7 +307,7 @@ func TestLRUCache_BlockRemoval(t *testing.T) {
 	if err != nil {
 		t.Error("Expected other block to remain")
 	}
-	if string(retrievedBlock.Data) != "test block 1" {
+	if string(retrievedBlock) != "test block 1" {
 		t.Error("Remaining block data corrupted")
 	}
 }

@@ -93,19 +93,11 @@ func TestBlockManager_WriteAndReadBlock(t *testing.T) {
 		t.Fatalf("Failed to read block: %v", err)
 	}
 
-	if block == nil {
-		t.Fatal("Expected non-nil block")
+	if len(block) == 0 {
+		t.Fatal("Expected non-empty block data")
 	}
 
-	if block.Location.FilePath != location.FilePath {
-		t.Errorf("Expected file path %s, got %s", location.FilePath, block.Location.FilePath)
-	}
-
-	if block.Location.BlockIndex != location.BlockIndex {
-		t.Errorf("Expected block index %d, got %d", location.BlockIndex, block.Location.BlockIndex)
-	}
-
-	if !bytes.Equal(block.Data, testData) {
+	if !bytes.Equal(block, testData) {
 		t.Errorf("Block data mismatch")
 	}
 }
@@ -165,7 +157,7 @@ func TestBlockManager_MultipleBlocksInFile(t *testing.T) {
 			t.Fatalf("Failed to read block %d: %v", i, err)
 		}
 
-		if !bytes.Equal(block.Data, testData[i]) {
+		if !bytes.Equal(block, testData[i]) {
 			t.Errorf("Block %d data mismatch", i)
 		}
 	}
@@ -203,11 +195,11 @@ func TestBlockManager_CacheIntegration(t *testing.T) {
 		t.Fatalf("Failed to read block (second time): %v", err)
 	}
 
-	if !bytes.Equal(block1.Data, block2.Data) {
+	if !bytes.Equal(block1, block2) {
 		t.Error("Cached and fresh data should be identical")
 	}
 
-	if !bytes.Equal(block1.Data, testData) {
+	if !bytes.Equal(block1, testData) {
 		t.Error("Block data should match written data")
 	}
 }
@@ -247,7 +239,7 @@ func TestBlockManager_WriteToExistingFile(t *testing.T) {
 		t.Fatalf("Failed to read written block: %v", err)
 	}
 
-	if !bytes.Equal(block.Data, newData) {
+	if !bytes.Equal(block, newData) {
 		t.Error("Written block data mismatch")
 	}
 
@@ -262,7 +254,7 @@ func TestBlockManager_WriteToExistingFile(t *testing.T) {
 	}
 
 	expectedBlock0Data := existingData[:blockSize]
-	if !bytes.Equal(block0.Data, expectedBlock0Data) {
+	if !bytes.Equal(block0, expectedBlock0Data) {
 		t.Error("Original block 0 data should be preserved")
 	}
 }

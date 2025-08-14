@@ -16,7 +16,7 @@ var instance *BlockManager
 // Implements singleton pattern
 type BlockManager struct {
 	blockSize  uint16 // in bytes
-	blockCache *lru_cache.LRUCache[mdl.BlockLocation, *mdl.Block]
+	blockCache *lru_cache.LRUCache[mdl.BlockLocation, []byte]
 }
 
 // GetBlockManager returns the singleton instance
@@ -27,14 +27,14 @@ func GetBlockManager() *BlockManager {
 		// For now dummy values are present
 		instance = &BlockManager{
 			blockSize:  1024 * uint16(4),
-			blockCache: lru_cache.NewLRUCache[mdl.BlockLocation, *mdl.Block](100),
+			blockCache: lru_cache.NewLRUCache[mdl.BlockLocation, []byte](100),
 		}
 	}
 	return instance
 }
 
 // ReadBlock reads a block from disk, using cache if available
-func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) (*mdl.Block, error) {
+func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) ([]byte, error) {
 	cachedBlock, err := bm.blockCache.Get(location)
 	if err == nil {
 		return cachedBlock, nil
@@ -55,10 +55,7 @@ func (bm *BlockManager) WriteBlock(location mdl.BlockLocation, data []byte) erro
 	if err != nil {
 		return errors.New("block not written successfully")
 	}
-	bm.blockCache.Put(location, &mdl.Block{
-		Location: location,
-		Data:     data,
-	})
+	bm.blockCache.Put(location, data)
 
 	return nil
 }
@@ -69,7 +66,7 @@ func (bm *BlockManager) GetBlockSize() uint16 {
 }
 
 // Private helper method for ReadBlock
-func (bm *BlockManager) readBlockFromDisk(location mdl.BlockLocation) (*mdl.Block, error) {
+func (bm *BlockManager) readBlockFromDisk(location mdl.BlockLocation) ([]byte, error) {
 	file, err := os.Open(location.FilePath)
 	if err != nil {
 		return nil, err
@@ -87,10 +84,7 @@ func (bm *BlockManager) readBlockFromDisk(location mdl.BlockLocation) (*mdl.Bloc
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	return &mdl.Block{
-		Location: location,
-		Data:     data,
-	}, nil
+	return data, nil
 }
 
 // Private helper method for WriteBlock
