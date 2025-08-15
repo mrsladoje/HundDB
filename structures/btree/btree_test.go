@@ -2,6 +2,7 @@ package btree
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"hunddb/model"
 )
 
-// Helper function to create a test record
+// Helper function to create a test record (active)
 func createTestRecord(key, value string) *model.Record {
 	return &model.Record{
 		Key:       key,
@@ -39,7 +40,8 @@ func TestNewBTree(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			btree := NewBTree(tc.order)
+			// Use effectively unbounded capacity for constructor tests
+			btree := NewBTree(tc.order, math.MaxInt)
 			if btree.order != tc.expectedOrder {
 				t.Errorf("Expected order %d, got %d", tc.expectedOrder, btree.order)
 			}
@@ -50,14 +52,14 @@ func TestNewBTree(t *testing.T) {
 	}
 }
 
-func TestBTree_PutAndGet_SingleRecord(t *testing.T) {
-	btree := NewBTree(3)
+func TestBTree_AddAndGet_SingleRecord(t *testing.T) {
+	btree := NewBTree(3, math.MaxInt)
 	record := createTestRecord("key1", "value1")
 
-	// Test put
-	err := btree.Put(record)
+	// Test add
+	err := btree.Add(record)
 	if err != nil {
-		t.Fatalf("Put failed: %v", err)
+		t.Fatalf("Add failed: %v", err)
 	}
 
 	// Test get
@@ -78,8 +80,8 @@ func TestBTree_PutAndGet_SingleRecord(t *testing.T) {
 	}
 }
 
-func TestBTree_PutInvalidRecord(t *testing.T) {
-	btree := NewBTree(3)
+func TestBTree_AddInvalidRecord(t *testing.T) {
+	btree := NewBTree(3, math.MaxInt)
 
 	tests := []struct {
 		name   string
@@ -91,7 +93,7 @@ func TestBTree_PutInvalidRecord(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := btree.Put(tc.record)
+			err := btree.Add(tc.record)
 			if err == nil {
 				t.Error("Expected error for invalid record")
 			}
@@ -100,7 +102,7 @@ func TestBTree_PutInvalidRecord(t *testing.T) {
 }
 
 func TestBTree_MultipleInsertions(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Insert records that will trigger node splits
 	records := []struct {
@@ -120,7 +122,7 @@ func TestBTree_MultipleInsertions(t *testing.T) {
 	// Insert all records
 	for _, r := range records {
 		record := createTestRecord(r.key, r.value)
-		err := btree.Put(record)
+		err := btree.Add(record)
 		if err != nil {
 			t.Fatalf("Failed to insert %s: %v", r.key, err)
 		}
@@ -150,15 +152,15 @@ func TestBTree_MultipleInsertions(t *testing.T) {
 }
 
 func TestBTree_UpdateExistingRecord(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Insert initial record
 	record1 := createTestRecord("key1", "value1")
-	btree.Put(record1)
+	_ = btree.Add(record1)
 
 	// Update with new value
 	record2 := createTestRecord("key1", "new value1")
-	btree.Put(record2)
+	_ = btree.Add(record2)
 
 	// Verify updated value
 	retrieved := btree.Get("key1")
@@ -177,71 +179,81 @@ func TestBTree_UpdateExistingRecord(t *testing.T) {
 }
 
 func TestBTree_Delete(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Insert records
-	records := []string{"key1", "key2", "key3", "key4", "key5"}
-	for _, key := range records {
+	keys := []string{"key1", "key2", "key3", "key4", "key5"}
+	for _, key := range keys {
 		record := createTestRecord(key, "value_"+key)
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 
-	// Delete a record
-	deleted := btree.Delete("key3")
+	// Delete existing key
+	deleted := btree.Delete(createTombstonedRecord("key3", ""))
 	if !deleted {
 		t.Error("Delete should return true for existing key")
 	}
 
-	// Verify record is not retrievable
-	retrieved := btree.Get("key3")
-	if retrieved != nil {
+	// key3 should not be retrievable
+	if got := btree.Get("key3"); got != nil {
 		t.Error("Deleted record should not be retrievable")
 	}
 
-	// Verify other records are still accessible
+	// Others still accessible
 	for _, key := range []string{"key1", "key2", "key4", "key5"} {
-		retrieved := btree.Get(key)
-		if retrieved == nil {
+		if got := btree.Get(key); got == nil {
 			t.Errorf("Record %s should still be accessible", key)
 		}
 	}
 
-	// Test deleting non-existent key
-	deleted = btree.Delete("nonexistent")
+	// Delete nonexistent key → blind tombstone inserted (returns false)
+	deleted = btree.Delete(createTombstonedRecord("nonexistent", ""))
 	if deleted {
-		t.Error("Delete should return false for non-existent key")
+		t.Error("Delete of nonexistent key should return false (blind tombstone inserted)")
 	}
 
-	// Check statistics
+	// Stats after both deletes:
+	// - TombstonedRecords: 2 (key3 + nonexistent)
+	// - ActiveRecords: 4 (key1, key2, key4, key5)
+	// - TotalRecords: 6 (5 originals + 1 new tombstone key)
 	stats := btree.GetStats()
-	if stats.TombstonedRecords != 1 {
-		t.Errorf("Expected 1 tombstoned record, got %d", stats.TombstonedRecords)
+	if stats.TombstonedRecords != 2 {
+		t.Errorf("Expected 2 tombstoned records, got %d", stats.TombstonedRecords)
 	}
 	if stats.ActiveRecords != 4 {
 		t.Errorf("Expected 4 active records, got %d", stats.ActiveRecords)
 	}
+	if stats.TotalRecords != 6 {
+		t.Errorf("Expected 6 total records, got %d", stats.TotalRecords)
+	}
+
+	// Nonexistent is now present only as tombstone → Get returns nil
+	if got := btree.Get("nonexistent"); got != nil {
+		t.Error("Nonexistent key should be tombstoned and not retrievable")
+	}
 }
 
+
 func TestBTree_Compaction(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Insert many records
 	numRecords := 10
 	for i := 0; i < numRecords; i++ {
 		key := fmt.Sprintf("key%d", i)
 		record := createTestRecord(key, "value"+strconv.Itoa(i))
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 
 	// Delete enough records to trigger compaction (> 30%)
 	recordsToDelete := int(float64(numRecords) * 0.4) // 40% to ensure threshold is exceeded
 	for i := 0; i < recordsToDelete; i++ {
 		key := fmt.Sprintf("key%d", i)
-		btree.Delete(key)
+		btree.Delete(createTombstonedRecord(key, ""))
 	}
 
 	// Force compaction check by adding another record
-	btree.Put(createTestRecord("trigger", "compaction"))
+	_ = btree.Add(createTestRecord("trigger", "compaction"))
 
 	// Verify deleted records are no longer retrievable
 	for i := 0; i < recordsToDelete; i++ {
@@ -269,15 +281,14 @@ func TestBTree_Compaction(t *testing.T) {
 }
 
 func TestBTree_LargeDataset(t *testing.T) {
-	btree := NewBTree(5)
+	btree := NewBTree(5, math.MaxInt)
 
 	// Insert a large number of records to test tree balancing
 	numRecords := 1000
 	for i := 0; i < numRecords; i++ {
 		key := fmt.Sprintf("key%05d", i) // Zero-padded for consistent ordering
 		record := createTestRecord(key, fmt.Sprintf("value%d", i))
-		err := btree.Put(record)
-		if err != nil {
+		if err := btree.Add(record); err != nil {
 			t.Fatalf("Failed to insert record %d: %v", i, err)
 		}
 	}
@@ -305,12 +316,11 @@ func TestBTree_LargeDataset(t *testing.T) {
 }
 
 func TestBTree_TombstonedRecordInsertion(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Insert a tombstoned record directly
 	tombstonedRecord := createTombstonedRecord("key1", "value1")
-	err := btree.Put(tombstonedRecord)
-	if err != nil {
+	if err := btree.Add(tombstonedRecord); err != nil {
 		t.Fatalf("Failed to insert tombstoned record: %v", err)
 	}
 
@@ -331,7 +341,7 @@ func TestBTree_TombstonedRecordInsertion(t *testing.T) {
 }
 
 func TestBTree_Stats(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Initially empty
 	stats := btree.GetStats()
@@ -342,7 +352,7 @@ func TestBTree_Stats(t *testing.T) {
 	// Insert records
 	for i := 0; i < 5; i++ {
 		record := createTestRecord(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 
 	stats = btree.GetStats()
@@ -352,8 +362,8 @@ func TestBTree_Stats(t *testing.T) {
 	}
 
 	// Delete some records
-	btree.Delete("key0")
-	btree.Delete("key1")
+	btree.Delete(createTombstonedRecord("key0", ""))
+	btree.Delete(createTombstonedRecord("key1", ""))
 
 	stats = btree.GetStats()
 	if stats.TotalRecords != 5 || stats.ActiveRecords != 3 || stats.TombstonedRecords != 2 {
@@ -362,37 +372,31 @@ func TestBTree_Stats(t *testing.T) {
 	}
 }
 
-func TestBTree_SizeAndActiveSize(t *testing.T) {
-	btree := NewBTree(3)
+func TestBTree_Size(t *testing.T) {
+	btree := NewBTree(3, math.MaxInt)
 
 	// Insert records
 	for i := 0; i < 10; i++ {
 		record := createTestRecord(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i))
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 
 	if btree.Size() != 10 {
 		t.Errorf("Expected size 10, got %d", btree.Size())
 	}
-	if btree.ActiveSize() != 10 {
-		t.Errorf("Expected active size 10, got %d", btree.ActiveSize())
-	}
 
 	// Delete some records
 	for i := 0; i < 3; i++ {
-		btree.Delete(fmt.Sprintf("key%d", i))
+		btree.Delete(createTombstonedRecord(fmt.Sprintf("key%d", i), ""))
 	}
 
-	if btree.Size() != 10 {
-		t.Errorf("Expected size 10 after deletion, got %d", btree.Size())
-	}
-	if btree.ActiveSize() != 7 {
-		t.Errorf("Expected active size 7 after deletion, got %d", btree.ActiveSize())
+	if btree.Size() != 7 {
+		t.Errorf("Expected size 7 after deletion, got %d", btree.Size())
 	}
 }
 
 func TestBTree_Height(t *testing.T) {
-	btree := NewBTree(3)
+	btree := NewBTree(3, math.MaxInt)
 
 	// Empty tree
 	if btree.Height() != 0 {
@@ -400,14 +404,14 @@ func TestBTree_Height(t *testing.T) {
 	}
 
 	// Single record
-	btree.Put(createTestRecord("key1", "value1"))
+	_ = btree.Add(createTestRecord("key1", "value1"))
 	if btree.Height() != 1 {
 		t.Errorf("Expected height 1 for single record, got %d", btree.Height())
 	}
 
 	// Add more records to increase height
 	for i := 2; i <= 10; i++ {
-		btree.Put(createTestRecord(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i)))
+		_ = btree.Add(createTestRecord(fmt.Sprintf("key%d", i), fmt.Sprintf("value%d", i)))
 	}
 
 	height := btree.Height()
@@ -417,49 +421,49 @@ func TestBTree_Height(t *testing.T) {
 }
 
 // Benchmark tests
-func BenchmarkBTree_Put(b *testing.B) {
-	btree := NewBTree(5)
+func BenchmarkBTree_Add(b *testing.B) {
+	btree := NewBTree(5, math.MaxInt)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%d", i)
 		record := createTestRecord(key, "value")
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 }
 
 func BenchmarkBTree_Get(b *testing.B) {
-	btree := NewBTree(5)
+	btree := NewBTree(5, math.MaxInt)
 
 	// Prepare data
 	numRecords := 10000
 	for i := 0; i < numRecords; i++ {
 		key := fmt.Sprintf("key%05d", i)
 		record := createTestRecord(key, "value")
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%05d", i%numRecords)
-		btree.Get(key)
+		_ = btree.Get(key)
 	}
 }
 
 func BenchmarkBTree_Delete(b *testing.B) {
 	numRecords := b.N * 2 // Prepare more records than we'll delete
-	btree := NewBTree(5)
+	btree := NewBTree(5, math.MaxInt)
 
 	// Prepare data
 	for i := 0; i < numRecords; i++ {
 		key := fmt.Sprintf("key%05d", i)
 		record := createTestRecord(key, "value")
-		btree.Put(record)
+		_ = btree.Add(record)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		key := fmt.Sprintf("key%05d", i)
-		btree.Delete(key)
+		_ = btree.Delete(createTombstonedRecord(key, ""))
 	}
 }
