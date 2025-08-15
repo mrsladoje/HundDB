@@ -5,11 +5,11 @@ import (
 )
 
 // Record represents a key-value pair with metadata for the storage engine.
-// It includes tombstone marking for logical deletion and timestamp for versioning.
+// It includes tombstone marking for deletion and timestamp for versioning.
 type Record struct {
 	Key       string // Key is the unique identifier for the record
 	Value     []byte // Value contains the actual data associated with the key
-	Tombstone bool   // Tombstone indicates whether this record has been logically deleted.
+	Tombstone bool   // Tombstone marks a record as deleted.
 	Timestamp uint64 // Timestamp represents when this record was created or last modified.
 }
 
@@ -27,30 +27,11 @@ func (r *Record) IsDeleted() bool {
 	return r.Tombstone
 }
 
-// MarkDeleted sets the tombstone flag to true, marking the record as deleted.
+// MarkDeleted sets the tombstone flag to true, and removes the value.
 func (r *Record) MarkDeleted() {
 	r.Tombstone = true
-	r.Value = []byte{0}
+	r.Value = nil
 }
-
-// Size returns the approximate size of the record in bytes.
-func (r *Record) Size() int {
-	return len(r.Key) + len(r.Value) + 1 + 8 // key + value + tombstone + timestamp
-}
-
-// Consts for serialization and deserialization
-const (
-	TIMESTAMP_SIZE  = 8
-	TOMBSTONE_SIZE  = 1
-	KEY_SIZE_SIZE   = 8
-	VALUE_SIZE_SIZE = 8
-
-	TIMESTAMP_START  = 0
-	TOMBSTONE_START  = TIMESTAMP_START + TIMESTAMP_SIZE
-	KEY_SIZE_START   = TOMBSTONE_START + TOMBSTONE_SIZE
-	VALUE_SIZE_START = KEY_SIZE_START + KEY_SIZE_SIZE
-	KEY_START        = VALUE_SIZE_START + VALUE_SIZE_SIZE
-)
 
 /*
    +-------------------+---------------+---------------+-----------------+-...-+--...--+
@@ -65,6 +46,25 @@ const (
 
    // TODO: CRC is handled at the fragment level in WALHeader for now, in future SSTable will also need fragmentation
 */
+
+// Field size consts - used for serialization and deserialization
+const (
+	TIMESTAMP_SIZE  = 8
+	TOMBSTONE_SIZE  = 1
+	KEY_SIZE_SIZE   = 8
+	VALUE_SIZE_SIZE = 8
+
+	TIMESTAMP_START  = 0
+	TOMBSTONE_START  = TIMESTAMP_START + TIMESTAMP_SIZE
+	KEY_SIZE_START   = TOMBSTONE_START + TOMBSTONE_SIZE
+	VALUE_SIZE_START = KEY_SIZE_START + KEY_SIZE_SIZE
+	KEY_START        = VALUE_SIZE_START + VALUE_SIZE_SIZE
+)
+
+// Size returns the size of the record in bytes.
+func (r *Record) Size() int {
+	return TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + len(r.Key) + len(r.Value)
+}
 
 // Serialize serializes a Record into a byte array. The byte array contains the following fields:
 // - Timestamp: 8 bytes for the timestamp
@@ -83,11 +83,11 @@ func (rec *Record) Serialize() []byte {
 	} else {
 		data[TOMBSTONE_START] = 0
 	}
-	key_size := uint64(len(rec.Key))
-	binary.LittleEndian.PutUint64(data[KEY_SIZE_START:], key_size)
+	keySize := uint64(len(rec.Key))
+	binary.LittleEndian.PutUint64(data[KEY_SIZE_START:], keySize)
 	binary.LittleEndian.PutUint64(data[VALUE_SIZE_START:], uint64(len(rec.Value)))
 	copy(data[KEY_START:], rec.Key)
-	copy(data[KEY_START+key_size:], rec.Value)
+	copy(data[KEY_START+keySize:], rec.Value)
 
 	return data
 }
