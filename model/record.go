@@ -5,11 +5,11 @@ import (
 )
 
 // Record represents a key-value pair with metadata for the storage engine.
-// It includes tombstone marking for logical deletion and timestamp for versioning.
+// It includes tombstone marking for deletion and timestamp for versioning.
 type Record struct {
 	Key       string // Key is the unique identifier for the record
 	Value     []byte // Value contains the actual data associated with the key
-	Tombstone bool   // Tombstone indicates whether this record has been logically deleted.
+	Tombstone bool   // Tombstone marks a record as deleted.
 	Timestamp uint64 // Timestamp represents when this record was created or last modified.
 }
 
@@ -27,7 +27,7 @@ func (r *Record) IsDeleted() bool {
 	return r.Tombstone
 }
 
-// MarkDeleted sets the tombstone flag to true, marking the record as deleted.
+// MarkDeleted sets the tombstone flag to true, and removes the value.
 func (r *Record) MarkDeleted() {
 	r.Tombstone = true
 	r.Value = []byte{0}
