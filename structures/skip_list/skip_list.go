@@ -1,202 +1,193 @@
 package skip_list
 
 import (
-	"bytes"
-	"encoding/binary"
+	"errors"
+	"hunddb/model"
 	"math/rand"
+	"time"
 )
 
+// Node holds the latest model.Record for a key.
+// We do NOT physically remove nodes; Delete() sets tombstone (logical delete).
 type Node struct {
 	key       string
-	value     string
-	nextNodes []*Node // i-th Node is at the i-th level
+	rec       *model.Record
+	nextNodes []*Node // i-th pointer is for level i
 }
 
-// NewNode creates a new node for the Skip List.
-// key: the key of the node.
-// value: the value of the node.
-// height: the number of levels the node spans.
-func NewNode(key string, value string, height uint64) *Node {
+// newNode creates a node with given record and height.
+func newNode(rec *model.Record, height uint64) *Node {
 	return &Node{
-		key:       key,
-		value:     value,
+		key:       rec.Key,
+		rec:       rec,
 		nextNodes: make([]*Node, height),
 	}
 }
 
-// SkipList is a probabilistic data structure that allows for fast search, insertion, and deletion operations.
-// It maintains multiple levels of linked lists, where each level is a subset of the level below it.
-// The lowest level contains all the elements, while higher levels contain fewer elements, providing a hierarchical structure.
-// This structure allows for efficient logarithmic time complexity for search, insertion, and deletion operations.
-// It works with string keys and values, and uses a randomization technique to determine the level of each new node.
-// Nodes are linked so that nextNodes[i] points to the next node at i-th height.
+// SkipList is a probabilistic, sorted in-memory structure that stores records by key.
+// It implements Memtable semantics with logical deletion (tombstones).
 type SkipList struct {
-	maxHeight     uint64 // Maximum height of the Skip List
-	currentHeight uint64 // Current height of the Skip List
-	head          *Node  // Pointer to the head node of the Skip List
+	maxHeight     uint64
+	currentHeight uint64
+	head          *Node
+
+	// Capacity and counters (distinct keys)
+	capacity    int // max distinct keys (active + tombstoned)
+	totalCount  int // current distinct keys
+	activeCount int // current non-tombstoned keys
+
+	// RNG for level selection
+	rng *rand.Rand
 }
 
-// NewSkipList creates a new SkipList instance.
-// maxHeight: the maximum number of levels in the Skip List.
-func NewSkipList(maxHeight uint64) *SkipList {
-	head := NewNode("", "", maxHeight) // Empty string is lexicographically lesser than any other string.
+// New creates a SkipList memtable with the given parameters.
+// maxHeight >= 1; capacity > 0.
+func New(maxHeight uint64, capacity int) *SkipList {
+	if maxHeight == 0 {
+		maxHeight = 1
+	}
+	headRec := &model.Record{Key: "", Value: nil, Tombstone: true, Timestamp: 0}
+	head := newNode(headRec, maxHeight)
 	return &SkipList{
 		maxHeight:     maxHeight,
 		currentHeight: 1,
 		head:          head,
+		capacity:      capacity,
+		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-// Check verifies whether a given key-value pair exists in the Skip List.
-// key: the key to check for.
-func (s *SkipList) Check(key string) bool {
-	currentNode := s.head
+// ===== Internal helpers =====
 
-	// Iterates through each level as long as the target key is larger than the next node.
-	for i := int(s.currentHeight) - 1; i >= 0; i-- {
-		for currentNode.nextNodes[i] != nil && key >= currentNode.nextNodes[i].key {
-			currentNode = currentNode.nextNodes[i]
-		}
-
-		if currentNode.key == key {
-			return true
-		}
-	}
-
-	return false
-}
-
-// roll generates a random height for a new node.
-// The height is limited by the maximum height of the Skip List.
 func (s *SkipList) roll() uint64 {
-	var height uint64 = 1
-	for rand.Int31n(2) == 1 && height < s.maxHeight {
-		height++
+	h := uint64(1)
+	for s.rng.Int31n(2) == 1 && h < s.maxHeight {
+		h++
 	}
-	return height
+	return h
 }
 
-// Add inserts a new key-value pair into the Skip List, while checking for duplicates.
-// key: the key to be added.
-// value: the value to be added.
-func (s *SkipList) Add(key string, value string) {
-	if s.Check(key) {
-		return
-	}
-
-	nodesToUpdate := make([]*Node, s.maxHeight)
-	currentNode := s.head
-
-	// Iterates through each level and records the last visited node at that level.
-	for i := int(s.currentHeight) - 1; i >= 0; i-- {
-		for currentNode.nextNodes[i] != nil && currentNode.nextNodes[i].key < key {
-			currentNode = currentNode.nextNodes[i]
+// search returns update path and the found node (if any).
+func (s *SkipList) search(target string, update []*Node) (found *Node) {
+	cur := s.head
+	for lvl := int(s.currentHeight) - 1; lvl >= 0; lvl-- {
+		for cur.nextNodes[lvl] != nil && cur.nextNodes[lvl].key < target {
+			cur = cur.nextNodes[lvl]
 		}
-		nodesToUpdate[i] = currentNode
+		if update != nil {
+			update[lvl] = cur
+		}
 	}
+	if cur.nextNodes[0] != nil && cur.nextNodes[0].key == target {
+		return cur.nextNodes[0]
+	}
+	return nil
+}
 
-	height := s.roll() // Random height for the new node.
-
-	// If the new height exceeds the current height, link the head node to the new node.
+func (s *SkipList) insert(rec *model.Record, update []*Node) *Node {
+	height := s.roll()
 	if height > s.currentHeight {
 		for i := s.currentHeight; i < height; i++ {
-			nodesToUpdate[i] = s.head
+			update[i] = s.head
 		}
 		s.currentHeight = height
 	}
-
-	newNode := NewNode(key, value, height)
-
-	// Links the new node with the existing nodes at all levels.
+	n := newNode(rec, height)
 	for i := uint64(0); i < height; i++ {
-		newNode.nextNodes[i] = nodesToUpdate[i].nextNodes[i]
-		nodesToUpdate[i].nextNodes[i] = newNode
+		n.nextNodes[i] = update[i].nextNodes[i]
+		update[i].nextNodes[i] = n
 	}
+	return n
 }
 
-// Delete removes a key-value pair from the Skip List.
-// key: the key of the node to be removed.
-func (s *SkipList) Delete(key string) {
-	if !s.Check(key) {
-		return
+// ===== Memtable interface =====
+
+var ErrCapacityExceeded = errors.New("memtable capacity exceeded")
+
+// Add inserts or updates a record for its key.
+// NEW key: if IsFull() -> error; else insert and update counters.
+// EXISTING key: replace record and adjust activeCount on tombstone transitions.
+// If record.Tombstone == true, this acts as a logical delete update.
+func (s *SkipList) Add(record *model.Record) error {
+	if record == nil {
+		return errors.New("nil record")
 	}
+	update := make([]*Node, s.maxHeight)
+	existing := s.search(record.Key, update)
 
-	nodesToUpdate := make([]*Node, s.maxHeight)
-	currentNode := s.head
-	var nodeToDelete *Node
-
-	// Iterates through the Skip List to locate the node to delete.
-	for i := int(s.currentHeight) - 1; i >= 0; i-- {
-		for currentNode.nextNodes[i] != nil && key > currentNode.nextNodes[i].key {
-			currentNode = currentNode.nextNodes[i]
+	if existing == nil {
+		// New distinct key
+		if s.IsFull() {
+			return ErrCapacityExceeded
 		}
-
-		// Records all nodes that point to the node to be deleted.
-		if currentNode.nextNodes[i] != nil && currentNode.nextNodes[i].key == key {
-			nodesToUpdate[i] = currentNode
-			nodeToDelete = currentNode.nextNodes[i]
+		s.insert(record, update)
+		s.totalCount++
+		if !record.Tombstone {
+			s.activeCount++
 		}
+		return nil
 	}
 
-	// Logically removes the node by adjusting pointers.
-	for i := uint64(0); i < s.currentHeight; i++ {
-		if nodesToUpdate[i] != nil && nodesToUpdate[i].nextNodes[i] != nil {
-			nodesToUpdate[i].nextNodes[i] = nodeToDelete.nextNodes[i]
-		}
+	// Update existing key
+	prevDel := existing.rec.Tombstone
+	newDel := record.Tombstone
+	existing.rec = record
+	if prevDel && !newDel {
+		s.activeCount++
+	} else if !prevDel && newDel {
+		s.activeCount--
 	}
-
-	// Removes the top level if it becomes empty.
-	for s.currentHeight > 1 && s.head.nextNodes[s.currentHeight-1] == nil {
-		s.currentHeight--
-	}
+	return nil
 }
 
-// Serializes the Skip List into a byte array.
-// Iterates through the bottom level and serializes each node.
-func (s *SkipList) Serialize() []byte {
-	var buffer bytes.Buffer
+// Delete marks the key as tombstoned using the provided record.
+// record.Tombstone will be forced to true.
+// Returns true if the key existed before this call; false otherwise.
+// For a non-existing key, we insert a tombstone if capacity allows (returning false).
+func (s *SkipList) Delete(record *model.Record) bool {
+	if record == nil {
+		return false
+	}
+	record.Tombstone = true
 
-	binary.Write(&buffer, binary.LittleEndian, s.maxHeight)
-	binary.Write(&buffer, binary.LittleEndian, s.currentHeight)
+	update := make([]*Node, s.maxHeight)
+	existing := s.search(record.Key, update)
 
-	currentNode := s.head
-	for currentNode != nil {
-		binary.Write(&buffer, binary.LittleEndian, uint64(len(currentNode.key)))
-		buffer.WriteString(currentNode.key)
-
-		binary.Write(&buffer, binary.LittleEndian, uint64(len(currentNode.value)))
-		buffer.WriteString(currentNode.value)
-
-		currentNode = currentNode.nextNodes[0]
+	if existing == nil {
+		// Insert a tombstone for unseen key.
+		if s.IsFull() {
+			return false
+		}
+		s.insert(record, update)
+		s.totalCount++ // tombstoned new key
+		// activeCount unchanged
+		return false
 	}
 
-	return buffer.Bytes()
+	// Key exists: if previously active, decrement activeCount.
+	if existing.rec != nil && !existing.rec.Tombstone {
+		s.activeCount--
+	}
+	existing.rec = record
+	return true
 }
 
-// Deserializes the byte array into a Skip List.
-func Deserialize(data []byte) *SkipList {
-	buffer := bytes.NewReader(data)
-
-	var maxHeight, currentHeight uint64
-
-	binary.Read(buffer, binary.LittleEndian, &maxHeight)
-	binary.Read(buffer, binary.LittleEndian, &currentHeight)
-
-	skipList := NewSkipList(maxHeight)
-	skipList.currentHeight = currentHeight
-
-	var keyLen, valueLen uint64
-	for buffer.Len() > 0 {
-		binary.Read(buffer, binary.LittleEndian, &keyLen)
-		key := make([]byte, keyLen)
-		buffer.Read(key)
-
-		binary.Read(buffer, binary.LittleEndian, &valueLen)
-		value := make([]byte, valueLen)
-		buffer.Read(value)
-
-		skipList.Add(string(key), string(value))
+// Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
+func (s *SkipList) Get(key string) *model.Record {
+	n := s.search(key, nil)
+	if n == nil || n.rec == nil || n.rec.Tombstone {
+		return nil
 	}
+	return n.rec
+}
 
-	return skipList
+func (s *SkipList) Size() int         { return s.activeCount }
+func (s *SkipList) Capacity() int     { return s.capacity }
+func (s *SkipList) TotalEntries() int { return s.totalCount }
+func (s *SkipList) IsFull() bool      { return s.totalCount >= s.capacity }
+
+// Flush is a stub; implement sorted SSTable write by iterating bottom-level list.
+func (s *SkipList) Flush() error {
+	// TODO: emit (key, rec) in sorted order by walking head.nextNodes[0]
+	return nil
 }
