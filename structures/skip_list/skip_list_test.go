@@ -2,217 +2,210 @@ package skip_list
 
 import (
 	"testing"
+	"time"
+
+	"hunddb/model"
 )
 
-// TestNewSkipList verifies the creation of a new skip list.
+// helper to create records with current timestamp
+func rec(key string, val []byte, tomb bool) *model.Record {
+	return model.NewRecord(key, val, uint64(time.Now().UnixNano()), tomb)
+}
+
+// TestNew verifies basic construction
 func TestNewSkipList(t *testing.T) {
 	maxHeight := uint64(5)
-	skipList := NewSkipList(maxHeight)
+	capacity := 10
+	sl := New(maxHeight, capacity)
 
-	if skipList == nil {
+	if sl == nil {
 		t.Fatal("SkipList is nil")
 	}
-
-	if skipList.maxHeight != maxHeight {
-		t.Errorf("Expected maxHeight to be %d, got %d", maxHeight, skipList.maxHeight)
+	if sl.maxHeight != maxHeight {
+		t.Errorf("Expected maxHeight=%d, got %d", maxHeight, sl.maxHeight)
 	}
-
-	if skipList.currentHeight != 1 {
-		t.Errorf("Expected currentHeight to be 1, got %d", skipList.currentHeight)
+	if sl.currentHeight != 1 {
+		t.Errorf("Expected currentHeight=1, got %d", sl.currentHeight)
 	}
-
-	if skipList.head == nil {
+	if sl.head == nil {
 		t.Fatal("Head node is nil")
 	}
-}
-
-// TestAddAndCheck verifies the Add and Check methods.
-func TestAddAndCheck(t *testing.T) {
-	skipList := NewSkipList(5)
-
-	// Add elements
-	skipList.Add("key1", "value1")
-	skipList.Add("key2", "value2")
-	skipList.Add("key3", "value3")
-
-	// Check if elements exist
-	if !skipList.Check("key1") {
-		t.Errorf("Expected key1 to exist in the skip list")
+	if sl.Capacity() != capacity {
+		t.Errorf("Expected Capacity=%d, got %d", capacity, sl.Capacity())
 	}
-
-	if !skipList.Check("key2") {
-		t.Errorf("Expected key2 to exist in the skip list")
-	}
-
-	if !skipList.Check("key3") {
-		t.Errorf("Expected key3 to exist in the skip list")
-	}
-
-	// Check if a non-existing element is correctly reported
-	if skipList.Check("key4") {
-		t.Errorf("Expected key4 to not exist in the skip list")
+	if sl.Size() != 0 || sl.TotalEntries() != 0 {
+		t.Errorf("Expected Size=0, Total=0; got Size=%d Total=%d", sl.Size(), sl.TotalEntries())
 	}
 }
 
-// TestAddDuplicate verifies that duplicates are not added to the skip list.
-func TestAddDuplicate(t *testing.T) {
-	skipList := NewSkipList(5)
+// TestAddAndGet verifies Add and Get (no Check)
+func TestAddAndGet(t *testing.T) {
+	sl := New(5, 100)
 
-	// Add an element
-	skipList.Add("key1", "value1")
+	if err := sl.Add(rec("key1", []byte("value1"), false)); err != nil {
+		t.Fatalf("Add key1 failed: %v", err)
+	}
+	if err := sl.Add(rec("key2", []byte("value2"), false)); err != nil {
+		t.Fatalf("Add key2 failed: %v", err)
+	}
+	if err := sl.Add(rec("key3", []byte("value3"), false)); err != nil {
+		t.Fatalf("Add key3 failed: %v", err)
+	}
 
-	// Add the same key again
-	skipList.Add("key1", "value2")
+	if sl.Size() != 3 || sl.TotalEntries() != 3 {
+		t.Errorf("Expected Size=3, Total=3; got Size=%d Total=%d", sl.Size(), sl.TotalEntries())
+	}
 
-	// Check that the key still exists with its original value
-	if !skipList.Check("key1") {
-		t.Errorf("Expected key1 to exist in the skip list")
+	if got := sl.Get("key1"); got == nil || string(got.Value) != "value1" || got.Tombstone {
+		t.Errorf("Get key1 mismatch: %+v", got)
+	}
+	if got := sl.Get("key2"); got == nil || string(got.Value) != "value2" || got.Tombstone {
+		t.Errorf("Get key2 mismatch: %+v", got)
+	}
+	if got := sl.Get("key3"); got == nil || string(got.Value) != "value3" || got.Tombstone {
+		t.Errorf("Get key3 mismatch: %+v", got)
+	}
+	if got := sl.Get("missing"); got != nil {
+		t.Errorf("Expected nil for missing key, got %+v", got)
 	}
 }
 
-// TestDelete verifies the Delete method.
-func TestDelete(t *testing.T) {
-	skipList := NewSkipList(5)
+// TestUpdateSameKey ensures updating same key replaces value and keeps counts
+func TestUpdateSameKey(t *testing.T) {
+	sl := New(5, 100)
 
-	// Add elements
-	skipList.Add("key1", "value1")
-	skipList.Add("key2", "value2")
-	skipList.Add("key3", "value3")
-
-	// Delete key2
-	skipList.Delete("key2")
-
-	// Ensure key2 no longer exists
-	if skipList.Check("key2") {
-		t.Errorf("Expected key2 to be deleted from the skip list")
+	if err := sl.Add(rec("k", []byte("v1"), false)); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if err := sl.Add(rec("k", []byte("v2"), false)); err != nil {
+		t.Fatalf("Update failed: %v", err)
 	}
 
-	// Ensure key1 and key3 still exist
-	if !skipList.Check("key1") {
-		t.Errorf("Expected key1 to still exist in the skip list")
+	if sl.Size() != 1 || sl.TotalEntries() != 1 {
+		t.Errorf("Expected Size=1, Total=1; got Size=%d Total=%d", sl.Size(), sl.TotalEntries())
 	}
-
-	if !skipList.Check("key3") {
-		t.Errorf("Expected key3 to still exist in the skip list")
+	if got := sl.Get("k"); got == nil || string(got.Value) != "v2" || got.Tombstone {
+		t.Errorf("Expected v2 active, got %+v", got)
 	}
 }
 
-// TestDeleteNonExistent verifies that deleting a non-existent key does not cause issues.
+// TestDeleteTombstone verifies logical deletion
+func TestDeleteTombstone(t *testing.T) {
+	sl := New(5, 100)
+
+	_ = sl.Add(rec("key1", []byte("v1"), false))
+	_ = sl.Add(rec("key2", []byte("v2"), false))
+	_ = sl.Add(rec("key3", []byte("v3"), false))
+
+	// delete key2
+	existed := sl.Delete(rec("key2", nil, true))
+	if !existed {
+		t.Errorf("Expected existed=true for deleting existing key2")
+	}
+
+	// invisible now
+	if got := sl.Get("key2"); got != nil {
+		t.Errorf("Expected key2 tombstoned (nil), got %+v", got)
+	}
+
+	// other keys intact
+	if got := sl.Get("key1"); got == nil || string(got.Value) != "v1" || got.Tombstone {
+		t.Errorf("key1 mismatch after delete: %+v", got)
+	}
+	if got := sl.Get("key3"); got == nil || string(got.Value) != "v3" || got.Tombstone {
+		t.Errorf("key3 mismatch after delete: %+v", got)
+	}
+
+	// counts: total distinct stays 3, active becomes 2
+	if sl.TotalEntries() != 3 || sl.Size() != 2 {
+		t.Errorf("Expected Total=3, Size=2; got Total=%d Size=%d", sl.TotalEntries(), sl.Size())
+	}
+}
+
+// TestDeleteNonExistent inserts a tombstone for unseen key (if capacity allows)
 func TestDeleteNonExistent(t *testing.T) {
-	skipList := NewSkipList(5)
+	sl := New(5, 100)
 
-	// Add some elements
-	skipList.Add("key1", "value1")
-	skipList.Add("key2", "value2")
+	_ = sl.Add(rec("key1", []byte("v1"), false))
+	_ = sl.Add(rec("key2", []byte("v2"), false))
 
-	// Delete a non-existent key
-	skipList.Delete("key3")
-
-	// Ensure key1 and key2 still exist
-	if !skipList.Check("key1") {
-		t.Errorf("Expected key1 to still exist in the skip list")
+	// delete missing -> inserts tombstone, returns false
+	existed := sl.Delete(rec("key3", nil, true))
+	if existed {
+		t.Errorf("Expected existed=false when tombstoning unseen key")
 	}
 
-	if !skipList.Check("key2") {
-		t.Errorf("Expected key2 to still exist in the skip list")
-	}
-}
-
-// TestSerializeAndDeserialize verifies that a skip list can be serialized and deserialized without data loss.
-func TestSerializeAndDeserialize(t *testing.T) {
-	// Step 1: Create a new skip list and populate it with data
-	skipList := NewSkipList(5)
-	skipList.Add("key1", "value1")
-	skipList.Add("key2", "value2")
-	skipList.Add("key3", "value3")
-
-	// Step 2: Serialize the skip list
-	serializedData := skipList.Serialize()
-	if len(serializedData) == 0 {
-		t.Fatalf("Serialization failed: serialized data is empty")
+	// key3 stays invisible
+	if got := sl.Get("key3"); got != nil {
+		t.Errorf("Expected nil for key3 after tombstone insert, got %+v", got)
 	}
 
-	// Step 3: Deserialize the skip list
-	deserializedSkipList := Deserialize(serializedData)
-
-	// Step 4: Validate the deserialized data
-	// Check that all keys exist in the deserialized skip list
-	keys := []string{"key1", "key2", "key3"}
-	for _, key := range keys {
-		if !deserializedSkipList.Check(key) {
-			t.Errorf("Key '%s' not found in deserialized skip list", key)
-		}
-	}
-
-	// Ensure values are preserved
-	expectedValues := map[string]string{
-		"key1": "value1",
-		"key2": "value2",
-		"key3": "value3",
-	}
-
-	for key, expectedValue := range expectedValues {
-		currentNode := deserializedSkipList.head.nextNodes[0]
-		found := false
-		for currentNode != nil {
-			if currentNode.key == key {
-				if currentNode.value != expectedValue {
-					t.Errorf("Expected value '%s' for key '%s', got '%s'", expectedValue, key, currentNode.value)
-				}
-				found = true
-				break
-			}
-			currentNode = currentNode.nextNodes[0]
-		}
-		if !found {
-			t.Errorf("Key '%s' not found in the deserialized skip list", key)
-		}
+	// counts: total +1 (tombstone), active unchanged
+	if sl.TotalEntries() != 3 || sl.Size() != 2 {
+		t.Errorf("Expected Total=3, Size=2; got Total=%d Size=%d", sl.TotalEntries(), sl.Size())
 	}
 }
 
-// TestSerializeEmptySkipList ensures serialization and deserialization work for an empty skip list.
-func TestSerializeEmptySkipList(t *testing.T) {
-	// Step 1: Create an empty skip list
-	skipList := NewSkipList(5)
+// TestCapacity enforces ErrCapacityExceeded for new distinct keys
+func TestCapacity(t *testing.T) {
+	sl := New(5, 2) // capacity for 2 distinct keys
 
-	// Step 2: Serialize the empty skip list
-	serializedData := skipList.Serialize()
-	if len(serializedData) == 0 {
-		t.Fatalf("Serialization failed: serialized data is empty")
+	if err := sl.Add(rec("a", []byte("1"), false)); err != nil {
+		t.Fatalf("Add a failed: %v", err)
+	}
+	if err := sl.Add(rec("b", []byte("2"), false)); err != nil {
+		t.Fatalf("Add b failed: %v", err)
 	}
 
-	// Step 3: Deserialize the empty skip list
-	deserializedSkipList := Deserialize(serializedData)
-
-	// Step 4: Validate the deserialized data
-	if deserializedSkipList.currentHeight != 1 {
-		t.Errorf("Expected currentHeight to be 1, got %d", deserializedSkipList.currentHeight)
+	// updating existing key is OK
+	if err := sl.Add(rec("a", []byte("1b"), false)); err != nil {
+		t.Fatalf("Update a failed: %v", err)
 	}
 
-	if deserializedSkipList.maxHeight != 5 {
-		t.Errorf("Expected maxHeight to be 5, got %d", deserializedSkipList.maxHeight)
+	// inserting third distinct key should fail
+	if err := sl.Add(rec("c", []byte("3"), false)); err == nil {
+		t.Fatalf("Expected ErrCapacityExceeded, got nil")
+	} else if err != ErrCapacityExceeded {
+		t.Fatalf("Expected ErrCapacityExceeded, got %v", err)
 	}
 
-	if deserializedSkipList.head == nil {
-		t.Fatal("Head node is nil in deserialized skip list")
+	// tombstoning unseen key also consumes capacity; here should also fail
+	if ok := sl.Delete(rec("x", nil, true)); ok {
+		t.Fatalf("Expected delete of unseen 'x' to fail due to capacity (return false), got true")
+	}
+
+	// State intact
+	if sl.TotalEntries() != 2 || sl.Size() != 2 {
+		t.Errorf("Expected Total=2, Size=2; got Total=%d Size=%d", sl.TotalEntries(), sl.Size())
 	}
 }
 
-// TestSerializationCorruptedData ensures deserialization fails gracefully with corrupted data.
-func TestSerializationCorruptedData(t *testing.T) {
-	// Step 1: Create a valid serialized skip list
-	skipList := NewSkipList(5)
-	skipList.Add("key1", "value1")
-	serializedData := skipList.Serialize()
+// TestTombstoneTransitions checks activeCount updates on transitions
+func TestTombstoneTransitions(t *testing.T) {
+	sl := New(5, 10)
 
-	// Step 2: Corrupt the serialized data
-	corruptedData := append(serializedData[:len(serializedData)/2], []byte("corruption")...)
+	_ = sl.Add(rec("k", []byte("v1"), false)) // active
+	if sl.Size() != 1 {
+		t.Fatalf("Expected Size=1, got %d", sl.Size())
+	}
 
-	// Step 3: Attempt to deserialize corrupted data
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("Expected panic during deserialization of corrupted data, but no panic occurred")
-		}
-	}()
-	Deserialize(corruptedData)
+	// tombstone -> active--
+	_ = sl.Delete(rec("k", nil, true))
+	if sl.Size() != 0 || sl.TotalEntries() != 1 {
+		t.Fatalf("After tombstone: Size=0, Total=1 expected; got %d, %d", sl.Size(), sl.TotalEntries())
+	}
+	if got := sl.Get("k"); got != nil {
+		t.Fatalf("Get should be nil after tombstone, got %+v", got)
+	}
+
+	// re-add (remove tombstone) -> active++
+	if err := sl.Add(rec("k", []byte("v2"), false)); err != nil {
+		t.Fatalf("Re-add failed: %v", err)
+	}
+	if sl.Size() != 1 || sl.TotalEntries() != 1 {
+		t.Fatalf("After re-add: Size=1, Total=1 expected; got %d, %d", sl.Size(), sl.TotalEntries())
+	}
+	if got := sl.Get("k"); got == nil || string(got.Value) != "v2" || got.Tombstone {
+		t.Fatalf("Expected v2 active, got %+v", got)
+	}
 }

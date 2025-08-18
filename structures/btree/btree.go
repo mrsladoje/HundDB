@@ -5,8 +5,11 @@ package btree
 import (
 	"fmt"
 	"hunddb/model"
+	mt "hunddb/structures/memtable" // memtable interface
+	"math"
 	"sort"
 )
+var _ mt.Memtable = (*BTree)(nil)
 
 const (
 	// DefaultOrder defines the default order (degree) of the B-tree.
@@ -46,6 +49,11 @@ type BTree struct {
 
 	// compacting flag to prevent recursive compaction
 	compacting bool
+	
+	// capacity is the maximum number of distinct keys (active + tombstoned)
+	capacity int
+
+
 }
 
 // TreeStats maintains statistics about the B-tree for compaction decisions.
@@ -55,23 +63,27 @@ type TreeStats struct {
 	ActiveRecords     int
 }
 
-// NewBTree creates a new B-tree with the specified order.
-// If order is 0 or negative, DefaultOrder is used.
-func NewBTree(order int) *BTree {
+
+
+// NewBTree creates a B-tree with an explicit capacity (distinct keys).
+func NewBTree(order, capacity int) *BTree {
 	if order <= 0 {
 		order = DefaultOrder
 	}
-
+	if capacity <= 0 {
+		capacity = math.MaxInt
+	}
 	return &BTree{
-		order: order,
-		stats: &TreeStats{},
+		order:    order,
+		capacity: capacity,
+		stats:    &TreeStats{},
 	}
 }
 
 // Get retrieves a record from the B-tree by key.
 //
 // Parameters:
-//   - key: byte slice containing the search key
+//   - key: string containing the search key
 //
 // Returns:
 //   - *model.Record: the record if found and not tombstoned, nil otherwise
@@ -88,73 +100,98 @@ func (bt *BTree) Get(key string) *model.Record {
 	return nil
 }
 
-// Put inserts or updates a record in the B-tree.
+// Add inserts or updates a record in the B-tree.
 //
 // Parameters:
 //   - record: the record to insert or update
 //
 // Returns:
 //   - error: any error that occurred during insertion
-func (bt *BTree) Put(record *model.Record) error {
+func (bt *BTree) Add(record *model.Record) error {
 	if record == nil || len(record.Key) == 0 {
 		return fmt.Errorf("invalid record: record and key cannot be nil/empty")
 	}
 
-	// Initialize root if tree is empty
+	// If tree is empty, this is a NEW distinct key → respect capacity.
 	if bt.root == nil {
+		// Capacity applies only to NEW distinct keys.
+		if bt.IsFull() {
+			return fmt.Errorf("memtable is full (capacity=%d)", bt.capacity)
+		}
 		bt.root = &Node{
 			isLeaf:  true,
 			records: []*model.Record{record},
 		}
-		bt.updateStats(record, false)
+		bt.updateStats(record, false) // new distinct key accounted
 		return nil
 	}
 
 	// Check if key already exists
 	existingNode, existingIndex := bt.search(record.Key, bt.root)
 	if existingNode != nil && existingIndex >= 0 {
-		// Update existing record
+		// Update existing key .
 		oldRecord := existingNode.records[existingIndex]
 		existingNode.records[existingIndex] = record
 		bt.updateStatsOnUpdate(oldRecord, record)
 	} else {
-		// Insert new record
+		// NEW distinct key → must respect capacity.
+		if bt.IsFull() {
+			return fmt.Errorf("memtable is full (capacity=%d)", bt.capacity)
+		}
 		bt.insertRecord(bt.root, record)
 		bt.updateStats(record, false)
 	}
 
-	// Check if compaction is needed (but not if we're already compacting)
-	if !bt.compacting && bt.needsCompaction() {
-		bt.compact()
+	// Trigger compaction if needed (avoid recursion).
+	if !bt.compacting && !record.IsDeleted() && bt.needsCompaction() {
+    	bt.compact()
 	}
-
 	return nil
 }
 
-// Delete marks a record as deleted (tombstoned) in the B-tree.
-//
-// Parameters:
-//   - key: byte slice containing the key to delete
-//
-// Returns:
-//   - bool: true if the record was found and marked as deleted, false otherwise
-func (bt *BTree) Delete(key string) bool {
-	if bt.root == nil {
+// IsFull reports whether inserting a NEW distinct key would exceed capacity.
+func (bt *BTree) IsFull() bool {
+	return bt.stats.TotalRecords >= bt.capacity
+}
+
+
+
+// Delete marks the key as tombstoned.
+// Behavior:
+//   - If key exists: replace the record with a tombstone and update stats; return true.
+//   - If key does not exist: insert a tombstone via Add() (capacity-checked); return false.
+func (bt *BTree) Delete(record *model.Record) bool {
+	if record == nil || record.Key == "" {
 		return false
 	}
 
-	node, index := bt.search(key, bt.root)
-	if node != nil && index >= 0 && !node.records[index].IsDeleted() {
-		// Mark as deleted and update stats
-		node.records[index].MarkDeleted()
-		bt.stats.ActiveRecords--
-		bt.stats.TombstonedRecords++
+	record.MarkDeleted()
 
-		return true
+	// Try to find existing key.
+	if bt.root != nil {
+		if node, idx := bt.search(record.Key, bt.root); node != nil && idx >= 0 {
+			old := node.records[idx]
+			// Already tombstoned → nothing changes except we keep latest pointer.
+			if old.IsDeleted() {
+				return true
+			}
+			// Replace with tombstone and adjust stats.
+			node.records[idx] = record
+			bt.updateStatsOnUpdate(old, record)
+			return true
+		}
 	}
 
+	// Not found → delegate to Add().
+	if err := bt.Add(record); err != nil { // capacity reached for new key
+		return false
+	}
 	return false
 }
+
+
+
+
 
 // search recursively searches for a key in the B-tree starting from the given node.
 //
@@ -419,16 +456,26 @@ func (bt *BTree) GetStats() TreeStats {
 	return *bt.stats
 }
 
-// Size returns the total number of records (including tombstoned) in the tree.
+// Size returns the number of active (non-tombstoned) keys.
 func (bt *BTree) Size() int {
-	return bt.stats.TotalRecords
-}
-
-// ActiveSize returns the number of active (non-tombstoned) records in the tree.
-func (bt *BTree) ActiveSize() int {
 	return bt.stats.ActiveRecords
 }
 
+// Capacity returns the maximum number of distinct keys allowed.
+func (bt *BTree) Capacity() int {
+	return bt.capacity
+}
+
+// Flush persists the memtable contents to disk (implementation-specific).
+func (bt *BTree) Flush() error {
+	// TODO: Implement SSTable flush logic here.
+	return nil
+}
+
+// TotalEntries returns the number of distinct keys (active + tombstoned).
+func (bt *BTree) TotalEntries() int {
+	return bt.stats.TotalRecords
+}
 // Height returns the height of the B-tree.
 func (bt *BTree) Height() int {
 	if bt.root == nil {
@@ -448,3 +495,4 @@ func (bt *BTree) Height() int {
 
 	return height
 }
+
