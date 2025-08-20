@@ -9,6 +9,12 @@ import (
 	"sync"
 )
 
+/*
+TODO: We should make some kind of a compaction mechanism for
+the dictionary - it would rebuild the whole dict after compactions
+of SSTables and remove any keys that are no longer present in the DB.
+*/
+
 // GlobalKeyDict is a singleton that manages a global dictionary for string keys
 type GlobalKeyDict struct {
 
@@ -24,11 +30,14 @@ type GlobalKeyDict struct {
 	// filePath is the path to the file where the dictionary is persisted
 	filePath string
 
-	// mutex protects concurrent access to the dictionary
-	mutex sync.RWMutex
+	// lastBlockIndex is the index of the last block written to disk
+	lastBlockIndex uint64
 
-	// isDirty indicates if the dictionary has unsaved changes
-	isDirty bool
+	// lastBlockOffset is the offset in the last block where the next entry will be written
+	lastBlockOffset uint64
+
+	// mutex ensures thread-safe access to the dictionary
+	mutex sync.RWMutex
 
 	// blockManager is responsible for disk operations
 	blockManager *block_manager.BlockManager
@@ -37,9 +46,9 @@ type GlobalKeyDict struct {
 /*
 
 Header block (first block):
-	+----------+-------------+-----------+
-	| CRC (4B) | NextID (8B) | Reserved  |
-	+----------+-------------+-----------+
+	+----------+-------------+---------------------+----------------------+-------------+
+	| CRC (4B) | nextID (8B) | lastBlockIndex (8B) | lastBlockOffset (8B) | The Rest... |
+	+----------+-------------+---------------------+----------------------+-------------+
 
 Entry blocks:
 	+----------+----------+------------------+----------+----------+
@@ -52,7 +61,9 @@ var dictInstance *GlobalKeyDict
 var once sync.Once
 
 const (
-	DICT_HEADER_SIZE      = 8  // Size of nextID field
+	DICT_NEXT_SIZE        = 8  // Size of nextID field
+	DICT_LBI_SIZE         = 8  // Size of the lastBlockIndex
+	DICT_LBO_SIZE         = 8  // Size of the lastBlockOffset
 	DICT_ENTRY_SIZE       = 16 // 8 bytes for ID + 8 bytes for key length
 	ENTRY_ID_SIZE         = 8  // Size of ID field in entry
 	ENTRY_KEY_LENGTH_SIZE = 8  // Size of key length field in entry
@@ -63,16 +74,168 @@ const (
 func GetGlobalKeyDict(filepath string) *GlobalKeyDict {
 	once.Do(func() {
 		dictInstance = &GlobalKeyDict{
-			keyToID:      make(map[string]uint64),
-			idToKey:      make(map[uint64]string),
-			nextID:       1, // Start IDs from 1
-			filePath:     filepath,
-			isDirty:      false,
-			blockManager: block_manager.GetBlockManager(),
+			keyToID:         make(map[string]uint64),
+			idToKey:         make(map[uint64]string),
+			nextID:          1,
+			lastBlockIndex:  1,        // Start from 1 to reserve 0 for header block
+			lastBlockOffset: CRC_SIZE, // Start after CRC in the first block
+			filePath:        filepath,
+			blockManager:    block_manager.GetBlockManager(),
 		}
 		dictInstance.loadFromDisk()
 	})
 	return dictInstance
+}
+
+// GetEntryID retrieves the ID for a given key.
+func (dict *GlobalKeyDict) GetEntryID(key string) (uint64, bool) {
+	dict.mutex.RLock()
+	defer dict.mutex.RUnlock()
+
+	id, exists := dict.keyToID[key]
+	return id, exists
+}
+
+// GetKey retrieves the key for a given ID.
+func (dict *GlobalKeyDict) GetKey(id uint64) (string, bool) {
+	dict.mutex.RLock()
+	defer dict.mutex.RUnlock()
+
+	key, exists := dict.idToKey[id]
+	return key, exists
+}
+
+// AddEntry adds a new key to the dictionary and returns its unique ID.
+// It also persists the entry to disk.
+func (dict *GlobalKeyDict) AddEntry(key string) (uint64, error) {
+	dict.mutex.Lock()
+	defer dict.mutex.Unlock()
+
+	if _, exists := dict.keyToID[key]; exists {
+		return 0, errors.New("key already exists in the dictionary")
+	}
+
+	id := dict.nextID
+
+	// Persist the new entry to disk
+	err := dict.persistEntry(id, key)
+	if err != nil {
+		return 0, err
+	}
+
+	// Update the in-memory maps
+	dict.keyToID[key] = id
+	dict.idToKey[id] = key
+
+	return id, nil
+}
+
+// persistEntry writes the new entry to disk.
+func (dict *GlobalKeyDict) persistEntry(id uint64, key string) error {
+	// Prepare the entry data
+	keyBytes := []byte(key)
+	keyLength := uint64(len(keyBytes))
+
+	lastBlockLocation := mdl.BlockLocation{
+		FilePath:   dict.filePath,
+		BlockIndex: dict.lastBlockIndex,
+	}
+
+	blockData, err := dict.blockManager.ReadBlock(lastBlockLocation)
+	if err != nil {
+		blockData = make([]byte, dict.blockManager.GetBlockSize())
+	}
+
+	// Check if we need a new block for the entry header
+	if dict.lastBlockOffset+DICT_ENTRY_SIZE > uint64(dict.blockManager.GetBlockSize()) {
+		if dict.lastBlockOffset > CRC_SIZE {
+			blockData = dict.addCRCToData(blockData)
+			err := dict.blockManager.WriteBlock(lastBlockLocation, blockData)
+			if err != nil {
+				return errors.New("failed to write block to disk: " + err.Error())
+			}
+		}
+
+		dict.lastBlockIndex++
+		dict.lastBlockOffset = CRC_SIZE
+		blockData = make([]byte, dict.blockManager.GetBlockSize())
+	}
+
+	writing_header := true
+	for keyLength > 0 {
+		if writing_header {
+			binary.LittleEndian.PutUint64(blockData[dict.lastBlockOffset:dict.lastBlockOffset+ENTRY_ID_SIZE], id)
+			dict.lastBlockOffset += ENTRY_ID_SIZE
+			binary.LittleEndian.PutUint64(blockData[dict.lastBlockOffset:dict.lastBlockOffset+ENTRY_KEY_LENGTH_SIZE], keyLength)
+			dict.lastBlockOffset += ENTRY_KEY_LENGTH_SIZE
+			writing_header = false
+		}
+		remainingSpace := uint64(dict.blockManager.GetBlockSize()) - dict.lastBlockOffset
+		if keyLength > uint64(remainingSpace) {
+			copy(blockData[dict.lastBlockOffset:], keyBytes[:remainingSpace])
+			keyBytes = keyBytes[remainingSpace:]
+			keyLength -= remainingSpace
+			dict.lastBlockOffset = CRC_SIZE
+			blockData = dict.addCRCToData(blockData)
+			err := dict.blockManager.WriteBlock(mdl.BlockLocation{
+				FilePath:   dict.filePath,
+				BlockIndex: dict.lastBlockIndex,
+			}, blockData)
+			if err != nil {
+				return errors.New("failed to write block to disk: " + err.Error())
+			}
+			dict.lastBlockIndex++
+			blockData = make([]byte, dict.blockManager.GetBlockSize())
+			continue
+		}
+		copy(blockData[dict.lastBlockOffset:], keyBytes)
+		blockData = dict.addCRCToData(blockData)
+		err = dict.blockManager.WriteBlock(mdl.BlockLocation{
+			FilePath:   dict.filePath,
+			BlockIndex: dict.lastBlockIndex,
+		}, blockData)
+		if err != nil {
+			return errors.New("failed to write block to disk: " + err.Error())
+		}
+		dict.lastBlockOffset += keyLength
+		keyLength = 0
+	}
+
+	dict.nextID++
+	err = dict.resetHeaderBlock()
+	if err != nil {
+		return errors.New("failed to reset header block: " + err.Error())
+	}
+
+	return nil
+}
+
+// resetHeaderBlock resets the header block with the current state of the dictionary.
+func (dict *GlobalKeyDict) resetHeaderBlock() error {
+	headerBlock, err := dict.blockManager.ReadBlock(mdl.BlockLocation{
+		FilePath:   dict.filePath,
+		BlockIndex: 0,
+	})
+	if err != nil {
+		return errors.New("failed to read header block: " + err.Error())
+	}
+
+	start_offset := CRC_SIZE
+	binary.LittleEndian.PutUint64(headerBlock[start_offset:start_offset+DICT_NEXT_SIZE], dict.nextID)
+	binary.LittleEndian.PutUint64(headerBlock[start_offset+DICT_NEXT_SIZE:start_offset+DICT_NEXT_SIZE+DICT_LBI_SIZE], dict.lastBlockIndex)
+	binary.LittleEndian.PutUint64(headerBlock[start_offset+DICT_NEXT_SIZE+DICT_LBI_SIZE:start_offset+DICT_NEXT_SIZE+DICT_LBI_SIZE+DICT_LBO_SIZE], dict.lastBlockOffset)
+
+	dict.addCRCToData(headerBlock)
+
+	err = dict.blockManager.WriteBlock(mdl.BlockLocation{
+		FilePath:   dict.filePath,
+		BlockIndex: 0,
+	}, headerBlock)
+	if err != nil {
+		return errors.New("failed to write header block: " + err.Error())
+	}
+
+	return nil
 }
 
 // loadFromDisk loads the dictionary from the disk if it exists.
@@ -84,14 +247,16 @@ func (dict *GlobalKeyDict) loadFromDisk() error {
 
 	headerBlock, err := dict.blockManager.ReadBlock(headerLocation)
 	if err != nil {
-		return errors.New("failed to read header block: " + err.Error())
+		return dict.initializeNewFile()
 	}
 
 	if err := dict.verifyBlockCRC(headerBlock); err != nil {
 		return errors.New("header block CRC verification failed: " + err.Error())
 	}
 
-	dict.nextID = binary.LittleEndian.Uint64(headerBlock[CRC_SIZE : CRC_SIZE+DICT_HEADER_SIZE])
+	dict.nextID = binary.LittleEndian.Uint64(headerBlock[CRC_SIZE : CRC_SIZE+DICT_NEXT_SIZE])
+	dict.lastBlockIndex = binary.LittleEndian.Uint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE : CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE])
+	dict.lastBlockOffset = binary.LittleEndian.Uint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE : CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE+DICT_LBO_SIZE])
 
 	if dict.nextID == 1 {
 		return nil
@@ -184,6 +349,47 @@ func (dict *GlobalKeyDict) loadEntries(expectedEntries uint64) error {
 	return nil
 }
 
+// initializeNewFile initializes a new GlobalKeyDict file with a header block and the first data block.
+func (dict *GlobalKeyDict) initializeNewFile() error {
+	// Create and write initial header block
+	blockSize := dict.blockManager.GetBlockSize()
+	headerBlock := make([]byte, blockSize)
+
+	// Set initial values
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE:CRC_SIZE+DICT_NEXT_SIZE], 1)                                                                 // nextID = 1
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE:CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE], 1)                                    // lastBlockIndex = 1 (first data block)
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE:CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE+DICT_LBO_SIZE], CRC_SIZE) // lastBlockOffset = 4 (after CRC)
+
+	// Add CRC
+	crc := crc32.ChecksumIEEE(headerBlock[CRC_SIZE:])
+	binary.LittleEndian.PutUint32(headerBlock[:CRC_SIZE], crc)
+
+	// Write header block
+	headerLocation := mdl.BlockLocation{FilePath: dict.filePath, BlockIndex: 0}
+	err := dict.blockManager.WriteBlock(headerLocation, headerBlock)
+	if err != nil {
+		return err
+	}
+
+	// Create first data block
+	dataBlock := make([]byte, blockSize)
+	crc = crc32.ChecksumIEEE(dataBlock[CRC_SIZE:])
+	binary.LittleEndian.PutUint32(dataBlock[:CRC_SIZE], crc)
+
+	dataLocation := mdl.BlockLocation{FilePath: dict.filePath, BlockIndex: 1}
+	err = dict.blockManager.WriteBlock(dataLocation, dataBlock)
+	if err != nil {
+		return err
+	}
+
+	// Update instance variables
+	dict.lastBlockIndex = 1
+	dict.lastBlockOffset = CRC_SIZE
+
+	return nil
+}
+
+// verifyBlockCRC checks the CRC of a block to ensure data integrity.
 func (dict *GlobalKeyDict) verifyBlockCRC(data []byte) error {
 	if len(data) < CRC_SIZE {
 		return errors.New("data block too small to contain CRC")
@@ -199,4 +405,11 @@ func (dict *GlobalKeyDict) verifyBlockCRC(data []byte) error {
 	}
 
 	return nil
+}
+
+// addCRCToData adds a CRC32 checksum to the beginning of the data.
+func (dict *GlobalKeyDict) addCRCToData(data []byte) []byte {
+	crc := crc32.ChecksumIEEE(data[CRC_SIZE:])
+	binary.LittleEndian.PutUint32(data[:CRC_SIZE], crc)
+	return data
 }

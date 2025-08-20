@@ -2,6 +2,7 @@ package global_key_dict
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	mdl "hunddb/model"
 	block_manager "hunddb/structures/block_manager"
@@ -30,7 +31,9 @@ func TestDebugLoadFromDisk(t *testing.T) {
 
 	// Write header block
 	headerBlock := make([]byte, blockSize)
-	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE:CRC_SIZE+DICT_HEADER_SIZE], nextID)
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE:CRC_SIZE+DICT_NEXT_SIZE], nextID)
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE:CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE], 0)                             // lastBlockIndex
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE:CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE+DICT_LBO_SIZE], 0) // lastBlockOffset
 	headerCRC := crc32.ChecksumIEEE(headerBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(headerBlock[0:CRC_SIZE], headerCRC)
 
@@ -125,7 +128,9 @@ func TestLoadFromDiskWithOverflow(t *testing.T) {
 
 	// Write header block
 	headerBlock := make([]byte, blockSize)
-	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE:CRC_SIZE+DICT_HEADER_SIZE], nextID)
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE:CRC_SIZE+DICT_NEXT_SIZE], nextID)
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE:CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE], 0)                             // lastBlockIndex
+	binary.LittleEndian.PutUint64(headerBlock[CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE:CRC_SIZE+DICT_NEXT_SIZE+DICT_LBI_SIZE+DICT_LBO_SIZE], 0) // lastBlockOffset
 	headerCRC := crc32.ChecksumIEEE(headerBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(headerBlock[0:CRC_SIZE], headerCRC)
 
@@ -241,5 +246,352 @@ func TestLoadFromDiskWithOverflow(t *testing.T) {
 		} else if actualKey != expectedEntry.key {
 			t.Errorf("Key mismatch for ID %d: expected length %d, got length %d", expectedEntry.id, len(expectedEntry.key), len(actualKey))
 		}
+	}
+}
+
+// TestBasicOperations tests basic add, get operations
+func TestBasicOperations(t *testing.T) {
+	testFile := "test_basic_dict.db"
+	defer os.Remove(testFile)
+
+	// Reset singleton
+	dictInstance = nil
+	once = sync.Once{}
+
+	dict := GetGlobalKeyDict(testFile)
+
+	// Test adding entries
+	testKeys := []string{"key1", "key2", "key3"}
+	expectedIDs := []uint64{1, 2, 3}
+
+	for i, key := range testKeys {
+		id, err := dict.AddEntry(key)
+		if err != nil {
+			t.Fatalf("Failed to add key '%s': %v", key, err)
+		}
+		if id != expectedIDs[i] {
+			t.Errorf("Expected ID %d for key '%s', got %d", expectedIDs[i], key, id)
+		}
+	}
+
+	// Test getting entries by key
+	for i, key := range testKeys {
+		id, exists := dict.GetEntryID(key)
+		if !exists {
+			t.Errorf("Key '%s' should exist", key)
+		}
+		if id != expectedIDs[i] {
+			t.Errorf("Expected ID %d for key '%s', got %d", expectedIDs[i], key, id)
+		}
+	}
+
+	// Test getting entries by ID
+	for i, key := range testKeys {
+		retrievedKey, exists := dict.GetKey(expectedIDs[i])
+		if !exists {
+			t.Errorf("ID %d should exist", expectedIDs[i])
+		}
+		if retrievedKey != key {
+			t.Errorf("Expected key '%s' for ID %d, got '%s'", key, expectedIDs[i], retrievedKey)
+		}
+	}
+
+	// Test duplicate key
+	_, err := dict.AddEntry("key1")
+	if err == nil {
+		t.Error("Expected error when adding duplicate key")
+	}
+}
+
+// TestPersistenceAcrossRestarts tests that data persists after restart
+func TestPersistenceAcrossRestarts(t *testing.T) {
+	testFile := "test_persistence_dict.db"
+	defer os.Remove(testFile)
+
+	testKeys := []string{"persist1", "persist2", "persist3"}
+	var originalIDs []uint64
+
+	// First session: add data
+	{
+		dictInstance = nil
+		once = sync.Once{}
+		dict := GetGlobalKeyDict(testFile)
+
+		for _, key := range testKeys {
+			id, err := dict.AddEntry(key)
+			if err != nil {
+				t.Fatalf("Failed to add key '%s': %v", key, err)
+			}
+			originalIDs = append(originalIDs, id)
+		}
+	}
+
+	// Second session: load and verify
+	{
+		dictInstance = nil
+		once = sync.Once{}
+		dict := GetGlobalKeyDict(testFile)
+
+		for i, key := range testKeys {
+			id, exists := dict.GetEntryID(key)
+			if !exists {
+				t.Errorf("Key '%s' should exist after restart", key)
+			}
+			if id != originalIDs[i] {
+				t.Errorf("Expected ID %d for key '%s', got %d", originalIDs[i], key, id)
+			}
+		}
+	}
+}
+
+// TestEmptyAndInvalidKeys tests edge cases with keys
+func TestEmptyAndInvalidKeys(t *testing.T) {
+	testFile := "test_invalid_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	// Test empty key
+	_, err := dict.AddEntry("")
+	if err != nil {
+		t.Logf("Empty key rejected (this might be intended): %v", err)
+	}
+
+	// Test very long key
+	longKey := strings.Repeat("a", 1000)
+	id, err := dict.AddEntry(longKey)
+	if err != nil {
+		t.Fatalf("Failed to add long key: %v", err)
+	}
+
+	retrievedKey, exists := dict.GetKey(id)
+	if !exists {
+		t.Error("Long key should exist")
+	}
+	if retrievedKey != longKey {
+		t.Error("Long key not retrieved correctly")
+	}
+}
+
+// TestConcurrentAccess tests thread safety
+func TestConcurrentAccess(t *testing.T) {
+	testFile := "test_concurrent_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	const numGoroutines = 10
+	const keysPerGoroutine = 10
+
+	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines*keysPerGoroutine)
+
+	// Concurrent writes
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(routineID int) {
+			defer wg.Done()
+			for j := 0; j < keysPerGoroutine; j++ {
+				key := fmt.Sprintf("routine_%d_key_%d", routineID, j)
+				_, err := dict.AddEntry(key)
+				if err != nil {
+					errors <- err
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	// Check for errors
+	for err := range errors {
+		t.Errorf("Concurrent access error: %v", err)
+	}
+
+	// Verify all keys exist
+	expectedCount := numGoroutines * keysPerGoroutine
+	if len(dict.keyToID) != expectedCount {
+		t.Errorf("Expected %d keys, got %d", expectedCount, len(dict.keyToID))
+	}
+}
+
+// TestLargeDataSet tests with a large number of entries
+func TestLargeDataSet(t *testing.T) {
+	testFile := "test_large_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	const numEntries = 1000
+	keys := make([]string, numEntries)
+
+	// Generate test data
+	for i := 0; i < numEntries; i++ {
+		keys[i] = fmt.Sprintf("large_test_key_%05d", i)
+	}
+
+	// Add entries
+	for _, key := range keys {
+		_, err := dict.AddEntry(key)
+		if err != nil {
+			t.Fatalf("Failed to add key '%s': %v", key, err)
+		}
+	}
+
+	// Verify all entries exist
+	for _, key := range keys {
+		_, exists := dict.GetEntryID(key)
+		if !exists {
+			t.Errorf("Key '%s' should exist", key)
+		}
+	}
+
+	// Test persistence with large dataset
+	dictInstance = nil
+	once = sync.Once{}
+	dict = GetGlobalKeyDict(testFile)
+
+	for _, key := range keys {
+		_, exists := dict.GetEntryID(key)
+		if !exists {
+			t.Errorf("Key '%s' should exist after restart", key)
+		}
+	}
+}
+
+// TestBlockBoundaryConditions tests entries that span block boundaries
+func TestBlockBoundaryConditions(t *testing.T) {
+	testFile := "test_boundary_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	bm := block_manager.GetBlockManager()
+	blockSize := int(bm.GetBlockSize())
+
+	// Create keys of various sizes around block boundaries
+	testCases := []struct {
+		name string
+		key  string
+	}{
+		{"small", "small"},
+		{"medium", strings.Repeat("m", blockSize/4)},
+		{"large", strings.Repeat("l", blockSize-100)},
+		{"exact_block", strings.Repeat("e", blockSize-CRC_SIZE-DICT_ENTRY_SIZE)},
+		{"over_block", strings.Repeat("o", blockSize)},
+		{"multi_block", strings.Repeat("x", blockSize*2+100)},
+	}
+
+	var ids []uint64
+	for _, tc := range testCases {
+		id, err := dict.AddEntry(tc.key)
+		if err != nil {
+			t.Fatalf("Failed to add %s key: %v", tc.name, err)
+		}
+		ids = append(ids, id)
+	}
+
+	// Verify all keys can be retrieved
+	for i, tc := range testCases {
+		retrievedKey, exists := dict.GetKey(ids[i])
+		if !exists {
+			t.Errorf("%s key should exist", tc.name)
+		}
+		if retrievedKey != tc.key {
+			t.Errorf("%s key mismatch: expected length %d, got length %d",
+				tc.name, len(tc.key), len(retrievedKey))
+		}
+	}
+
+	// Test persistence
+	dictInstance = nil
+	once = sync.Once{}
+	dict = GetGlobalKeyDict(testFile)
+
+	for i, tc := range testCases {
+		retrievedKey, exists := dict.GetKey(ids[i])
+		if !exists {
+			t.Errorf("%s key should exist after restart", tc.name)
+		}
+		if retrievedKey != tc.key {
+			t.Errorf("%s key mismatch after restart: expected length %d, got length %d",
+				tc.name, len(tc.key), len(retrievedKey))
+		}
+	}
+}
+
+// TestNonExistentKeys tests behavior with keys/IDs that don't exist
+func TestNonExistentKeys(t *testing.T) {
+	testFile := "test_nonexistent_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	// Test non-existent key
+	_, exists := dict.GetEntryID("nonexistent")
+	if exists {
+		t.Error("Non-existent key should not exist")
+	}
+
+	// Test non-existent ID
+	_, exists = dict.GetKey(999999)
+	if exists {
+		t.Error("Non-existent ID should not exist")
+	}
+}
+
+// BenchmarkAddEntry benchmarks the AddEntry operation
+func BenchmarkAddEntry(b *testing.B) {
+	testFile := "bench_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := fmt.Sprintf("bench_key_%d", i)
+		_, err := dict.AddEntry(key)
+		if err != nil {
+			b.Fatalf("Failed to add key: %v", err)
+		}
+	}
+}
+
+// BenchmarkGetEntryID benchmarks the GetEntryID operation
+func BenchmarkGetEntryID(b *testing.B) {
+	testFile := "bench_get_dict.db"
+	defer os.Remove(testFile)
+
+	dictInstance = nil
+	once = sync.Once{}
+	dict := GetGlobalKeyDict(testFile)
+
+	// Pre-populate with some data
+	keys := make([]string, 1000)
+	for i := 0; i < 1000; i++ {
+		keys[i] = fmt.Sprintf("bench_get_key_%d", i)
+		_, err := dict.AddEntry(keys[i])
+		if err != nil {
+			b.Fatalf("Failed to add key: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := keys[i%len(keys)]
+		_, _ = dict.GetEntryID(key)
 	}
 }
