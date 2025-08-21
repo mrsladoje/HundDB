@@ -4,11 +4,12 @@ package btree
 
 import (
 	"fmt"
-	"hunddb/model"
+	model "hunddb/model/record"
 	mt "hunddb/structures/memtable" // memtable interface
 	"math"
 	"sort"
 )
+
 var _ mt.Memtable = (*BTree)(nil)
 
 const (
@@ -49,11 +50,9 @@ type BTree struct {
 
 	// compacting flag to prevent recursive compaction
 	compacting bool
-	
+
 	// capacity is the maximum number of distinct keys (active + tombstoned)
 	capacity int
-
-
 }
 
 // TreeStats maintains statistics about the B-tree for compaction decisions.
@@ -62,8 +61,6 @@ type TreeStats struct {
 	TombstonedRecords int
 	ActiveRecords     int
 }
-
-
 
 // NewBTree creates a B-tree with an explicit capacity (distinct keys).
 func NewBTree(order, capacity int) *BTree {
@@ -144,7 +141,7 @@ func (bt *BTree) Add(record *model.Record) error {
 
 	// Trigger compaction if needed (avoid recursion).
 	if !bt.compacting && !record.IsDeleted() && bt.needsCompaction() {
-    	bt.compact()
+		bt.compact()
 	}
 	return nil
 }
@@ -153,8 +150,6 @@ func (bt *BTree) Add(record *model.Record) error {
 func (bt *BTree) IsFull() bool {
 	return bt.stats.TotalRecords >= bt.capacity
 }
-
-
 
 // Delete marks the key as tombstoned.
 // Behavior:
@@ -188,10 +183,6 @@ func (bt *BTree) Delete(record *model.Record) bool {
 	}
 	return false
 }
-
-
-
-
 
 // search recursively searches for a key in the B-tree starting from the given node.
 //
@@ -476,6 +467,7 @@ func (bt *BTree) Flush() error {
 func (bt *BTree) TotalEntries() int {
 	return bt.stats.TotalRecords
 }
+
 // Height returns the height of the B-tree.
 func (bt *BTree) Height() int {
 	if bt.root == nil {
@@ -495,4 +487,3 @@ func (bt *BTree) Height() int {
 
 	return height
 }
-

@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
-	mdl "hunddb/model"
+	block_location "hunddb/model/block_location"
 	block_manager "hunddb/structures/block_manager"
 	"os"
 	"strings"
@@ -37,7 +37,7 @@ func TestDebugLoadFromDisk(t *testing.T) {
 	headerCRC := crc32.ChecksumIEEE(headerBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(headerBlock[0:CRC_SIZE], headerCRC)
 
-	headerLocation := mdl.BlockLocation{FilePath: testFile, BlockIndex: 0}
+	headerLocation := block_location.BlockLocation{FilePath: testFile, BlockIndex: 0}
 	err := bm.WriteBlock(headerLocation, headerBlock)
 	if err != nil {
 		t.Fatalf("Failed to write header block: %v", err)
@@ -73,7 +73,7 @@ func TestDebugLoadFromDisk(t *testing.T) {
 	entryCRC := crc32.ChecksumIEEE(entryBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(entryBlock[0:CRC_SIZE], entryCRC)
 
-	entryLocation := mdl.BlockLocation{FilePath: testFile, BlockIndex: 1}
+	entryLocation := block_location.BlockLocation{FilePath: testFile, BlockIndex: 1}
 	err = bm.WriteBlock(entryLocation, entryBlock)
 	if err != nil {
 		t.Fatalf("Failed to write entry block: %v", err)
@@ -134,7 +134,7 @@ func TestLoadFromDiskWithOverflow(t *testing.T) {
 	headerCRC := crc32.ChecksumIEEE(headerBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(headerBlock[0:CRC_SIZE], headerCRC)
 
-	headerLocation := mdl.BlockLocation{FilePath: testFile, BlockIndex: 0}
+	headerLocation := block_location.BlockLocation{FilePath: testFile, BlockIndex: 0}
 	err := bm.WriteBlock(headerLocation, headerBlock)
 	if err != nil {
 		t.Fatalf("Failed to write header block: %v", err)
@@ -155,7 +155,7 @@ func TestLoadFromDiskWithOverflow(t *testing.T) {
 			entryCRC := crc32.ChecksumIEEE(currentBlock[CRC_SIZE:])
 			binary.LittleEndian.PutUint32(currentBlock[0:CRC_SIZE], entryCRC)
 
-			location := mdl.BlockLocation{FilePath: testFile, BlockIndex: uint64(currentBlockIndex)}
+			location := block_location.BlockLocation{FilePath: testFile, BlockIndex: uint64(currentBlockIndex)}
 			err := bm.WriteBlock(location, currentBlock)
 			if err != nil {
 				t.Fatalf("Failed to write block %d: %v", currentBlockIndex, err)
@@ -195,7 +195,7 @@ func TestLoadFromDiskWithOverflow(t *testing.T) {
 				entryCRC := crc32.ChecksumIEEE(currentBlock[CRC_SIZE:])
 				binary.LittleEndian.PutUint32(currentBlock[0:CRC_SIZE], entryCRC)
 
-				location := mdl.BlockLocation{FilePath: testFile, BlockIndex: uint64(currentBlockIndex)}
+				location := block_location.BlockLocation{FilePath: testFile, BlockIndex: uint64(currentBlockIndex)}
 				err := bm.WriteBlock(location, currentBlock)
 				if err != nil {
 					t.Fatalf("Failed to write block %d: %v", currentBlockIndex, err)
@@ -212,7 +212,7 @@ func TestLoadFromDiskWithOverflow(t *testing.T) {
 	entryCRC := crc32.ChecksumIEEE(currentBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(currentBlock[0:CRC_SIZE], entryCRC)
 
-	location := mdl.BlockLocation{FilePath: testFile, BlockIndex: uint64(currentBlockIndex)}
+	location := block_location.BlockLocation{FilePath: testFile, BlockIndex: uint64(currentBlockIndex)}
 	err = bm.WriteBlock(location, currentBlock)
 	if err != nil {
 		t.Fatalf("Failed to write final block: %v", err)

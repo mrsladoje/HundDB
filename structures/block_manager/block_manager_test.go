@@ -2,7 +2,7 @@ package block_manager
 
 import (
 	"bytes"
-	mdl "hunddb/model"
+	block_location "hunddb/model/block_location"
 	"os"
 	"testing"
 )
@@ -63,7 +63,7 @@ func TestBlockManager_WriteAndReadBlock(t *testing.T) {
 	tmpFile, cleanup := createTestFile(t, nil)
 	defer cleanup()
 
-	location := mdl.BlockLocation{
+	location := block_location.BlockLocation{
 		FilePath:   tmpFile,
 		BlockIndex: 0,
 	}
@@ -93,7 +93,7 @@ func TestBlockManager_ReadNonExistentFile(t *testing.T) {
 	instance = nil
 	bm := GetBlockManager()
 
-	location := mdl.BlockLocation{
+	location := block_location.BlockLocation{
 		FilePath:   "/nonexistent/path/file.dat",
 		BlockIndex: 0,
 	}
@@ -123,7 +123,7 @@ func TestBlockManager_MultipleBlocksInFile(t *testing.T) {
 	tmpFile, cleanup := createTestFile(t, nil)
 	defer cleanup()
 
-	locations := []mdl.BlockLocation{
+	locations := []block_location.BlockLocation{
 		{FilePath: tmpFile, BlockIndex: 0},
 		{FilePath: tmpFile, BlockIndex: 1},
 		{FilePath: tmpFile, BlockIndex: 2},
@@ -162,7 +162,7 @@ func TestBlockManager_CacheIntegration(t *testing.T) {
 	tmpFile, cleanup := createTestFile(t, nil)
 	defer cleanup()
 
-	location := mdl.BlockLocation{
+	location := block_location.BlockLocation{
 		FilePath:   tmpFile,
 		BlockIndex: 0,
 	}
@@ -211,7 +211,7 @@ func TestBlockManager_WriteToExistingFile(t *testing.T) {
 		newData[i] = 0x00
 	}
 
-	location := mdl.BlockLocation{
+	location := block_location.BlockLocation{
 		FilePath:   tmpFile,
 		BlockIndex: 1,
 	}
@@ -230,7 +230,7 @@ func TestBlockManager_WriteToExistingFile(t *testing.T) {
 		t.Error("Written block data mismatch")
 	}
 
-	location0 := mdl.BlockLocation{
+	location0 := block_location.BlockLocation{
 		FilePath:   tmpFile,
 		BlockIndex: 0,
 	}

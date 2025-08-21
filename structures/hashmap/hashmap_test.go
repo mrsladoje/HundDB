@@ -6,17 +6,18 @@ import (
 	"testing"
 	"time"
 
-	"hunddb/model"
+	model "hunddb/model/record"
 )
 
 // ---- helpers ----
 
 func makeRec(key, val string) *model.Record {
 	return &model.Record{
-		Key:       key,
-		Value:     []byte(val),
-		Tombstone: false,
-		Timestamp: uint64(time.Now().UnixNano()),
+		Key:        key,
+		Value:      []byte(val),
+		Tombstone:  false,
+		Timestamp:  uint64(time.Now().UnixNano()),
+		Compressed: false,
 	}
 }
 

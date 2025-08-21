@@ -1,6 +1,6 @@
 package memtable
 
-import "hunddb/model"
+import model "hunddb/model/record"
 
 // Memtable is the in-memory KV interface used by the engine.
 // It stores the latest value per key, including logical deletions via tombstones.
@@ -36,4 +36,3 @@ type Memtable interface {
 	// Exact semantics are implementation-specific.
 	Flush() error
 }
-

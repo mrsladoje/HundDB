@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
-	mdl "hunddb/model"
+	block_location "hunddb/model/block_location"
 	block_manager "hunddb/structures/block_manager"
 	"sync"
 )
@@ -13,6 +13,7 @@ import (
 TODO: We should make some kind of a compaction mechanism for
 the dictionary - it would rebuild the whole dict after compactions
 of SSTables and remove any keys that are no longer present in the DB.
+We should be careful not to persist a compressed key that is not present in the DB.
 */
 
 // GlobalKeyDict is a singleton that manages a global dictionary for string keys
@@ -136,7 +137,7 @@ func (dict *GlobalKeyDict) persistEntry(id uint64, key string) error {
 	keyBytes := []byte(key)
 	keyLength := uint64(len(keyBytes))
 
-	lastBlockLocation := mdl.BlockLocation{
+	lastBlockLocation := block_location.BlockLocation{
 		FilePath:   dict.filePath,
 		BlockIndex: dict.lastBlockIndex,
 	}
@@ -177,7 +178,7 @@ func (dict *GlobalKeyDict) persistEntry(id uint64, key string) error {
 			keyLength -= remainingSpace
 			dict.lastBlockOffset = CRC_SIZE
 			blockData = dict.addCRCToData(blockData)
-			err := dict.blockManager.WriteBlock(mdl.BlockLocation{
+			err := dict.blockManager.WriteBlock(block_location.BlockLocation{
 				FilePath:   dict.filePath,
 				BlockIndex: dict.lastBlockIndex,
 			}, blockData)
@@ -190,7 +191,7 @@ func (dict *GlobalKeyDict) persistEntry(id uint64, key string) error {
 		}
 		copy(blockData[dict.lastBlockOffset:], keyBytes)
 		blockData = dict.addCRCToData(blockData)
-		err = dict.blockManager.WriteBlock(mdl.BlockLocation{
+		err = dict.blockManager.WriteBlock(block_location.BlockLocation{
 			FilePath:   dict.filePath,
 			BlockIndex: dict.lastBlockIndex,
 		}, blockData)
@@ -212,7 +213,7 @@ func (dict *GlobalKeyDict) persistEntry(id uint64, key string) error {
 
 // resetHeaderBlock resets the header block with the current state of the dictionary.
 func (dict *GlobalKeyDict) resetHeaderBlock() error {
-	headerBlock, err := dict.blockManager.ReadBlock(mdl.BlockLocation{
+	headerBlock, err := dict.blockManager.ReadBlock(block_location.BlockLocation{
 		FilePath:   dict.filePath,
 		BlockIndex: 0,
 	})
@@ -227,7 +228,7 @@ func (dict *GlobalKeyDict) resetHeaderBlock() error {
 
 	dict.addCRCToData(headerBlock)
 
-	err = dict.blockManager.WriteBlock(mdl.BlockLocation{
+	err = dict.blockManager.WriteBlock(block_location.BlockLocation{
 		FilePath:   dict.filePath,
 		BlockIndex: 0,
 	}, headerBlock)
@@ -240,7 +241,7 @@ func (dict *GlobalKeyDict) resetHeaderBlock() error {
 
 // loadFromDisk loads the dictionary from the disk if it exists.
 func (dict *GlobalKeyDict) loadFromDisk() error {
-	headerLocation := mdl.BlockLocation{
+	headerLocation := block_location.BlockLocation{
 		FilePath:   dict.filePath,
 		BlockIndex: 0,
 	}
@@ -277,7 +278,7 @@ We are careful about entries spanning multiple blocks.
 func (dict *GlobalKeyDict) loadEntries(expectedEntries uint64) error {
 	entriesLeft := expectedEntries
 
-	currentLocation := mdl.BlockLocation{
+	currentLocation := block_location.BlockLocation{
 		FilePath:   dict.filePath,
 		BlockIndex: 1,
 	}
@@ -365,7 +366,7 @@ func (dict *GlobalKeyDict) initializeNewFile() error {
 	binary.LittleEndian.PutUint32(headerBlock[:CRC_SIZE], crc)
 
 	// Write header block
-	headerLocation := mdl.BlockLocation{FilePath: dict.filePath, BlockIndex: 0}
+	headerLocation := block_location.BlockLocation{FilePath: dict.filePath, BlockIndex: 0}
 	err := dict.blockManager.WriteBlock(headerLocation, headerBlock)
 	if err != nil {
 		return err
@@ -376,7 +377,7 @@ func (dict *GlobalKeyDict) initializeNewFile() error {
 	crc = crc32.ChecksumIEEE(dataBlock[CRC_SIZE:])
 	binary.LittleEndian.PutUint32(dataBlock[:CRC_SIZE], crc)
 
-	dataLocation := mdl.BlockLocation{FilePath: dict.filePath, BlockIndex: 1}
+	dataLocation := block_location.BlockLocation{FilePath: dict.filePath, BlockIndex: 1}
 	err = dict.blockManager.WriteBlock(dataLocation, dataBlock)
 	if err != nil {
 		return err

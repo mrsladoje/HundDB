@@ -5,15 +5,10 @@ package sstable
 // )
 
 import (
-	mdl "hunddb/model"
+	mdl "hunddb/model/record"
 	bloom_filter "hunddb/structures/bloom_filter"
 	merkle_tree "hunddb/structures/merkle_tree"
 )
-
-// TODO: We must implement a compressed record (without the data part)
-// when the Tombstone is true (SerializeForDisk method will suffice)
-
-// TODO: We must implement a global compression dictionary for string keys in utils
 
 // SSTable is an on-disk immutable key-value storage structure.
 type SSTable struct {

@@ -4,12 +4,12 @@ import (
 	"testing"
 	"time"
 
-	"hunddb/model"
+	model "hunddb/model/record"
 )
 
 // helper to create records with current timestamp
 func rec(key string, val []byte, tomb bool) *model.Record {
-	return model.NewRecord(key, val, uint64(time.Now().UnixNano()), tomb)
+	return model.NewRecord(key, val, uint64(time.Now().UnixNano()), tomb, false)
 }
 
 // TestNew verifies basic construction
