@@ -7,6 +7,7 @@ import (
 )
 
 // TODO: Displace the filepath for globalKeyDict to a config file
+// TODO: Remove the Compressed field, we get compression status from SSTable config
 
 // Record represents a key-value pair with metadata for the storage engine.
 // It includes tombstone marking for deletion and timestamp for versioning.
@@ -43,7 +44,7 @@ func (r *Record) MarkDeleted() {
 Serialization format for Record, for the Write-Ahead Log (WAL):
 
    +-------------------+---------------+---------------+-----------------+-...-+--...--+
-   | Timestamp (8B)   | Tombstone(1B) | Key Size (8B) | Value Size (8B) | Key | Value |
+   | Timestamp (8B)    | Tombstone(1B) | Key Size (8B) | Value Size (8B) | Key | Value |
    +-------------------+---------------+---------------+-----------------+-...-+--...--+
 
    Timestamp = Timestamp of the operation in seconds
@@ -106,12 +107,12 @@ const (
 	VALUE_SIZE_COMPRESSED_START = INDEX_START_SSTABLE + KEY_SIZE_SIZE
 )
 
-// Size returns the size of the record in bytes. Used for WAL records.
+// Size returns the size of the serialized record in bytes. Used for WAL records.
 func (r *Record) Size() int {
 	return TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + len(r.Key) + len(r.Value)
 }
 
-// Size returns the size of the record in bytes.
+// Size returns the size of the serialized record in bytes. Used for SSTable records.
 func (r *Record) SizeSSTable() int {
 	if r.Compressed {
 		if r.Tombstone {
@@ -148,7 +149,15 @@ func (rec *Record) Serialize() []byte {
 	return data
 }
 
-// SerializeForSSTableUncompressed serializes a Record into a byte array without compression.
+// SerializeForSSTable serializes a Record into a byte array for SSTable storage.
+func (rec *Record) SerializeForSSTable(compressed bool) []byte {
+	if compressed {
+		return rec.serializeForSSTableCompressed()
+	}
+	return rec.serializeForSSTableUncompressed()
+}
+
+// serializeForSSTableUncompressed serializes a Record into a byte array without compression.
 // The byte array contains the following fields:
 // - Compressed: 1 byte indicating if the value is compressed
 // - Timestamp: 8 bytes for the timestamp
@@ -158,7 +167,7 @@ func (rec *Record) Serialize() []byte {
 // - Key: variable length for the key data
 // - Value: variable length for the value data
 // Note: CRC is handled for each block itself, not here
-func (rec *Record) SerializeForSSTableUncompressed() []byte {
+func (rec *Record) serializeForSSTableUncompressed() []byte {
 	data := make([]byte, rec.SizeSSTable())
 
 	data[COMPRESSED_FLAG_START] = 0
@@ -177,7 +186,7 @@ func (rec *Record) SerializeForSSTableUncompressed() []byte {
 	return data
 }
 
-// SerializeForSSTableCompressed serializes a Record into a byte array with compression.
+// serializeForSSTableCompressed serializes a Record into a byte array with compression.
 // The byte array contains the following fields:
 // - Compressed: 1 byte indicating if the value is compressed
 // - Timestamp: 8 bytes for the timestamp
@@ -186,7 +195,7 @@ func (rec *Record) SerializeForSSTableUncompressed() []byte {
 // - ValueSize: 8 bytes for the size of the value (if not tombstoned)
 // - Value: variable length for the value data (if not tombstoned)
 // Note: CRC is handled for each block itself, not here
-func (rec *Record) SerializeForSSTableCompressed() []byte {
+func (rec *Record) serializeForSSTableCompressed() []byte {
 	data := make([]byte, rec.SizeSSTable())
 
 	data[COMPRESSED_FLAG_START] = 0

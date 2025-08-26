@@ -1,13 +1,51 @@
 package sstable
 
-// import (
-// 	block_manager "hunddb/structures/block_manager"
-// )
-
 import (
-	mdl "hunddb/model/record"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	block_location "hunddb/model/block_location"
+	record "hunddb/model/record"
+	block_manager "hunddb/structures/block_manager"
 	bloom_filter "hunddb/structures/bloom_filter"
 	merkle_tree "hunddb/structures/merkle_tree"
+	byte_util "hunddb/utils/byte_util"
+	crc_util "hunddb/utils/crc"
+)
+
+/*
+TODO:
+1. Serialize and write to disk (DONE)
+2. Get method
+3. Compaction-merging
+
+Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
+*/
+
+// TODO: Load from config
+var (
+	COMPRESSION_ENABLED = true
+	BLOCK_SIZE          = 1024 * uint64(4) // 4KB
+	USE_SEPARATE_FILES  = true
+	SPARSE_STEP_INDEX   = 10 // Every 10th index goes into the summary
+)
+
+const (
+	FILE_NAME_FORMAT          = "sstable_%d.db"
+	DATA_FILE_NAME_FORMAT     = "sstable_%d_data.db"
+	INDEX_FILE_NAME_FORMAT    = "sstable_%d_index.db"
+	SUMMARY_FILE_NAME_FORMAT  = "sstable_%d_summary.db"
+	FILTER_FILE_NAME_FORMAT   = "sstable_%d_filter.db"
+	METADATA_FILE_NAME_FORMAT = "sstable_%d_metadata.db"
+
+	CRC_SIZE = 4
+
+	INDEX_ENTRY_METADATA_SIZE = 24
+	INDEX_ENTRY_PART_SIZE     = 8
+
+	STANDARD_FLAG_SIZE = 8
+
+	BLOOM_FILTER_FALSE_POSITIVE_RATE = 0.01
 )
 
 // SSTable is an on-disk immutable key-value storage structure.
@@ -41,11 +79,8 @@ type SSTable struct {
 // Interface for all SSTable components.
 type SSTableComponent interface {
 
-	// Serialize should turn the component into a byte array
-	Serialize() ([]byte, error)
-
-	// Write to disk should write the component to the disk at the given location.
-	WriteToDisk(filePath string, startOffset uint64) error
+	// Serialize should turn the component into a byte array, returns the size as well
+	serialize() ([]byte, uint64, error)
 }
 
 // SSTable configuration - mostly user defined settings.
@@ -62,21 +97,25 @@ type SSTableConfig struct {
 	UseSeparateFiles bool
 
 	/*
-		Base file path - this file will always persist SSTableConfig,
+		Base file will always persist SSTableConfig,
 		and potentially the whole SSTable if UseSeparateFiles is false.
 
 		The file would be named sstable_{index}.db, if we use seperate files for
 		components, they would be sstable_{index}_filter.db and similar for others..
 	*/
-	FilePath string
 
 	/*
 		What sstable_{index}.db looks like in memory (in case of UseSeparateFiles = true,
 		only the config part is present).
-		Config includes non-component fields of the SSTable - level, index, ...
-		+-------------------+---------------+----------------+-----------------+-...-+--...--+
-		| Config Size (8B)  | Config        | Data Size (8B) | Data            | ... |  ...  |
-		+-------------------+---------------+----------------+-----------------+-...-+--...--+
+		+---------+--------+-----------+------
+		| Config  |  Data  | IndexComp | ...
+		+---------+--------+-----------+------
+
+		In case of a single file storage, we will add positional and size info to Config part,
+		for each component, to allow for easier access.
+
+		In case of seperate file storage, we will add a size flag at the beginning of the bytes
+		of each serialized component, to help with deserialization (avoid the padding).
 	*/
 
 	/*
@@ -90,11 +129,6 @@ type SSTableConfig struct {
 		Chosen by user.
 	*/
 	SparseStepIndex int
-
-	/*
-		Size of a block in bytes.
-	*/
-	BlockSize uint64
 }
 
 // DataComp handles the actual key-value data storage.
@@ -119,7 +153,7 @@ type DataComp struct {
 		Records are the actual key-value pairs stored in the SSTable.
 		They are serialized and stored in the DataComp.
 	*/
-	Records []mdl.Record
+	Records []record.Record
 }
 
 // IndexEntry represents an entry in the IndexComp.
@@ -129,6 +163,30 @@ type IndexEntry struct {
 		Offset in DataComp where this record starts.
 	*/
 	Offset uint64
+}
+
+// Serialization format:
+//
+//	+--------------+------------------+       ...       --------------------------------+
+//	| Offset (8B)  | Key Length (8B)  |  will be added    Offset (in Index itself) (8B) |
+//	+--------------+------------------+       ...       --------------------------------+
+//
+// We will need to add the Offset of IndexEntry in IndexComp or SummaryComp itself to be able to
+// access the key easily and perform binary search.
+func (entry *IndexEntry) serialize() ([]byte, []byte, error) {
+	// Calculate the total size needed
+	keyBytes := []byte(entry.Key)
+	keyLen := uint64(len(keyBytes))
+
+	// Create buffer with the calculated size
+	metadataBuf := make([]byte, 16)
+
+	// Write offset as little-endian uint64
+	binary.LittleEndian.PutUint64(metadataBuf[0:8], entry.Offset)
+	// Write key length as little-endian uint64
+	binary.LittleEndian.PutUint64(metadataBuf[8:16], keyLen)
+
+	return metadataBuf, keyBytes, nil
 }
 
 // IndexComp provides indexes for efficient data access.
@@ -237,4 +295,434 @@ type MetadataComp struct {
 		MerkleTree for the SSTable for integrity verification.
 	*/
 	MerkleTree *merkle_tree.MerkleTree
+}
+
+/*
+PersistMemtable is used to save the memtable to disk.
+
+We handle WHOLE SSTable parts in-memory, since it is not larger than
+the Memtable we'd kept in-memory. For compaction, bottlenecks may arise
+due to increased size, so we work block by block there.
+*/
+func PersistMemtable(sortedRecords []record.Record, index int, level int) error {
+
+	// 1. Persist SSTableConfig
+	SSTableConfig := &SSTableConfig{
+		UseSeparateFiles:   USE_SEPARATE_FILES,
+		CompressionEnabled: COMPRESSION_ENABLED,
+		SparseStepIndex:    SPARSE_STEP_INDEX,
+	}
+
+	serializedConfig, configSize, err := SSTableConfig.serialize()
+	if err != nil {
+		return err
+	}
+	err = writeToDisk(serializedConfig, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
+	if err != nil {
+		return err
+	}
+
+	// 2. Persist DataComp (actual key-value pairs)
+	dataStartOffset := configSize
+	dataFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if USE_SEPARATE_FILES {
+		dataStartOffset = 0
+		dataFilePath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	}
+	dataComp := &DataComp{
+		FilePath:    dataFilePath,
+		StartOffset: dataStartOffset,
+		Records:     sortedRecords,
+	}
+
+	serializedData, dataSize, err := dataComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = writeToDisk(serializedData, dataComp.FilePath, dataComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 3. Persist IndexComp
+	indexStartOffset := dataStartOffset + uint64(len(serializedData))
+	indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if USE_SEPARATE_FILES {
+		indexStartOffset = 0
+		indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	}
+
+	serializedRecords := make([][]byte, len(sortedRecords))
+	for i, rec := range sortedRecords {
+		serializedRecords[i] = rec.SerializeForSSTable(COMPRESSION_ENABLED)
+	}
+
+	indexComp := &IndexComp{
+		FilePath:     indexFilePath,
+		StartOffset:  indexStartOffset,
+		IndexEntries: generateIndexEntries(sortedRecords, serializedRecords, dataStartOffset),
+	}
+
+	serializedIndex, indexSize, err := indexComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = writeToDisk(serializedIndex, indexComp.FilePath, indexComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 4. Persist SummaryComp
+	summaryStartOffset := indexStartOffset + uint64(len(serializedIndex))
+	summaryFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if USE_SEPARATE_FILES {
+		summaryStartOffset = 0
+		summaryFilePath = fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	}
+
+	summaryComp := &SummaryComp{
+		FilePath:     summaryFilePath,
+		StartOffset:  summaryStartOffset,
+		MinKey:       sortedRecords[0].Key,
+		MaxKey:       sortedRecords[len(sortedRecords)-1].Key,
+		IndexEntries: generateSummaryEntries(indexComp.IndexEntries),
+	}
+
+	serializedSummary, summarySize, err := summaryComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = writeToDisk(serializedSummary, summaryComp.FilePath, summaryComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 5. Persist FilterComp (Bloom Filter)
+	filterStartOffset := summaryStartOffset + uint64(len(serializedSummary))
+	filterFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if USE_SEPARATE_FILES {
+		filterFilePath = fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index)
+		filterStartOffset = 0
+	}
+
+	bloomFilter := bloom_filter.NewBloomFilter(len(sortedRecords), BLOOM_FILTER_FALSE_POSITIVE_RATE)
+	for _, rec := range sortedRecords {
+		bloomFilter.Add([]byte(rec.Key))
+	}
+	filterComp := &FilterComp{
+		FilePath:    filterFilePath,
+		StartOffset: filterStartOffset,
+		BloomFilter: bloomFilter,
+	}
+
+	serializedFilter, filterSize, err := filterComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = writeToDisk(serializedFilter, filterComp.FilePath, filterComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 6. Persist MetadataComp (MerkleTree)
+	metaDataStartOffset := filterStartOffset + uint64(len(serializedFilter))
+	metaDataFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if USE_SEPARATE_FILES {
+		metaDataStartOffset = 0
+		metaDataFilePath = fmt.Sprintf(METADATA_FILE_NAME_FORMAT, index)
+	}
+
+	merkleTree, err := merkle_tree.NewMerkleTree(serializedRecords)
+	if err != nil {
+		return err
+	}
+	metadataComp := &MetadataComp{
+		FilePath:    metaDataFilePath,
+		StartOffset: metaDataStartOffset,
+		MerkleTree:  merkleTree,
+	}
+
+	serializedMerkle, metadataSize, err := metadataComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = writeToDisk(serializedMerkle, metadataComp.FilePath, metadataComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	sizes := []uint64{dataSize, indexSize, summarySize, filterSize, metadataSize}
+	offsets := []uint64{dataStartOffset, indexStartOffset, summaryStartOffset, filterStartOffset, metaDataStartOffset}
+	err = SSTableConfig.addSizeDataToConfig(sizes, offsets, int(index))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+/*
+The serialized data of the SSTableConfig takes up only 1 block.
+
+This is the pattern (without the CRC):
+
+	+-----------------------+-------------------------+----------------------+
+	| UseSeparateFiles (1B) | CompressionEnabled (1B) | SparseStepIndex (8B) |
+	+-----------------------+-------------------------+----------------------+
+*/
+func (config *SSTableConfig) serialize() ([]byte, uint64, error) {
+
+	data := make([]byte, BLOCK_SIZE)
+
+	data[CRC_SIZE] = byte_util.BoolToByte(config.UseSeparateFiles)
+	data[CRC_SIZE+1] = byte_util.BoolToByte(config.CompressionEnabled)
+	binary.LittleEndian.PutUint64(data[CRC_SIZE+2:CRC_SIZE+10], uint64(config.SparseStepIndex))
+
+	data = crc_util.AddCRCToBlockData(data)
+
+	return data, BLOCK_SIZE, nil
+}
+
+func (data *DataComp) serialize() ([]byte, uint64, error) {
+
+	serializedData := []byte{}
+	for _, rec := range data.Records {
+		serializedData = append(serializedData, rec.SerializeForSSTable(COMPRESSION_ENABLED)...)
+	}
+
+	prependSizePrefix(&serializedData)
+	finalBytes := crc_util.AddCRCsToData(serializedData)
+	finalSizeBytes := uint64(len(finalBytes))
+
+	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+
+	return finalBytes, finalSizeBytes, nil
+}
+
+// generateIndexEntries creates index entries for the sorted records, accounting for
+// block structure with CRC headers and data start offset for single/separate file modes.
+func generateIndexEntries(sortedRecords []record.Record, serializedRecords [][]byte, dataStartOffset uint64) []IndexEntry {
+	indexEntries := make([]IndexEntry, 0, len(sortedRecords))
+
+	currentOffset := dataStartOffset
+	accumulatedOffset := uint64(0)
+
+	for i, rec := range sortedRecords {
+		// Calculate the offset considering CRC and block boundaries
+		noOfBlocks := uint64(accumulatedOffset / (BLOCK_SIZE - CRC_SIZE))
+		actualOffset := currentOffset + noOfBlocks*CRC_SIZE
+		indexEntry := IndexEntry{
+			Key:    rec.Key,
+			Offset: actualOffset,
+		}
+		indexEntries = append(indexEntries, indexEntry)
+
+		// Update currentOffset based on the serialized record size
+		currentOffset += uint64(len(serializedRecords[i]))
+		accumulatedOffset += uint64(len(serializedRecords[i]))
+	}
+
+	return indexEntries
+}
+
+/*
+The serialization format:
+
+	+------------------+------------------+
+	| Metadata Section | Key Data Section |
+	+------------------+------------------+
+
+The Metadata section would contain the offset information for each key in the Key Data section.
+The offset is of course relative to the IndexComp.
+
+This is a metadata entry:
+
+	+--------------+------------------+-------------------------------+
+	| Offset (8B)  | Key Length (8B)  | Offset (in Index itself) (8B) |
+	+--------------+------------------+-------------------------------+
+*/
+func (index *IndexComp) serialize() ([]byte, uint64, error) {
+	metadataBytes := []byte{}
+	keyDataBytes := []byte{}
+
+	keyStartOffset := uint64(0)
+
+	metadataSize := uint64(len(index.IndexEntries)) * INDEX_ENTRY_METADATA_SIZE
+	metadataSize = (metadataSize / (BLOCK_SIZE - CRC_SIZE)) * BLOCK_SIZE
+
+	for _, entry := range index.IndexEntries {
+		metadataEntry, keyBytes, err := entry.serialize()
+		if err != nil {
+			return nil, 0, err
+		}
+		indexIndexOffset := metadataSize + (keyStartOffset/(BLOCK_SIZE-CRC_SIZE))*BLOCK_SIZE
+		metadataEntryWithIndexOffset := append(metadataEntry, make([]byte, 8)...)
+		binary.LittleEndian.PutUint64(metadataEntryWithIndexOffset[16:24], indexIndexOffset)
+		metadataBytes = append(metadataBytes, metadataEntryWithIndexOffset...)
+		keyDataBytes = append(keyDataBytes, keyBytes...)
+
+		keyStartOffset += uint64(len(keyBytes))
+	}
+
+	serializedData := append(metadataBytes, keyDataBytes...)
+	prependSizePrefix(&serializedData)
+
+	finalBytes := crc_util.AddCRCsToData(serializedData)
+	finalSizeBytes := uint64(len(finalBytes))
+
+	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+
+	return finalBytes, finalSizeBytes, nil
+}
+
+// generateSummaryEntries creates summary entries from the index entries.
+func generateSummaryEntries(indexEntries []IndexEntry) []IndexEntry {
+	summaryEntries := make([]IndexEntry, 0, len(indexEntries))
+
+	for i, entry := range indexEntries {
+		if i%SPARSE_STEP_INDEX == 0 {
+			summaryEntries = append(summaryEntries, entry)
+		}
+	}
+
+	return summaryEntries
+}
+
+/*
+The serialization format:
+
+	+------------------+------------------+
+	| Metadata Section | Key Data Section |
+	+------------------+------------------+
+
+The Metadata section would contain the offset information for each key in the Key Data section.
+The offset is of course relative to the SummaryComp.
+The Metadata begins with an 8 byte offset for the start of the last entry, allowing us to utilize binary search .
+
+This is a metadata entry:
+
+	+--------------+------------------+-------------------------------+
+	| Offset (8B)  | Key Length (8B)  | Offset (in Index itself) (8B) |
+	+--------------+------------------+-------------------------------+
+*/
+func (index *SummaryComp) serialize() ([]byte, uint64, error) {
+	metadataBytes := []byte{}
+	keyDataBytes := []byte{}
+
+	keyStartOffset := uint64(0)
+
+	metadataSize := uint64(len(index.IndexEntries))*INDEX_ENTRY_METADATA_SIZE + INDEX_ENTRY_PART_SIZE
+	metadataSize = (metadataSize / (BLOCK_SIZE - CRC_SIZE)) * BLOCK_SIZE
+
+	lastEntryOffset := metadataSize
+	if lastEntryOffset/BLOCK_SIZE != (lastEntryOffset-1)/BLOCK_SIZE {
+		lastEntryOffset -= INDEX_ENTRY_METADATA_SIZE + CRC_SIZE
+	} else {
+		lastEntryOffset -= INDEX_ENTRY_METADATA_SIZE
+	}
+	metadataBytes = append(metadataBytes, make([]byte, 8)...)
+	binary.LittleEndian.PutUint64(metadataBytes[0:8], lastEntryOffset)
+
+	for _, entry := range index.IndexEntries {
+		metadataEntry, keyBytes, err := entry.serialize()
+		if err != nil {
+			return nil, 0, err
+		}
+		indexIndexOffset := metadataSize + (keyStartOffset/(BLOCK_SIZE-CRC_SIZE))*BLOCK_SIZE
+		metadataEntryWithIndexOffset := append(metadataEntry, make([]byte, 8)...)
+		binary.LittleEndian.PutUint64(metadataEntryWithIndexOffset[16:24], indexIndexOffset)
+		metadataBytes = append(metadataBytes, metadataEntryWithIndexOffset...)
+		keyDataBytes = append(keyDataBytes, keyBytes...)
+
+		keyStartOffset += uint64(len(keyBytes))
+	}
+
+	serializedData := append(metadataBytes, keyDataBytes...)
+	prependSizePrefix(&serializedData)
+
+	finalBytes := crc_util.AddCRCsToData(serializedData)
+	finalSizeBytes := uint64(len(finalBytes))
+
+	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+
+	return finalBytes, finalSizeBytes, nil
+}
+
+func (filterComp *FilterComp) serialize() ([]byte, uint64, error) {
+
+	serializedFilter := filterComp.BloomFilter.Serialize()
+	prependSizePrefix(&serializedFilter)
+
+	finalBytes := crc_util.AddCRCsToData(serializedFilter)
+	finalSizeBytes := uint64(len(finalBytes))
+
+	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+
+	return finalBytes, finalSizeBytes, nil
+}
+
+func (metaComp *MetadataComp) serialize() ([]byte, uint64, error) {
+
+	serializedMerkle := metaComp.MerkleTree.Serialize()
+	prependSizePrefix(&serializedMerkle)
+
+	finalBytes := crc_util.AddCRCsToData(serializedMerkle)
+	finalSizeBytes := uint64(len(finalBytes))
+
+	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+
+	return finalBytes, finalSizeBytes, nil
+}
+
+func writeToDisk(serializedData []byte, filePath string, startOffset uint64) error {
+	blockManager := block_manager.GetBlockManager()
+
+	currentLocation := block_location.BlockLocation{
+		FilePath:   filePath,
+		BlockIndex: startOffset / BLOCK_SIZE,
+	}
+	startBlockIndex := currentLocation.BlockIndex
+
+	for i := uint64(0); i < uint64(len(serializedData))/BLOCK_SIZE; i++ {
+		currentLocation.BlockIndex = startBlockIndex + i
+		err := blockManager.WriteBlock(currentLocation, serializedData[i*BLOCK_SIZE:(i+1)*BLOCK_SIZE])
+		if err != nil {
+			return errors.New("failed to write block to disk")
+		}
+	}
+	return nil
+}
+
+func prependSizePrefix(serializedData *[]byte) {
+	if USE_SEPARATE_FILES {
+		size_prefix := make([]byte, STANDARD_FLAG_SIZE)
+		binary.LittleEndian.PutUint64(size_prefix[0:STANDARD_FLAG_SIZE], crc_util.SizeAfterAddingCRCs(uint64(len(*serializedData))))
+		*serializedData = append(size_prefix, *serializedData...)
+	}
+}
+
+func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint64, index int) error {
+	configData, _, err := config.serialize()
+	if err != nil {
+		return err
+	}
+	configData = configData[CRC_SIZE:]
+	if !config.UseSeparateFiles {
+		offset := uint64(1 + 1 + 8)
+		for i := 0; i < len(sizes); i++ {
+			binary.LittleEndian.PutUint64(configData[offset:offset+STANDARD_FLAG_SIZE], sizes[i])
+			offset += STANDARD_FLAG_SIZE
+			binary.LittleEndian.PutUint64(configData[offset:offset+STANDARD_FLAG_SIZE], offsets[i])
+			offset += STANDARD_FLAG_SIZE
+		}
+	}
+
+	configData = crc_util.AddCRCToBlockData(configData)
+
+	err = writeToDisk(configData, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

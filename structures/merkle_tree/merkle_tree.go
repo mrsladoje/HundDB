@@ -24,12 +24,17 @@ type MerkleTree struct {
 	merkleRoot *MerkleNode // Pointer to the root node of the Merkle tree
 }
 
-// TODO: Params will be blocks when that code is done, string for NOW, it will use block manager!
+// Hashable is an interface that represents types that can be hashed.
+// For production, Record will be used, but we keep string to maintain testing simplicity.
+type Hashable interface {
+	string | []byte
+}
+
 // NewMerkleTree creates a new Merkle tree from the given blocks, and to make it a binary tree
 // it will add neutral nodes(nil for all attributes) at the right most side of the tree
 // blocks: a slice of blocks with which the Merkle tree will be created.
 // returns: Merkle tree instance and an error if there was no blocks to construct the tree.
-func NewMerkleTree(blocks []string) (*MerkleTree, error) {
+func NewMerkleTree[T Hashable](blocks []T) (*MerkleTree, error) {
 	if len(blocks) == 0 {
 		return nil, ErrEmptyTree
 	}
@@ -37,7 +42,14 @@ func NewMerkleTree(blocks []string) (*MerkleTree, error) {
 	// Create leaf nodes
 	nodes := make([]*MerkleNode, 0, len(blocks))
 	for _, block := range blocks {
-		hashedValue := md5.Sum([]byte(block))
+		var hashedValue [16]byte
+
+		switch v := any(block).(type) {
+		case string:
+			hashedValue = md5.Sum([]byte(v))
+		case []byte:
+			hashedValue = md5.Sum(v)
+		}
 		nodes = append(nodes, &MerkleNode{hashedValue: hashedValue})
 	}
 

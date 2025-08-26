@@ -356,7 +356,7 @@ func TestSerializeDeserializeSSTableUncompressed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			serialized := tt.record.SerializeForSSTableUncompressed()
+			serialized := tt.record.SerializeForSSTable(false)
 			deserialized := DeserializeForSSTable(serialized)
 
 			compareRecords(t, tt.record, deserialized)
@@ -421,7 +421,7 @@ func TestDeserializeForSSTable(t *testing.T) {
 			Compressed: false,
 		}
 
-		serialized := record.SerializeForSSTableUncompressed()
+		serialized := record.SerializeForSSTable(false)
 		deserialized := DeserializeForSSTable(serialized)
 
 		compareRecords(t, record, deserialized)
@@ -513,7 +513,7 @@ func TestConsistencyBetweenSizeAndSerialization(t *testing.T) {
 
 			// Test SSTable consistency
 			expectedSSTableSize := tt.record.SizeSSTable()
-			actualSSTableSize := len(tt.record.SerializeForSSTableUncompressed())
+			actualSSTableSize := len(tt.record.SerializeForSSTable(false))
 			if expectedSSTableSize != actualSSTableSize {
 				t.Errorf("SSTable size mismatch: expected %d, got %d", expectedSSTableSize, actualSSTableSize)
 			}
@@ -545,12 +545,12 @@ func BenchmarkSerialization(b *testing.B) {
 
 	b.Run("SSTable Uncompressed Serialize", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = record.SerializeForSSTableUncompressed()
+			_ = record.SerializeForSSTable(false)
 		}
 	})
 
 	b.Run("SSTable Uncompressed Deserialize", func(b *testing.B) {
-		serialized := record.SerializeForSSTableUncompressed()
+		serialized := record.SerializeForSSTable(false)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			_ = DeserializeForSSTable(serialized)
@@ -605,7 +605,7 @@ func TestSerializationRoundTrip(t *testing.T) {
 
 		// Test SSTable round trip
 		record.Compressed = false
-		ssTableSerialized := record.SerializeForSSTableUncompressed()
+		ssTableSerialized := record.SerializeForSSTable(false)
 		ssTableDeserialized := DeserializeForSSTable(ssTableSerialized)
 		compareRecords(t, record, ssTableDeserialized)
 	}
