@@ -2,6 +2,7 @@ package crc
 
 import (
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"math"
 )
@@ -57,9 +58,29 @@ func AddCRCsToData(serializedData []byte) []byte {
 	return finalBytes
 }
 
+/*
+SizeAfterAddingCRCs calculates the size of the byte data after adding CRCs for each block.
+*/
 func SizeAfterAddingCRCs(originalSize uint64) uint64 {
 	dataPerBlock := BLOCK_SIZE - CRC_SIZE
 	numBlocks := int(math.Ceil(float64(originalSize) / float64(dataPerBlock)))
 
 	return uint64(numBlocks) * BLOCK_SIZE
+}
+
+/*
+CheckBlockIntegrity checks the integrity of a block by verifying its CRC.
+*/
+func CheckBlockIntegrity(blockData []byte) error {
+	if len(blockData) < CRC_SIZE {
+		return errors.New("invalid block data")
+	}
+
+	storedCRC := binary.LittleEndian.Uint32(blockData[0:CRC_SIZE])
+	computedCRC := crc32.ChecksumIEEE(blockData[CRC_SIZE:])
+	if storedCRC != computedCRC {
+		return errors.New("CRC mismatch in block")
+	}
+
+	return nil
 }

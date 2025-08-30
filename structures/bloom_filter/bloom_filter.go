@@ -53,9 +53,9 @@ func (bf *BloomFilter) Add(item []byte) {
 }
 
 // Contains checks if an item is in the Bloom Filter.
-// It can tell with 100% certainty that the element is contained, but will tell if it isn't
-// contained with false positive rate used as a parameter when creating an instance.
-// item: the element to be checked.
+// It can tell with 100% certainty that the element is NOT contained (no false negatives),
+// but may return true for elements that were never added (false positives) with the
+// probability determined by the falsePositiveRate used when creating the filter.
 func (bf *BloomFilter) Contains(item []byte) bool {
 	for i := uint32(0); i < bf.k; i++ {
 		hash := bf.h[i].Hash(item) % uint64(bf.m)

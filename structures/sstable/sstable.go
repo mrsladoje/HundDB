@@ -18,6 +18,7 @@ TODO:
 1. Serialize and write to disk (DONE)
 2. Get method
 3. Compaction-merging
+4. Merkle validity check
 
 Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
 */
@@ -301,10 +302,10 @@ type MetadataComp struct {
 PersistMemtable is used to save the memtable to disk.
 
 We handle WHOLE SSTable parts in-memory, since it is not larger than
-the Memtable we'd kept in-memory. For compaction, bottlenecks may arise
+the Memtable we'd already kept in-memory. For compaction, bottlenecks may arise
 due to increased size, so we work block by block there.
 */
-func PersistMemtable(sortedRecords []record.Record, index int, level int) error {
+func PersistMemtable(sortedRecords []record.Record, index int) error {
 
 	// 1. Persist SSTableConfig
 	SSTableConfig := &SSTableConfig{
@@ -490,7 +491,9 @@ func (data *DataComp) serialize() ([]byte, uint64, error) {
 		serializedData = append(serializedData, rec.SerializeForSSTable(COMPRESSION_ENABLED)...)
 	}
 
-	prependSizePrefix(&serializedData)
+	if USE_SEPARATE_FILES {
+		prependSizePrefix(&serializedData)
+	}
 	finalBytes := crc_util.AddCRCsToData(serializedData)
 	finalSizeBytes := uint64(len(finalBytes))
 
@@ -565,7 +568,9 @@ func (index *IndexComp) serialize() ([]byte, uint64, error) {
 	}
 
 	serializedData := append(metadataBytes, keyDataBytes...)
-	prependSizePrefix(&serializedData)
+	if USE_SEPARATE_FILES {
+		prependSizePrefix(&serializedData)
+	}
 
 	finalBytes := crc_util.AddCRCsToData(serializedData)
 	finalSizeBytes := uint64(len(finalBytes))
@@ -638,7 +643,9 @@ func (index *SummaryComp) serialize() ([]byte, uint64, error) {
 	}
 
 	serializedData := append(metadataBytes, keyDataBytes...)
-	prependSizePrefix(&serializedData)
+	if USE_SEPARATE_FILES {
+		prependSizePrefix(&serializedData)
+	}
 
 	finalBytes := crc_util.AddCRCsToData(serializedData)
 	finalSizeBytes := uint64(len(finalBytes))
@@ -651,7 +658,9 @@ func (index *SummaryComp) serialize() ([]byte, uint64, error) {
 func (filterComp *FilterComp) serialize() ([]byte, uint64, error) {
 
 	serializedFilter := filterComp.BloomFilter.Serialize()
-	prependSizePrefix(&serializedFilter)
+	if USE_SEPARATE_FILES {
+		prependSizePrefix(&serializedFilter)
+	}
 
 	finalBytes := crc_util.AddCRCsToData(serializedFilter)
 	finalSizeBytes := uint64(len(finalBytes))
@@ -664,7 +673,9 @@ func (filterComp *FilterComp) serialize() ([]byte, uint64, error) {
 func (metaComp *MetadataComp) serialize() ([]byte, uint64, error) {
 
 	serializedMerkle := metaComp.MerkleTree.Serialize()
-	prependSizePrefix(&serializedMerkle)
+	if USE_SEPARATE_FILES {
+		prependSizePrefix(&serializedMerkle)
+	}
 
 	finalBytes := crc_util.AddCRCsToData(serializedMerkle)
 	finalSizeBytes := uint64(len(finalBytes))
@@ -691,6 +702,61 @@ func writeToDisk(serializedData []byte, filePath string, startOffset uint64) err
 		}
 	}
 	return nil
+}
+
+func readFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, error) {
+	blockManager := block_manager.GetBlockManager()
+
+	currentLocation := block_location.BlockLocation{
+		FilePath:   filePath,
+		BlockIndex: startOffset / BLOCK_SIZE,
+	}
+	blockOffset := startOffset % BLOCK_SIZE
+	if blockOffset < CRC_SIZE {
+		blockOffset = CRC_SIZE
+	}
+
+	finalBytes := make([]byte, 0)
+
+	for uint64(len(finalBytes)) < size {
+		blockData, err := blockManager.ReadBlock(currentLocation)
+		if err != nil {
+			return nil, err
+		}
+		err = crc_util.CheckBlockIntegrity(blockData)
+		if err != nil {
+			return nil, err
+		}
+		remainingBytes := size - uint64(len(finalBytes))
+		var bytesToRead uint64
+		if remainingBytes < BLOCK_SIZE-CRC_SIZE-blockOffset {
+			bytesToRead = remainingBytes
+		} else {
+			bytesToRead = BLOCK_SIZE - CRC_SIZE - blockOffset
+		}
+
+		finalBytes = append(finalBytes, blockData[blockOffset:bytesToRead+blockOffset]...)
+		blockOffset = CRC_SIZE
+		currentLocation.BlockIndex++
+	}
+
+	return finalBytes, nil
+}
+
+func getComponentSize(filepath string) (uint64, error) {
+	blockManager := block_manager.GetBlockManager()
+
+	blockData, err := blockManager.ReadBlock(block_location.BlockLocation{FilePath: filepath, BlockIndex: 0})
+	if err != nil {
+		return 0, err
+	}
+
+	err = crc_util.CheckBlockIntegrity(blockData)
+	if err != nil {
+		return 0, err
+	}
+
+	return binary.LittleEndian.Uint64(blockData[CRC_SIZE : CRC_SIZE+STANDARD_FLAG_SIZE]), nil
 }
 
 func prependSizePrefix(serializedData *[]byte) {
@@ -725,4 +791,119 @@ func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint6
 	}
 
 	return nil
+}
+
+/*
+Get retrieves a record by its key from the SSTable, if it exists in the SSTable,
+while minimizing the number of disk accesses.
+*/
+func Get(key string, index int) (record *record.Record, err error) {
+
+	// 0. Deserialize SSTable Config
+	config, sizes, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. Bloom Filter Check
+	if config.UseSeparateFiles {
+		filterPath := fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index)
+		filterSize, err := getComponentSize(filterPath)
+		if err != nil {
+			return nil, err
+		}
+		filter, err := deserializeFilter(filterPath, 0, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return nil, err
+		}
+		if !filter.Contains([]byte(key)) {
+			return nil, nil
+		}
+	} else {
+		filterPath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+		filterOffset := offsets[3]
+		filterSize := sizes[3]
+		filter, err := deserializeFilter(filterPath, filterOffset, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return nil, err
+		}
+		if !filter.Contains([]byte(key)) {
+			return nil, nil
+		}
+	}
+
+	// 1. Bloom Filter Check
+
+	// 2. Summary Bounds Check
+
+	// 3. Summary Binary Search
+
+	// 4. Index Check
+
+	// 5. Retrieval from Data
+
+	return nil, nil
+}
+
+func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, error) {
+	blockManager := block_manager.GetBlockManager()
+	location := block_location.BlockLocation{
+		FilePath:   fmt.Sprintf(FILE_NAME_FORMAT, index),
+		BlockIndex: 0,
+	}
+	blockData, err := blockManager.ReadBlock(location)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	err = crc_util.CheckBlockIntegrity(blockData)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	useSeparateFiles := byte_util.ByteToBool(blockData[CRC_SIZE])
+	compressionEnabled := byte_util.ByteToBool(blockData[CRC_SIZE+1])
+	sparseStepIndex := int(binary.LittleEndian.Uint64(blockData[CRC_SIZE+2 : CRC_SIZE+10]))
+
+	config := &SSTableConfig{
+		UseSeparateFiles:   useSeparateFiles,
+		CompressionEnabled: compressionEnabled,
+		SparseStepIndex:    sparseStepIndex,
+	}
+
+	if !useSeparateFiles {
+		// Deserialize sizes and offsets
+		sizes := make([]uint64, 0)
+		offsets := make([]uint64, 0)
+
+		blockData = blockData[CRC_SIZE:]
+		offset := uint64(1 + 1 + 8)
+		for offset < uint64(len(blockData)) {
+			size := binary.LittleEndian.Uint64(blockData[offset : offset+STANDARD_FLAG_SIZE])
+			offset += STANDARD_FLAG_SIZE
+			offsetValue := binary.LittleEndian.Uint64(blockData[offset : offset+STANDARD_FLAG_SIZE])
+			offsets = append(offsets, offsetValue)
+			sizes = append(sizes, size)
+			offset += STANDARD_FLAG_SIZE
+		}
+
+		return config, sizes, offsets, nil
+	}
+
+	return config, nil, nil, nil
+}
+
+func deserializeFilter(filepath string, offset uint64, filterSize uint64, useSeparateFiles bool) (*bloom_filter.BloomFilter, error) {
+	filterBytes, err := readFromDisk(filepath, offset, filterSize)
+	if err != nil {
+		return nil, err
+	}
+
+	if useSeparateFiles {
+		filterBytes = filterBytes[STANDARD_FLAG_SIZE:]
+	}
+
+	filter := bloom_filter.Deserialize(filterBytes)
+
+	return filter, nil
 }

@@ -26,3 +26,8 @@ func AddPadding(data *[]byte, blockSize uint64) {
 	padding := make([]byte, int(blockSize)-paddingSize)
 	*data = append(*data, padding...)
 }
+
+// ByteToBool converts a byte to bool (non-zero = true, zero = false)
+func ByteToBool(b byte) bool {
+	return b != 0
+}

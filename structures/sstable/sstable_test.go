@@ -118,7 +118,7 @@ func TestPersistMemtable_BasicFunctionality(t *testing.T) {
 	SPARSE_STEP_INDEX = 10
 
 	records := createTestRecords(50)
-	err := PersistMemtable(records, 1, 0)
+	err := PersistMemtable(records, 1)
 
 	if err != nil {
 		t.Errorf("PersistMemtable failed: %v", err)
@@ -168,7 +168,7 @@ func TestPersistMemtable_SingleFileMode(t *testing.T) {
 	SPARSE_STEP_INDEX = 5
 
 	records := createTestRecords(25)
-	err := PersistMemtable(records, 2, 1)
+	err := PersistMemtable(records, 2)
 
 	if err != nil {
 		t.Errorf("PersistMemtable failed: %v", err)
@@ -223,7 +223,7 @@ func TestPersistMemtable_WithCompression(t *testing.T) {
 	SPARSE_STEP_INDEX = 8
 
 	records := createTestRecords(40)
-	err := PersistMemtable(records, 3, 2)
+	err := PersistMemtable(records, 3)
 
 	if err != nil {
 		t.Errorf("PersistMemtable with compression failed: %v", err)
@@ -254,7 +254,7 @@ func TestPersistMemtable_WithTombstones(t *testing.T) {
 	SPARSE_STEP_INDEX = 10
 
 	records := createTestRecordsWithTombstones(30)
-	err := PersistMemtable(records, 4, 0)
+	err := PersistMemtable(records, 4)
 
 	if err != nil {
 		t.Errorf("PersistMemtable with tombstones failed: %v", err)
@@ -288,7 +288,7 @@ func TestPersistMemtable_LargeRecords(t *testing.T) {
 
 	// Create records with large values to test block boundary handling
 	records := createLargeTestRecords(10)
-	err := PersistMemtable(records, 5, 1)
+	err := PersistMemtable(records, 5)
 
 	if err != nil {
 		t.Errorf("PersistMemtable with large records failed: %v", err)
@@ -322,7 +322,7 @@ func TestPersistMemtable_SingleRecord(t *testing.T) {
 
 	// Test with single record
 	records := createTestRecords(1)
-	err := PersistMemtable(records, 7, 0)
+	err := PersistMemtable(records, 7)
 
 	if err != nil {
 		t.Errorf("PersistMemtable with single record failed: %v", err)
@@ -369,7 +369,7 @@ func TestPersistMemtable_DifferentSparseStepIndexes(t *testing.T) {
 		SPARSE_STEP_INDEX = stepIndex
 
 		records := createTestRecords(100)
-		err := PersistMemtable(records, 8+i, 0)
+		err := PersistMemtable(records, 8+i)
 
 		if err != nil {
 			t.Errorf("PersistMemtable failed with sparse step index %d: %v", stepIndex, err)
@@ -405,7 +405,7 @@ func TestPersistMemtable_DifferentLevels(t *testing.T) {
 
 	for i, level := range levels {
 		records := createTestRecords(20)
-		err := PersistMemtable(records, 12+i, level)
+		err := PersistMemtable(records, 12+i)
 
 		if err != nil {
 			t.Errorf("PersistMemtable failed with level %d: %v", level, err)
@@ -450,7 +450,7 @@ func TestPersistMemtable_ConfigurationCombinations(t *testing.T) {
 		SPARSE_STEP_INDEX = 10
 
 		records := createTestRecords(30)
-		err := PersistMemtable(records, 16+i, 0)
+		err := PersistMemtable(records, 16+i)
 
 		if err != nil {
 			t.Errorf("PersistMemtable failed for config %s: %v", config.name, err)
@@ -509,7 +509,7 @@ func BenchmarkPersistMemtable_Small(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := PersistMemtable(records, i, 0)
+		err := PersistMemtable(records, i)
 		if err != nil {
 			b.Fatalf("PersistMemtable failed: %v", err)
 		}
@@ -539,7 +539,7 @@ func BenchmarkPersistMemtable_Large(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err := PersistMemtable(records, i, 0)
+		err := PersistMemtable(records, i)
 		if err != nil {
 			b.Fatalf("PersistMemtable failed: %v", err)
 		}
