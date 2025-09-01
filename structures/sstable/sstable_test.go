@@ -20,7 +20,6 @@ func createTestRecords(count int) []record.Record {
 			[]byte(fmt.Sprintf("value_%03d", i)),
 			uint64(time.Now().Unix())+uint64(i),
 			false,
-			false,
 		)
 	}
 	return records
@@ -40,7 +39,6 @@ func createTestRecordsWithTombstones(count int) []record.Record {
 			value,
 			uint64(time.Now().Unix())+uint64(i),
 			tombstone,
-			false,
 		)
 	}
 	return records
@@ -58,7 +56,6 @@ func createLargeTestRecords(count int) []record.Record {
 			fmt.Sprintf("large_key_%03d", i),
 			largeValue,
 			uint64(time.Now().Unix())+uint64(i),
-			false,
 			false,
 		)
 	}

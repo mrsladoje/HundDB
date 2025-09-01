@@ -13,11 +13,10 @@ import (
 // Helper function to create a test record (active)
 func createTestRecord(key, value string) *record.Record {
 	return &record.Record{
-		Key:        key,
-		Value:      []byte(value),
-		Tombstone:  false,
-		Timestamp:  uint64(time.Now().UnixNano()),
-		Compressed: false,
+		Key:       key,
+		Value:     []byte(value),
+		Tombstone: false,
+		Timestamp: uint64(time.Now().UnixNano()),
 	}
 }
 

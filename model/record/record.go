@@ -12,20 +12,18 @@ import (
 // Record represents a key-value pair with metadata for the storage engine.
 // It includes tombstone marking for deletion and timestamp for versioning.
 type Record struct {
-	Key        string // Key is the unique identifier for the record
-	Value      []byte // Value contains the actual data associated with the key
-	Tombstone  bool   // Tombstone marks a record as deleted.
-	Timestamp  uint64 // Timestamp represents when this record was created or last modified.
-	Compressed bool   // Compressed indicates if the Value is stored in a compressed format (or its bare existence for truthful Tombstone).
+	Key       string // Key is the unique identifier for the record
+	Value     []byte // Value contains the actual data associated with the key
+	Tombstone bool   // Tombstone marks a record as deleted.
+	Timestamp uint64 // Timestamp represents when this record was created or last modified.
 }
 
-func NewRecord(key string, value []byte, timestamp uint64, tombstone bool, compressed bool) *Record {
+func NewRecord(key string, value []byte, timestamp uint64, tombstone bool) *Record {
 	return &Record{
-		Key:        key,
-		Value:      value,
-		Timestamp:  timestamp,
-		Tombstone:  tombstone,
-		Compressed: compressed,
+		Key:       key,
+		Value:     value,
+		Timestamp: timestamp,
+		Tombstone: tombstone,
 	}
 }
 
@@ -58,19 +56,14 @@ Serialization format for Record, for the Write-Ahead Log (WAL):
 Serialization format for the SSTable:
 
 - Uncompressed:
-   +-----------------+------------------+---------------+---------------+-----------------+-...-+--...--+
-   | Compressed (1B) | Timestamp (8B)   | Tombstone(1B) | Key Size (8B) | Value Size (8B) | Key | Value |
-   +-----------------+------------------+---------------+---------------+-----------------+-...-+--...--+
+   +-----------------+---------------+---------------+-----------------+-...-+--...--+
+   | Timestamp (8B)  | Tombstone(1B) | Key Size (8B) | Value Size (8B) | Key | Value |
+   +-----------------+---------------+---------------+-----------------+-...-+--...--+
 
 - Compressed:
-   +-----------------+------------------+---------------+-------------+-----------------+--...--+
-   | Compressed (1B) | Timestamp (8B)   | Tombstone(1B) |  Index (8B) | Value Size (8B) | Value |
-   +-----------------+------------------+---------------+-------------+-----------------+--...--+
-
-   Compressed = 1 if the Value is compressed, 0 otherwise.
-   We added this flag so that we can Deserialize legacy records regardless
-   of their compression status, since the user can change the compression
-   status in the config.
+   +-----------------+---------------+-------------+-----------------+--...--+
+   | Timestamp (8B)  | Tombstone(1B) |  Index (8B) | Value Size (8B) | Value |
+   +-----------------+---------------+-------------+-----------------+--...--+
 
    Index = Index in the global dictionary for the Key - A compressed numerical value instead of the string
 
@@ -93,8 +86,7 @@ const (
 	VALUE_SIZE_START = KEY_SIZE_START + KEY_SIZE_SIZE
 	KEY_START        = VALUE_SIZE_START + VALUE_SIZE_SIZE
 
-	COMPRESSED_FLAG_START   = 0
-	TIMESTAMP_START_SSTABLE = COMPRESSED_FLAG_START + COMPRESSED_FLAG_SIZE
+	TIMESTAMP_START_SSTABLE = 0
 	TOMBSTONE_START_SSTABLE = TIMESTAMP_START_SSTABLE + TIMESTAMP_SIZE
 
 	// For uncompressed Records
@@ -113,8 +105,8 @@ func (r *Record) Size() int {
 }
 
 // Size returns the size of the serialized record in bytes. Used for SSTable records.
-func (r *Record) SizeSSTable() int {
-	if r.Compressed {
+func (r *Record) SizeSSTable(compressed bool) int {
+	if compressed {
 		if r.Tombstone {
 			return COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE
 		}
@@ -168,9 +160,8 @@ func (rec *Record) SerializeForSSTable(compressed bool) []byte {
 // - Value: variable length for the value data
 // Note: CRC is handled for each block itself, not here
 func (rec *Record) serializeForSSTableUncompressed() []byte {
-	data := make([]byte, rec.SizeSSTable())
+	data := make([]byte, rec.SizeSSTable(false))
 
-	data[COMPRESSED_FLAG_START] = 0
 	binary.LittleEndian.PutUint64(data[TIMESTAMP_START_SSTABLE:], rec.Timestamp)
 	if rec.Tombstone {
 		data[TOMBSTONE_START_SSTABLE] = 1
@@ -196,9 +187,8 @@ func (rec *Record) serializeForSSTableUncompressed() []byte {
 // - Value: variable length for the value data (if not tombstoned)
 // Note: CRC is handled for each block itself, not here
 func (rec *Record) serializeForSSTableCompressed() []byte {
-	data := make([]byte, rec.SizeSSTable())
+	data := make([]byte, rec.SizeSSTable(true))
 
-	data[COMPRESSED_FLAG_START] = 0
 	binary.LittleEndian.PutUint64(data[TIMESTAMP_START_SSTABLE:], rec.Timestamp)
 	if rec.Tombstone {
 		data[TOMBSTONE_START_SSTABLE] = 1
@@ -225,8 +215,7 @@ func (rec *Record) serializeForSSTableCompressed() []byte {
 }
 
 // DeserializeForSSTable takes a byte array and reconstructs its Record for SSTable.
-func DeserializeForSSTable(data []byte) *Record {
-	compressed := data[COMPRESSED_FLAG_START] != 0
+func DeserializeForSSTable(data []byte, compressed bool) *Record {
 	if compressed {
 		return deserializeForSSTableCompressed(data)
 	}

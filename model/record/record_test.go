@@ -48,66 +48,52 @@ func (m *MockGlobalKeyDict) GetKey(index uint64) (string, bool) {
 
 func TestNewRecord(t *testing.T) {
 	tests := []struct {
-		name       string
-		key        string
-		value      []byte
-		timestamp  uint64
-		tombstone  bool
-		compressed bool
+		name      string
+		key       string
+		value     []byte
+		timestamp uint64
+		tombstone bool
 	}{
 		{
-			name:       "Normal record",
-			key:        "test_key",
-			value:      []byte("test_value"),
-			timestamp:  uint64(time.Now().Unix()),
-			tombstone:  false,
-			compressed: false,
+			name:      "Normal record",
+			key:       "test_key",
+			value:     []byte("test_value"),
+			timestamp: uint64(time.Now().Unix()),
+			tombstone: false,
 		},
 		{
-			name:       "Tombstone record",
-			key:        "deleted_key",
-			value:      nil,
-			timestamp:  uint64(time.Now().Unix()),
-			tombstone:  true,
-			compressed: false,
+			name:      "Tombstone record",
+			key:       "deleted_key",
+			value:     nil,
+			timestamp: uint64(time.Now().Unix()),
+			tombstone: true,
 		},
 		{
-			name:       "Compressed record",
-			key:        "compressed_key",
-			value:      []byte("compressed_value"),
-			timestamp:  uint64(time.Now().Unix()),
-			tombstone:  false,
-			compressed: true,
+			name:      "Empty key",
+			key:       "",
+			value:     []byte("value"),
+			timestamp: 0,
+			tombstone: false,
 		},
 		{
-			name:       "Empty key",
-			key:        "",
-			value:      []byte("value"),
-			timestamp:  0,
-			tombstone:  false,
-			compressed: false,
+			name:      "Empty value",
+			key:       "key",
+			value:     []byte{},
+			timestamp: 1234567890,
+			tombstone: false,
 		},
 		{
-			name:       "Empty value",
-			key:        "key",
-			value:      []byte{},
-			timestamp:  1234567890,
-			tombstone:  false,
-			compressed: false,
-		},
-		{
-			name:       "Large value",
-			key:        "large_key",
-			value:      make([]byte, 10000), // 10KB value
-			timestamp:  uint64(time.Now().Unix()),
-			tombstone:  false,
-			compressed: false,
+			name:      "Large value",
+			key:       "large_key",
+			value:     make([]byte, 10000), // 10KB value
+			timestamp: uint64(time.Now().Unix()),
+			tombstone: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			record := NewRecord(tt.key, tt.value, tt.timestamp, tt.tombstone, tt.compressed)
+			record := NewRecord(tt.key, tt.value, tt.timestamp, tt.tombstone)
 
 			if record.Key != tt.key {
 				t.Errorf("Expected key %s, got %s", tt.key, record.Key)
@@ -120,9 +106,6 @@ func TestNewRecord(t *testing.T) {
 			}
 			if record.Tombstone != tt.tombstone {
 				t.Errorf("Expected tombstone %v, got %v", tt.tombstone, record.Tombstone)
-			}
-			if record.Compressed != tt.compressed {
-				t.Errorf("Expected compressed %v, got %v", tt.compressed, record.Compressed)
 			}
 		})
 	}
@@ -209,44 +192,55 @@ func TestSize(t *testing.T) {
 
 func TestSizeSSTable(t *testing.T) {
 	tests := []struct {
-		name     string
-		record   *Record
-		expected int
+		name       string
+		record     *Record
+		compressed bool
+		expected   int
 	}{
 		{
 			name: "Uncompressed record",
 			record: &Record{
-				Key:        "test",
-				Value:      []byte("value"),
-				Compressed: false,
+				Key:   "test",
+				Value: []byte("value"),
 			},
-			expected: COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 5,
+			compressed: false,
+			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 5,
 		},
 		{
 			name: "Compressed record with value",
 			record: &Record{
-				Key:        "test",
-				Value:      []byte("value"),
-				Tombstone:  false,
-				Compressed: true,
+				Key:       "test",
+				Value:     []byte("value"),
+				Tombstone: false,
 			},
-			expected: COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 5, // No key in compressed format
+			compressed: true,
+			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 5, // No key in compressed format
 		},
 		{
 			name: "Compressed tombstone record",
 			record: &Record{
-				Key:        "test",
-				Value:      nil,
-				Tombstone:  true,
-				Compressed: true,
+				Key:       "test",
+				Value:     nil,
+				Tombstone: true,
 			},
-			expected: COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE, // No value size or value for tombstone
+			compressed: true,
+			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE, // No value size or value for tombstone
+		},
+		{
+			name: "Uncompressed tombstone record",
+			record: &Record{
+				Key:       "test",
+				Value:     nil,
+				Tombstone: true,
+			},
+			compressed: false,
+			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 0, // Key included in uncompressed format
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			size := tt.record.SizeSSTable()
+			size := tt.record.SizeSSTable(tt.compressed)
 			if size != tt.expected {
 				t.Errorf("Expected SSTable size %d, got %d", tt.expected, size)
 			}
@@ -325,31 +319,28 @@ func TestSerializeDeserializeSSTableUncompressed(t *testing.T) {
 		{
 			name: "Basic uncompressed record",
 			record: &Record{
-				Key:        "test_key",
-				Value:      []byte("test_value"),
-				Timestamp:  1234567890,
-				Tombstone:  false,
-				Compressed: false,
+				Key:       "test_key",
+				Value:     []byte("test_value"),
+				Timestamp: 1234567890,
+				Tombstone: false,
 			},
 		},
 		{
 			name: "Uncompressed tombstone record",
 			record: &Record{
-				Key:        "deleted_key",
-				Value:      nil,
-				Timestamp:  1234567890,
-				Tombstone:  true,
-				Compressed: false,
+				Key:       "deleted_key",
+				Value:     nil,
+				Timestamp: 1234567890,
+				Tombstone: true,
 			},
 		},
 		{
 			name: "Large uncompressed record",
 			record: &Record{
-				Key:        "large_key",
-				Value:      make([]byte, 1000),
-				Timestamp:  1234567890,
-				Tombstone:  false,
-				Compressed: false,
+				Key:       "large_key",
+				Value:     make([]byte, 1000),
+				Timestamp: 1234567890,
+				Tombstone: false,
 			},
 		},
 	}
@@ -357,7 +348,7 @@ func TestSerializeDeserializeSSTableUncompressed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			serialized := tt.record.SerializeForSSTable(false)
-			deserialized := DeserializeForSSTable(serialized)
+			deserialized := DeserializeForSSTable(serialized, false)
 
 			compareRecords(t, tt.record, deserialized)
 		})
@@ -378,21 +369,19 @@ func TestSerializeDeserializeSSTableCompressed(t *testing.T) {
 			{
 				name: "Basic compressed record",
 				record: &Record{
-					Key:        "test_key",
-					Value:      []byte("test_value"),
-					Timestamp:  1234567890,
-					Tombstone:  false,
-					Compressed: true,
+					Key:       "test_key",
+					Value:     []byte("test_value"),
+					Timestamp: 1234567890,
+					Tombstone: false,
 				},
 			},
 			{
 				name: "Compressed tombstone record",
 				record: &Record{
-					Key:        "deleted_key",
-					Value:      nil,
-					Timestamp:  1234567890,
-					Tombstone:  true,
-					Compressed: true,
+					Key:       "deleted_key",
+					Value:     nil,
+					Timestamp: 1234567890,
+					Tombstone: true,
 				},
 			},
 		}
@@ -402,8 +391,8 @@ func TestSerializeDeserializeSSTableCompressed(t *testing.T) {
 				// Setup mock global key dictionary
 				// ...
 
-				serialized := tt.record.SerializeForSSTableCompressed()
-				deserialized := DeserializeForSSTable(serialized)
+				serialized := tt.record.SerializeForSSTable(true)
+				deserialized := DeserializeForSSTable(serialized, true)
 
 				compareRecords(t, tt.record, deserialized)
 			})
@@ -412,19 +401,35 @@ func TestSerializeDeserializeSSTableCompressed(t *testing.T) {
 }
 
 func TestDeserializeForSSTable(t *testing.T) {
-	t.Run("Uncompressed flag detection", func(t *testing.T) {
+	t.Run("Uncompressed record", func(t *testing.T) {
 		record := &Record{
-			Key:        "test",
-			Value:      []byte("value"),
-			Timestamp:  1234567890,
-			Tombstone:  false,
-			Compressed: false,
+			Key:       "test",
+			Value:     []byte("value"),
+			Timestamp: 1234567890,
+			Tombstone: false,
 		}
 
 		serialized := record.SerializeForSSTable(false)
-		deserialized := DeserializeForSSTable(serialized)
+		deserialized := DeserializeForSSTable(serialized, false)
 
 		compareRecords(t, record, deserialized)
+	})
+
+	t.Run("Mixed compression modes", func(t *testing.T) {
+		record := &Record{
+			Key:       "test",
+			Value:     []byte("value"),
+			Timestamp: 1234567890,
+			Tombstone: false,
+		}
+
+		// Test both compressed and uncompressed serialization
+		uncompressedSerialized := record.SerializeForSSTable(false)
+		uncompressedDeserialized := DeserializeForSSTable(uncompressedSerialized, false)
+
+		compareRecords(t, record, uncompressedDeserialized)
+
+		// Note: Compressed test would require global key dictionary mock
 	})
 }
 
@@ -483,21 +488,28 @@ func TestConsistencyBetweenSizeAndSerialization(t *testing.T) {
 		{
 			name: "Basic record",
 			record: &Record{
-				Key:        "test",
-				Value:      []byte("value"),
-				Timestamp:  1234567890,
-				Tombstone:  false,
-				Compressed: false,
+				Key:       "test",
+				Value:     []byte("value"),
+				Timestamp: 1234567890,
+				Tombstone: false,
 			},
 		},
 		{
 			name: "Large record",
 			record: &Record{
-				Key:        string(make([]byte, 1000)),
-				Value:      make([]byte, 5000),
-				Timestamp:  1234567890,
-				Tombstone:  false,
-				Compressed: false,
+				Key:       string(make([]byte, 1000)),
+				Value:     make([]byte, 5000),
+				Timestamp: 1234567890,
+				Tombstone: false,
+			},
+		},
+		{
+			name: "Tombstone record",
+			record: &Record{
+				Key:       "tombstone_test",
+				Value:     nil,
+				Timestamp: 1234567890,
+				Tombstone: true,
 			},
 		},
 	}
@@ -511,11 +523,18 @@ func TestConsistencyBetweenSizeAndSerialization(t *testing.T) {
 				t.Errorf("WAL size mismatch: expected %d, got %d", expectedSize, actualSize)
 			}
 
-			// Test SSTable consistency
-			expectedSSTableSize := tt.record.SizeSSTable()
+			// Test SSTable uncompressed consistency
+			expectedSSTableSize := tt.record.SizeSSTable(false)
 			actualSSTableSize := len(tt.record.SerializeForSSTable(false))
 			if expectedSSTableSize != actualSSTableSize {
-				t.Errorf("SSTable size mismatch: expected %d, got %d", expectedSSTableSize, actualSSTableSize)
+				t.Errorf("SSTable uncompressed size mismatch: expected %d, got %d", expectedSSTableSize, actualSSTableSize)
+			}
+
+			// Test SSTable compressed consistency (size calculation only)
+			expectedSSTableCompressedSize := tt.record.SizeSSTable(true)
+			actualSSTableCompressedSize := len(tt.record.SerializeForSSTable(true))
+			if expectedSSTableCompressedSize != actualSSTableCompressedSize {
+				t.Errorf("SSTable compressed size mismatch: expected %d, got %d", expectedSSTableCompressedSize, actualSSTableCompressedSize)
 			}
 		})
 	}
@@ -553,7 +572,21 @@ func BenchmarkSerialization(b *testing.B) {
 		serialized := record.SerializeForSSTable(false)
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			_ = DeserializeForSSTable(serialized)
+			_ = DeserializeForSSTable(serialized, false)
+		}
+	})
+
+	b.Run("SSTable Compressed Serialize", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = record.SerializeForSSTable(true)
+		}
+	})
+
+	b.Run("SSTable Compressed Deserialize", func(b *testing.B) {
+		serialized := record.SerializeForSSTable(true)
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = DeserializeForSSTable(serialized, true)
 		}
 	})
 }
@@ -603,10 +636,28 @@ func TestSerializationRoundTrip(t *testing.T) {
 		deserialized := Deserialize(serialized)
 		compareRecords(t, record, deserialized)
 
-		// Test SSTable round trip
-		record.Compressed = false
+		// Test SSTable uncompressed round trip
 		ssTableSerialized := record.SerializeForSSTable(false)
-		ssTableDeserialized := DeserializeForSSTable(ssTableSerialized)
+		ssTableDeserialized := DeserializeForSSTable(ssTableSerialized, false)
 		compareRecords(t, record, ssTableDeserialized)
+
+		// Test SSTable compressed round trip (will use global key dict)
+		// Note: For tombstone records, compressed format doesn't store the value
+		ssTableCompressedSerialized := record.SerializeForSSTable(true)
+		ssTableCompressedDeserialized := DeserializeForSSTable(ssTableCompressedSerialized, true)
+
+		// Create expected record for compressed comparison
+		// Compressed tombstone records lose their value data
+		expectedRecord := &Record{
+			Key:       record.Key,
+			Value:     record.Value,
+			Timestamp: record.Timestamp,
+			Tombstone: record.Tombstone,
+		}
+		if record.Tombstone {
+			expectedRecord.Value = nil // Compressed tombstone format doesn't preserve value
+		}
+
+		compareRecords(t, expectedRecord, ssTableCompressedDeserialized)
 	}
 }

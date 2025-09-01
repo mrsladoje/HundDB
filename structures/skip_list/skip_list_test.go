@@ -9,7 +9,7 @@ import (
 
 // helper to create records with current timestamp
 func rec(key string, val []byte, tomb bool) *model.Record {
-	return model.NewRecord(key, val, uint64(time.Now().UnixNano()), tomb, false)
+	return model.NewRecord(key, val, uint64(time.Now().UnixNano()), tomb)
 }
 
 // TestNew verifies basic construction
