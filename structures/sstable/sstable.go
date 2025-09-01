@@ -685,6 +685,10 @@ func (metaComp *MetadataComp) serialize() ([]byte, uint64, error) {
 	return finalBytes, finalSizeBytes, nil
 }
 
+/*
+Helper function to write serializedData to the disk, using block manager.
+Assumes each block of data has a valid CRC at the beginning.
+*/
 func writeToDisk(serializedData []byte, filePath string, startOffset uint64) error {
 	blockManager := block_manager.GetBlockManager()
 
@@ -704,6 +708,10 @@ func writeToDisk(serializedData []byte, filePath string, startOffset uint64) err
 	return nil
 }
 
+/*
+Helper function to read serializedData from the disk, using block manager.
+Checks each block's integrity by checking the CRCs, returns the data without the CRCs.
+*/
 func readFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, error) {
 	blockManager := block_manager.GetBlockManager()
 
@@ -743,6 +751,11 @@ func readFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, err
 	return finalBytes, nil
 }
 
+/*
+Used to read just the component size, placed at the beginning of the serialized bytes.
+Component size is prepended in case of USE_SEPERATE_FILES = true, otherwise, we read the size
+from the config.
+*/
 func getComponentSize(filepath string) (uint64, error) {
 	blockManager := block_manager.GetBlockManager()
 
@@ -759,6 +772,11 @@ func getComponentSize(filepath string) (uint64, error) {
 	return binary.LittleEndian.Uint64(blockData[CRC_SIZE : CRC_SIZE+STANDARD_FLAG_SIZE]), nil
 }
 
+/*
+Used to prepend just the component size flag at the beginning of the serialized bytes.
+Component size is prepended in case of USE_SEPERATE_FILES = true, otherwise, we read the size
+from the config.
+*/
 func prependSizePrefix(serializedData *[]byte) {
 	if USE_SEPARATE_FILES {
 		size_prefix := make([]byte, STANDARD_FLAG_SIZE)
@@ -767,6 +785,9 @@ func prependSizePrefix(serializedData *[]byte) {
 	}
 }
 
+/*
+Used to add the size and offsets data of components to the config, to allow for easier reading.
+*/
 func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint64, index int) error {
 	configData, _, err := config.serialize()
 	if err != nil {
@@ -832,13 +853,40 @@ func Get(key string, index int) (record *record.Record, err error) {
 		}
 	}
 
-	// 1. Bloom Filter Check
-
 	// 2. Summary Bounds Check
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2]
+	}
+	inSummaryBounds, oneOfBounds, offsetOfMatchingBound, lastEntryIndex, err := checkSummaryBounds(summaryPath, summaryOffset, key)
+	if err != nil {
+		return nil, err
+	}
+	if !inSummaryBounds {
+		return nil, nil
+	}
+	if oneOfBounds {
+		// If the key is one of the bounds, we need to retrieve in from the Data component
+		return nil, nil
+	}
 
-	// 3. Summary Binary Search
-
-	// 4. Index Check
+	// 3. Summary Binary Search -> Index Binary Search
+	indexFileOffset := uint64(0)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1]
+	}
+	offset, found, err := binarySearchSummary(summaryPath, key, summaryOffset+STANDARD_FLAG_SIZE, 1, lastEntryIndex-1, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	if found {
+		// retrieve from data component
+	}
 
 	// 5. Retrieval from Data
 
@@ -906,4 +954,140 @@ func deserializeFilter(filepath string, offset uint64, filterSize uint64, useSep
 	filter := bloom_filter.Deserialize(filterBytes)
 
 	return filter, nil
+}
+
+/*
+Returns if the key is within the bounds of the Summary Component.
+
+If the key is in the bounds, the function returns true along with the index (ex. 645. or 7328.) of the last entry.
+
+If the key happens to be one of the bounds, we return the offset in Data component of that bound's key.
+
+If the key is not in the bounds, there is no point in searching further.
+*/
+func checkSummaryBounds(filepath string, offset uint64, key string) (bool, bool, uint64, uint64, error) {
+
+	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, false, 0, 0, err
+	}
+	if key < firstEntryKey {
+		return false, false, 0, 0, nil
+	}
+	if key == firstEntryKey {
+		return true, true, 0, 0, nil
+	}
+
+	lastEntryOffsetBytes, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, false, 0, 0, err
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+
+	lastEntryKey, lastEntryDataOffset, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+	if err != nil {
+		return false, false, 0, 0, err
+	}
+	if lastEntryKey == key {
+		return true, true, lastEntryDataOffset, 0, nil
+	}
+
+	indexOfLastEntry := (lastEntryOffset - STANDARD_FLAG_SIZE - offset) / INDEX_ENTRY_METADATA_SIZE
+	return lastEntryKey > key, false, 0, indexOfLastEntry, nil
+}
+
+/*
+Read an index metadata entry from the SSTable Summary Component.
+
+Takes in the filepath, and offset to the entry start, returns the key, its offset in the data, and any error encountered.
+*/
+func readIndexMetadataEntry(filepath string, offset uint64) (string, uint64, error) {
+	entryBytes, err := readFromDisk(filepath, offset, INDEX_ENTRY_METADATA_SIZE)
+	if err != nil {
+		return "", 0, err
+	}
+
+	offsetInData := binary.LittleEndian.Uint64(entryBytes[0:STANDARD_FLAG_SIZE])
+	keySize := binary.LittleEndian.Uint64(entryBytes[STANDARD_FLAG_SIZE : 2*STANDARD_FLAG_SIZE])
+	offsetInIndex := binary.LittleEndian.Uint64(entryBytes[2*STANDARD_FLAG_SIZE : 3*STANDARD_FLAG_SIZE])
+
+	keyBytes, err := readFromDisk(filepath, offsetInIndex, keySize)
+	if err != nil {
+		return "", 0, err
+	}
+	key := string(keyBytes)
+
+	return key, offsetInData, nil
+}
+
+/*
+Binary search the summary index for the given key.
+When we reach recursion base case, we do binary search of the index component.
+*/
+func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
+	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int) (uint64, bool, error) {
+
+	if indexLast == indexFirst+1 {
+		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+		if useSeperateFiles {
+			indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+		}
+
+		offset, found, err := binarySearchIndexes(indexFilePath, key, indexFileOffset, indexFirst*uint64(sparseIndex), (indexFirst+1)*uint64(sparseIndex))
+		if err != nil {
+			return 0, false, err
+		}
+		if found {
+			return offset, true, nil
+		}
+	}
+
+	mid := indexFirst + (indexLast-indexFirst)/2
+	midKey, midOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(mid)*INDEX_ENTRY_METADATA_SIZE)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if midKey == key {
+		return midOffset, true, nil
+	} else if midKey < key {
+		return binarySearchSummary(filepath, key, offsetFirst, mid+1, indexLast, sparseIndex, indexFileOffset, useSeperateFiles, index)
+	} else {
+		return binarySearchSummary(filepath, key, offsetFirst, indexFirst, mid, sparseIndex, indexFileOffset, useSeperateFiles, index)
+	}
+}
+
+/*
+Binary search the index entries for the given key, between the specified indexes.
+*/
+func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
+
+	if indexLast == indexFirst {
+		finalKey, finalOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(indexFirst)*INDEX_ENTRY_METADATA_SIZE)
+		if err != nil {
+			return 0, false, err
+		}
+		if finalKey == key {
+			return finalOffset, true, nil
+		}
+		return 0, false, nil
+	}
+
+	mid := indexFirst + (indexLast-indexFirst)/2
+	midKey, midOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(mid)*INDEX_ENTRY_METADATA_SIZE)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if midKey == key {
+		return midOffset, true, nil
+	} else if midKey < key {
+		return binarySearchIndexes(filepath, key, offsetFirst, mid+1, indexLast)
+	} else {
+		return binarySearchIndexes(filepath, key, offsetFirst, indexFirst, mid)
+	}
+}
+
+func retrieveFromDataComponent(filepath string, offset uint64) ([]byte, error) {
+	// TODO: Implement this
 }
