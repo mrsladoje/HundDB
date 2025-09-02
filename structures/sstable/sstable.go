@@ -488,7 +488,11 @@ func (data *DataComp) serialize() ([]byte, uint64, error) {
 
 	serializedData := []byte{}
 	for _, rec := range data.Records {
-		serializedData = append(serializedData, rec.SerializeForSSTable(COMPRESSION_ENABLED)...)
+		serializedRecord := rec.SerializeForSSTable(COMPRESSION_ENABLED)
+		recordSize := make([]byte, STANDARD_FLAG_SIZE)
+		binary.LittleEndian.PutUint64(recordSize, uint64(len(serializedRecord)))
+		serializedData = append(serializedData, recordSize...)
+		serializedData = append(serializedData, serializedRecord...)
 	}
 
 	if USE_SEPARATE_FILES {
@@ -510,6 +514,10 @@ func generateIndexEntries(sortedRecords []record.Record, serializedRecords [][]b
 	currentOffset := dataStartOffset
 	accumulatedOffset := uint64(0)
 
+	if USE_SEPARATE_FILES {
+		currentOffset += STANDARD_FLAG_SIZE
+	}
+
 	for i, rec := range sortedRecords {
 		// Calculate the offset considering CRC and block boundaries
 		noOfBlocks := uint64(accumulatedOffset / (BLOCK_SIZE - CRC_SIZE))
@@ -521,8 +529,8 @@ func generateIndexEntries(sortedRecords []record.Record, serializedRecords [][]b
 		indexEntries = append(indexEntries, indexEntry)
 
 		// Update currentOffset based on the serialized record size
-		currentOffset += uint64(len(serializedRecords[i]))
-		accumulatedOffset += uint64(len(serializedRecords[i]))
+		currentOffset += uint64(len(serializedRecords[i]) + STANDARD_FLAG_SIZE)
+		accumulatedOffset += uint64(len(serializedRecords[i]) + STANDARD_FLAG_SIZE)
 	}
 
 	return indexEntries
@@ -789,24 +797,28 @@ func prependSizePrefix(serializedData *[]byte) {
 Used to add the size and offsets data of components to the config, to allow for easier reading.
 */
 func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint64, index int) error {
-	configData, _, err := config.serialize()
-	if err != nil {
-		return err
-	}
-	configData = configData[CRC_SIZE:]
-	if !config.UseSeparateFiles {
-		offset := uint64(1 + 1 + 8)
-		for i := 0; i < len(sizes); i++ {
-			binary.LittleEndian.PutUint64(configData[offset:offset+STANDARD_FLAG_SIZE], sizes[i])
-			offset += STANDARD_FLAG_SIZE
-			binary.LittleEndian.PutUint64(configData[offset:offset+STANDARD_FLAG_SIZE], offsets[i])
-			offset += STANDARD_FLAG_SIZE
-		}
+
+	if config.UseSeparateFiles {
+		return nil
 	}
 
-	configData = crc_util.AddCRCToBlockData(configData)
+	configBlock := make([]byte, BLOCK_SIZE)
 
-	err = writeToDisk(configData, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
+	configBlock[CRC_SIZE] = byte_util.BoolToByte(config.UseSeparateFiles)
+	configBlock[CRC_SIZE+1] = byte_util.BoolToByte(config.CompressionEnabled)
+	binary.LittleEndian.PutUint64(configBlock[CRC_SIZE+2:CRC_SIZE+10], uint64(config.SparseStepIndex))
+
+	currentOffset := uint64(CRC_SIZE + 1 + 1 + 8)
+	for i := 0; i < len(sizes); i++ {
+		binary.LittleEndian.PutUint64(configBlock[currentOffset:currentOffset+STANDARD_FLAG_SIZE], sizes[i])
+		currentOffset += STANDARD_FLAG_SIZE
+		binary.LittleEndian.PutUint64(configBlock[currentOffset:currentOffset+STANDARD_FLAG_SIZE], offsets[i])
+		currentOffset += STANDARD_FLAG_SIZE
+	}
+
+	crc_util.AddCRCToBlockData(configBlock)
+
+	err := writeToDisk(configBlock, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
 	if err != nil {
 		return err
 	}
@@ -867,9 +879,16 @@ func Get(key string, index int) (record *record.Record, err error) {
 	if !inSummaryBounds {
 		return nil, nil
 	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
 	if oneOfBounds {
-		// If the key is one of the bounds, we need to retrieve in from the Data component
-		return nil, nil
+		record, err := retrieveFromDataComponent(dataPath, offsetOfMatchingBound, config.CompressionEnabled)
+		if err != nil {
+			return nil, err
+		}
+		return record, nil
 	}
 
 	// 3. Summary Binary Search -> Index Binary Search
@@ -877,20 +896,19 @@ func Get(key string, index int) (record *record.Record, err error) {
 	if !config.UseSeparateFiles {
 		indexFileOffset = offsets[1]
 	}
-	offset, found, err := binarySearchSummary(summaryPath, key, summaryOffset+STANDARD_FLAG_SIZE, 1, lastEntryIndex-1, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index)
+	offset, found, err := binarySearchSummary(summaryPath, key, summaryOffset+STANDARD_FLAG_SIZE, 1, lastEntryIndex-1, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastEntryIndex)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, nil
+	} else {
+		record, err := retrieveFromDataComponent(dataPath, offset, config.CompressionEnabled)
+		if err != nil {
+			return nil, err
+		}
+		return record, nil
 	}
-	if found {
-		// retrieve from data component
-	}
-
-	// 5. Retrieval from Data
-
-	return nil, nil
 }
 
 func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, error) {
@@ -920,13 +938,14 @@ func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, er
 	}
 
 	if !useSeparateFiles {
-		// Deserialize sizes and offsets
+
+		const expectedPairs = 5
 		sizes := make([]uint64, 0)
 		offsets := make([]uint64, 0)
 
 		blockData = blockData[CRC_SIZE:]
 		offset := uint64(1 + 1 + 8)
-		for offset < uint64(len(blockData)) {
+		for i := 0; i < expectedPairs; i++ {
 			size := binary.LittleEndian.Uint64(blockData[offset : offset+STANDARD_FLAG_SIZE])
 			offset += STANDARD_FLAG_SIZE
 			offsetValue := binary.LittleEndian.Uint64(blockData[offset : offset+STANDARD_FLAG_SIZE])
@@ -967,7 +986,7 @@ If the key is not in the bounds, there is no point in searching further.
 */
 func checkSummaryBounds(filepath string, offset uint64, key string) (bool, bool, uint64, uint64, error) {
 
-	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+	firstEntryKey, firstEntryDataOffset, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
 	if err != nil {
 		return false, false, 0, 0, err
 	}
@@ -975,7 +994,7 @@ func checkSummaryBounds(filepath string, offset uint64, key string) (bool, bool,
 		return false, false, 0, 0, nil
 	}
 	if key == firstEntryKey {
-		return true, true, 0, 0, nil
+		return true, true, firstEntryDataOffset, 0, nil
 	}
 
 	lastEntryOffsetBytes, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
@@ -992,7 +1011,7 @@ func checkSummaryBounds(filepath string, offset uint64, key string) (bool, bool,
 		return true, true, lastEntryDataOffset, 0, nil
 	}
 
-	indexOfLastEntry := (lastEntryOffset - STANDARD_FLAG_SIZE - offset) / INDEX_ENTRY_METADATA_SIZE
+	indexOfLastEntry := (lastEntryOffset - offset - STANDARD_FLAG_SIZE) / INDEX_ENTRY_METADATA_SIZE
 	return lastEntryKey > key, false, 0, indexOfLastEntry, nil
 }
 
@@ -1025,15 +1044,21 @@ Binary search the summary index for the given key.
 When we reach recursion base case, we do binary search of the index component.
 */
 func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
-	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int) (uint64, bool, error) {
+	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
 	if indexLast == indexFirst+1 {
 		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
 		if useSeperateFiles {
 			indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+			indexFileOffset += STANDARD_FLAG_SIZE
 		}
 
-		offset, found, err := binarySearchIndexes(indexFilePath, key, indexFileOffset, indexFirst*uint64(sparseIndex), (indexFirst+1)*uint64(sparseIndex))
+		lastIndex := (indexFirst + 1) * uint64(sparseIndex)
+		if lastIndex > originalIndexLast {
+			lastIndex = originalIndexLast
+		}
+
+		offset, found, err := binarySearchIndexes(indexFilePath, key, indexFileOffset, indexFirst*uint64(sparseIndex), lastIndex)
 		if err != nil {
 			return 0, false, err
 		}
@@ -1051,9 +1076,9 @@ func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexF
 	if midKey == key {
 		return midOffset, true, nil
 	} else if midKey < key {
-		return binarySearchSummary(filepath, key, offsetFirst, mid+1, indexLast, sparseIndex, indexFileOffset, useSeperateFiles, index)
+		return binarySearchSummary(filepath, key, offsetFirst, mid+1, indexLast, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
 	} else {
-		return binarySearchSummary(filepath, key, offsetFirst, indexFirst, mid, sparseIndex, indexFileOffset, useSeperateFiles, index)
+		return binarySearchSummary(filepath, key, offsetFirst, indexFirst, mid, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
 	}
 }
 
@@ -1088,6 +1113,21 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 	}
 }
 
-func retrieveFromDataComponent(filepath string, offset uint64) ([]byte, error) {
-	// TODO: Implement this
+/*
+Retrieve a record from the data component of the SSTable.
+*/
+func retrieveFromDataComponent(filepath string, offset uint64, compressionEnabled bool) (*record.Record, error) {
+	recordSize, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return nil, err
+	}
+
+	recordData, err := readFromDisk(filepath, offset+STANDARD_FLAG_SIZE, binary.LittleEndian.Uint64(recordSize))
+	if err != nil {
+		return nil, err
+	}
+
+	record := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+	return record, nil
 }
