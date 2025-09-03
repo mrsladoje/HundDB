@@ -518,6 +518,8 @@ func generateIndexEntries(sortedRecords []record.Record, serializedRecords [][]b
 		currentOffset += STANDARD_FLAG_SIZE
 	}
 
+	currentOffset += CRC_SIZE
+
 	for i, rec := range sortedRecords {
 		// Calculate the offset considering CRC and block boundaries
 		noOfBlocks := uint64(accumulatedOffset / (BLOCK_SIZE - CRC_SIZE))
@@ -543,8 +545,9 @@ The serialization format:
 	| Metadata Section | Key Data Section |
 	+------------------+------------------+
 
-The Metadata section would contain the offset information for each key in the Key Data section.
+The Metadata section contains the offset information for each key in the Key Data section.
 The offset is of course relative to the IndexComp.
+The Metadata begins with an 8 byte offset for the start of the last entry, allowing us to utilize a bounds check.
 
 This is a metadata entry:
 
@@ -558,15 +561,25 @@ func (index *IndexComp) serialize() ([]byte, uint64, error) {
 
 	keyStartOffset := uint64(0)
 
-	metadataSize := uint64(len(index.IndexEntries)) * INDEX_ENTRY_METADATA_SIZE
-	metadataSize = (metadataSize / (BLOCK_SIZE - CRC_SIZE)) * BLOCK_SIZE
+	metadataSize := uint64(len(index.IndexEntries))*INDEX_ENTRY_METADATA_SIZE + INDEX_ENTRY_PART_SIZE
+
+	if USE_SEPARATE_FILES {
+		metadataSize += STANDARD_FLAG_SIZE
+	}
+
+	crcsTillLastEntry := ((metadataSize - INDEX_ENTRY_METADATA_SIZE) / (BLOCK_SIZE - CRC_SIZE)) + 1
+	lastEntryOffset := metadataSize - INDEX_ENTRY_METADATA_SIZE + crcsTillLastEntry*CRC_SIZE
+
+	metadataBytes = append(metadataBytes, make([]byte, 8)...)
+	binary.LittleEndian.PutUint64(metadataBytes[0:8], lastEntryOffset)
 
 	for _, entry := range index.IndexEntries {
 		metadataEntry, keyBytes, err := entry.serialize()
 		if err != nil {
 			return nil, 0, err
 		}
-		indexIndexOffset := metadataSize + (keyStartOffset/(BLOCK_SIZE-CRC_SIZE))*BLOCK_SIZE
+		crcs := ((metadataSize + keyStartOffset) / (BLOCK_SIZE - CRC_SIZE)) + 1
+		indexIndexOffset := metadataSize + keyStartOffset + crcs*CRC_SIZE
 		metadataEntryWithIndexOffset := append(metadataEntry, make([]byte, 8)...)
 		binary.LittleEndian.PutUint64(metadataEntryWithIndexOffset[16:24], indexIndexOffset)
 		metadataBytes = append(metadataBytes, metadataEntryWithIndexOffset...)
@@ -608,7 +621,7 @@ The serialization format:
 	| Metadata Section | Key Data Section |
 	+------------------+------------------+
 
-The Metadata section would contain the offset information for each key in the Key Data section.
+The Metadata section contains the offset information for each key in the Key Data section.
 The offset is of course relative to the SummaryComp.
 The Metadata begins with an 8 byte offset for the start of the last entry, allowing us to utilize binary search .
 
@@ -625,14 +638,14 @@ func (index *SummaryComp) serialize() ([]byte, uint64, error) {
 	keyStartOffset := uint64(0)
 
 	metadataSize := uint64(len(index.IndexEntries))*INDEX_ENTRY_METADATA_SIZE + INDEX_ENTRY_PART_SIZE
-	metadataSize = (metadataSize / (BLOCK_SIZE - CRC_SIZE)) * BLOCK_SIZE
 
-	lastEntryOffset := metadataSize
-	if lastEntryOffset/BLOCK_SIZE != (lastEntryOffset-1)/BLOCK_SIZE {
-		lastEntryOffset -= INDEX_ENTRY_METADATA_SIZE + CRC_SIZE
-	} else {
-		lastEntryOffset -= INDEX_ENTRY_METADATA_SIZE
+	if USE_SEPARATE_FILES {
+		metadataSize += STANDARD_FLAG_SIZE
 	}
+
+	crcsTillLastEntry := ((metadataSize - INDEX_ENTRY_METADATA_SIZE) / (BLOCK_SIZE - CRC_SIZE)) + 1
+	lastEntryOffset := metadataSize - INDEX_ENTRY_METADATA_SIZE + crcsTillLastEntry*CRC_SIZE
+
 	metadataBytes = append(metadataBytes, make([]byte, 8)...)
 	binary.LittleEndian.PutUint64(metadataBytes[0:8], lastEntryOffset)
 
@@ -641,7 +654,8 @@ func (index *SummaryComp) serialize() ([]byte, uint64, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		indexIndexOffset := metadataSize + (keyStartOffset/(BLOCK_SIZE-CRC_SIZE))*BLOCK_SIZE
+		crcs := ((metadataSize + keyStartOffset) / (BLOCK_SIZE - CRC_SIZE)) + 1
+		indexIndexOffset := metadataSize + keyStartOffset + crcs*CRC_SIZE
 		metadataEntryWithIndexOffset := append(metadataEntry, make([]byte, 8)...)
 		binary.LittleEndian.PutUint64(metadataEntryWithIndexOffset[16:24], indexIndexOffset)
 		metadataBytes = append(metadataBytes, metadataEntryWithIndexOffset...)
@@ -774,7 +788,7 @@ func getComponentSize(filepath string) (uint64, error) {
 
 	err = crc_util.CheckBlockIntegrity(blockData)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to verify block integrity (in get component size): %v", err)
 	}
 
 	return binary.LittleEndian.Uint64(blockData[CRC_SIZE : CRC_SIZE+STANDARD_FLAG_SIZE]), nil
@@ -788,7 +802,7 @@ from the config.
 func prependSizePrefix(serializedData *[]byte) {
 	if USE_SEPARATE_FILES {
 		size_prefix := make([]byte, STANDARD_FLAG_SIZE)
-		binary.LittleEndian.PutUint64(size_prefix[0:STANDARD_FLAG_SIZE], crc_util.SizeAfterAddingCRCs(uint64(len(*serializedData))))
+		binary.LittleEndian.PutUint64(size_prefix[0:STANDARD_FLAG_SIZE], uint64(len(*serializedData)))
 		*serializedData = append(size_prefix, *serializedData...)
 	}
 }
@@ -816,7 +830,7 @@ func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint6
 		currentOffset += STANDARD_FLAG_SIZE
 	}
 
-	crc_util.AddCRCToBlockData(configBlock)
+	configBlock = crc_util.AddCRCToBlockData(configBlock)
 
 	err := writeToDisk(configBlock, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
 	if err != nil {
@@ -835,19 +849,21 @@ func Get(key string, index int) (record *record.Record, err error) {
 	// 0. Deserialize SSTable Config
 	config, sizes, offsets, err := deserializeSSTableConfig(index)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to deserialize SSTable config: %v", err)
 	}
+
+	fmt.Println("Looking for key:", key)
 
 	// 1. Bloom Filter Check
 	if config.UseSeparateFiles {
 		filterPath := fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index)
 		filterSize, err := getComponentSize(filterPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get filter component size: %v", err)
 		}
 		filter, err := deserializeFilter(filterPath, 0, filterSize, config.UseSeparateFiles)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to deserialize filter: %v", err)
 		}
 		if !filter.Contains([]byte(key)) {
 			return nil, nil
@@ -858,59 +874,68 @@ func Get(key string, index int) (record *record.Record, err error) {
 		filterSize := sizes[3]
 		filter, err := deserializeFilter(filterPath, filterOffset, filterSize, config.UseSeparateFiles)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to deserialize filter (single file): %v", err)
 		}
 		if !filter.Contains([]byte(key)) {
 			return nil, nil
 		}
 	}
 
-	// 2. Summary Bounds Check
+	// 1.5. Data, Index and Summary preparation
 	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
 	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
 	if !config.UseSeparateFiles {
 		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
-		summaryOffset = offsets[2]
+		summaryOffset = offsets[2] + CRC_SIZE
 	}
-	inSummaryBounds, oneOfBounds, offsetOfMatchingBound, lastEntryIndex, err := checkSummaryBounds(summaryPath, summaryOffset, key)
-	if err != nil {
-		return nil, err
-	}
-	if !inSummaryBounds {
-		return nil, nil
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
 	}
 	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
 	if !config.UseSeparateFiles {
 		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
 	}
+
+	// 2. Index Bounds Check
+	inIndexBounds, oneOfBounds, offsetOfMatchingBound, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBounds(indexPath, indexFileOffset, key, config.SparseStepIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check index bounds: %v", err)
+	}
+	if !inIndexBounds {
+		return nil, nil
+	}
 	if oneOfBounds {
 		record, err := retrieveFromDataComponent(dataPath, offsetOfMatchingBound, config.CompressionEnabled)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to retrieve record from data component (one of bounds): %v", err)
 		}
 		return record, nil
 	}
 
 	// 3. Summary Binary Search -> Index Binary Search
-	indexFileOffset := uint64(0)
-	if !config.UseSeparateFiles {
-		indexFileOffset = offsets[1]
-	}
-	offset, found, err := binarySearchSummary(summaryPath, key, summaryOffset+STANDARD_FLAG_SIZE, 1, lastEntryIndex-1, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastEntryIndex)
+	offset, found, err := binarySearchSummary(summaryPath, key, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to perform binary search on summary: %v", err)
 	}
 	if !found {
 		return nil, nil
 	} else {
 		record, err := retrieveFromDataComponent(dataPath, offset, config.CompressionEnabled)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to retrieve record from data component (final): %v", err)
 		}
 		return record, nil
 	}
 }
 
+/*
+DeserializeSSTableConfig deserializes the SSTable configuration from the specified index.
+
+Also returns the sizes and offsets of the various components, in case of single file mode.
+*/
 func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, error) {
 	blockManager := block_manager.GetBlockManager()
 	location := block_location.BlockLocation{
@@ -924,7 +949,7 @@ func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, er
 
 	err = crc_util.CheckBlockIntegrity(blockData)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("failed to verify block integrity: %v", err)
 	}
 
 	useSeparateFiles := byte_util.ByteToBool(blockData[CRC_SIZE])
@@ -961,22 +986,24 @@ func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, er
 }
 
 func deserializeFilter(filepath string, offset uint64, filterSize uint64, useSeparateFiles bool) (*bloom_filter.BloomFilter, error) {
-	filterBytes, err := readFromDisk(filepath, offset, filterSize)
+	actualOffset := offset
+	actualSize := filterSize
+
+	if useSeparateFiles {
+		actualOffset += STANDARD_FLAG_SIZE + CRC_SIZE
+	}
+
+	filterBytes, err := readFromDisk(filepath, actualOffset, actualSize)
 	if err != nil {
 		return nil, err
 	}
 
-	if useSeparateFiles {
-		filterBytes = filterBytes[STANDARD_FLAG_SIZE:]
-	}
-
 	filter := bloom_filter.Deserialize(filterBytes)
-
 	return filter, nil
 }
 
 /*
-Returns if the key is within the bounds of the Summary Component.
+Returns if the key is within the bounds of the Index Component.
 
 If the key is in the bounds, the function returns true along with the index (ex. 645. or 7328.) of the last entry.
 
@@ -984,35 +1011,48 @@ If the key happens to be one of the bounds, we return the offset in Data compone
 
 If the key is not in the bounds, there is no point in searching further.
 */
-func checkSummaryBounds(filepath string, offset uint64, key string) (bool, bool, uint64, uint64, error) {
+func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
 
 	firstEntryKey, firstEntryDataOffset, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+	fmt.Println("firstEntryKey:", firstEntryKey)
+
 	if err != nil {
-		return false, false, 0, 0, err
+		return false, false, 0, 0, 0, err
 	}
 	if key < firstEntryKey {
-		return false, false, 0, 0, nil
+		return false, false, 0, 0, 0, nil
 	}
 	if key == firstEntryKey {
-		return true, true, firstEntryDataOffset, 0, nil
+		return true, true, firstEntryDataOffset, 0, 0, nil
 	}
 
 	lastEntryOffsetBytes, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
 	if err != nil {
-		return false, false, 0, 0, err
+		return false, false, 0, 0, 0, err
 	}
 	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
 
 	lastEntryKey, lastEntryDataOffset, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+
+	fmt.Println("lastEntryKey:", lastEntryKey)
 	if err != nil {
-		return false, false, 0, 0, err
+		return false, false, 0, 0, 0, err
 	}
 	if lastEntryKey == key {
-		return true, true, lastEntryDataOffset, 0, nil
+		return true, true, lastEntryDataOffset, 0, 0, nil
 	}
 
-	indexOfLastEntry := (lastEntryOffset - offset - STANDARD_FLAG_SIZE) / INDEX_ENTRY_METADATA_SIZE
-	return lastEntryKey > key, false, 0, indexOfLastEntry, nil
+	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
+	crcsFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsFirst*CRC_SIZE
+	physicalOffsetLast := lastEntryOffset
+	crcsLast := (physicalOffsetLast / BLOCK_SIZE) + 1
+	logicalOffsetLast := physicalOffsetLast - crcsLast*CRC_SIZE
+
+	indexOfLastIndexEntry := (logicalOffsetLast - logicalOffsetFirst) / INDEX_ENTRY_METADATA_SIZE
+	indexOfLastSummaryEntry := indexOfLastIndexEntry / uint64(sparseStep)
+
+	return lastEntryKey > key, false, 0, indexOfLastSummaryEntry, indexOfLastIndexEntry, nil
 }
 
 /*
@@ -1046,7 +1086,7 @@ When we reach recursion base case, we do binary search of the index component.
 func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
 	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
-	if indexLast == indexFirst+1 {
+	if indexFirst+1 >= indexLast {
 		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
 		if useSeperateFiles {
 			indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
@@ -1055,10 +1095,14 @@ func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexF
 
 		lastIndex := (indexFirst + 1) * uint64(sparseIndex)
 		if lastIndex > originalIndexLast {
-			lastIndex = originalIndexLast
+			lastIndex = originalIndexLast - 1
+		}
+		startIndex := uint64(1)
+		if indexFirst > 0 {
+			startIndex = (indexFirst - 1) * uint64(sparseIndex)
 		}
 
-		offset, found, err := binarySearchIndexes(indexFilePath, key, indexFileOffset, indexFirst*uint64(sparseIndex), lastIndex)
+		offset, found, err := binarySearchIndexes(indexFilePath, key, indexFileOffset, startIndex, lastIndex)
 		if err != nil {
 			return 0, false, err
 		}
@@ -1067,8 +1111,19 @@ func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexF
 		}
 	}
 
+	physicalOffsetFirst := offsetFirst
+	crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
 	mid := indexFirst + (indexLast-indexFirst)/2
-	midKey, midOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(mid)*INDEX_ENTRY_METADATA_SIZE)
+	logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
+	crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
+	physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
+
+	midKey, midOffset, err := readIndexMetadataEntry(filepath, physicalOffsetMid)
+	fmt.Println("mid:", mid)
+	fmt.Println("midKey:", midKey)
+	fmt.Println("firstIndex:", indexFirst)
+	fmt.Println("lastIndex:", indexLast)
 	if err != nil {
 		return 0, false, err
 	}
@@ -1076,9 +1131,11 @@ func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexF
 	if midKey == key {
 		return midOffset, true, nil
 	} else if midKey < key {
+		fmt.Println("going right")
 		return binarySearchSummary(filepath, key, offsetFirst, mid+1, indexLast, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
 	} else {
-		return binarySearchSummary(filepath, key, offsetFirst, indexFirst, mid, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
+		fmt.Println("going left")
+		return binarySearchSummary(filepath, key, offsetFirst, indexFirst, mid-1, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
 	}
 }
 
@@ -1087,7 +1144,7 @@ Binary search the index entries for the given key, between the specified indexes
 */
 func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
 
-	if indexLast == indexFirst {
+	if indexFirst == indexLast {
 		finalKey, finalOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(indexFirst)*INDEX_ENTRY_METADATA_SIZE)
 		if err != nil {
 			return 0, false, err
@@ -1098,8 +1155,19 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 		return 0, false, nil
 	}
 
+	physicalOffsetFirst := offsetFirst
+	crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
 	mid := indexFirst + (indexLast-indexFirst)/2
-	midKey, midOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(mid)*INDEX_ENTRY_METADATA_SIZE)
+	logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
+	crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
+	physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
+
+	midKey, midOffset, err := readIndexMetadataEntry(filepath, physicalOffsetMid)
+	fmt.Println("firstIndex: (indexes)", indexFirst)
+	fmt.Println("lastIndex: (indexes)", indexLast)
+	fmt.Println("mid: (indexes)", mid)
+	fmt.Println("midKey (indexes):", midKey)
 	if err != nil {
 		return 0, false, err
 	}
@@ -1109,7 +1177,7 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 	} else if midKey < key {
 		return binarySearchIndexes(filepath, key, offsetFirst, mid+1, indexLast)
 	} else {
-		return binarySearchIndexes(filepath, key, offsetFirst, indexFirst, mid)
+		return binarySearchIndexes(filepath, key, offsetFirst, indexFirst, mid-1)
 	}
 }
 
