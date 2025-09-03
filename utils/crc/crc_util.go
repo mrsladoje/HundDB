@@ -84,3 +84,25 @@ func CheckBlockIntegrity(blockData []byte) error {
 
 	return nil
 }
+
+/*
+FixLastBlockCRC recalculates and fixes the CRC for the last block of the byte data.
+The function modifies the data slice in place.
+*/
+func FixLastBlockCRC(data []byte) error {
+	if len(data) < int(BLOCK_SIZE) {
+		return errors.New("data is too short to contain a complete block")
+	}
+
+	numCompleteBlocks := len(data) / int(BLOCK_SIZE)
+	if numCompleteBlocks == 0 {
+		return errors.New("data does not contain a complete block")
+	}
+
+	lastBlockStart := (numCompleteBlocks - 1) * int(BLOCK_SIZE)
+	lastBlock := data[lastBlockStart : lastBlockStart+int(BLOCK_SIZE)]
+
+	AddCRCToBlockData(lastBlock)
+
+	return nil
+}

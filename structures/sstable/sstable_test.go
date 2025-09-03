@@ -545,106 +545,106 @@ func BenchmarkPersistMemtable_Large(b *testing.B) {
 
 // Test cases for the Get method functionality
 
-// func TestGet_BasicFunctionality(t *testing.T) {
-// 	testDir := setupTestDir(t)
-// 	defer os.RemoveAll(testDir)
+func TestGet_BasicFunctionality(t *testing.T) {
+	testDir := setupTestDir(t)
+	defer os.RemoveAll(testDir)
 
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
 
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
 
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
 
-// 	// Create and persist test records
-// 	records := createTestRecords(50)
-// 	err := PersistMemtable(records, 1)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist memtable: %v", err)
-// 	}
+	// Create and persist test records
+	records := createTestRecords(50)
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
 
-// 	// Test retrieving existing keys
-// 	for i := 0; i < 50; i += 5 { // Test every 5th record to save time
-// 		key := fmt.Sprintf("key_%03d", i)
-// 		retrievedRecord, err := Get(key, 1)
+	// Test retrieving existing keys
+	for i := 0; i < 50; i += 5 { // Test every 5th record to save time
+		key := fmt.Sprintf("key_%03d", i)
+		retrievedRecord, err := Get(key, 1)
 
-// 		if err != nil {
-// 			t.Errorf("Get failed for key %s: %v", key, err)
-// 			continue
-// 		}
+		if err != nil {
+			t.Errorf("Get failed for key %s: %v", key, err)
+			continue
+		}
 
-// 		if retrievedRecord == nil {
-// 			t.Errorf("Get returned nil for existing key %s", key)
-// 			continue
-// 		}
+		if retrievedRecord == nil {
+			t.Errorf("Get returned nil for existing key %s", key)
+			continue
+		}
 
-// 		if retrievedRecord.Key != key {
-// 			t.Errorf("Retrieved record has wrong key. Expected: %s, Got: %s", key, retrievedRecord.Key)
-// 		}
+		if retrievedRecord.Key != key {
+			t.Errorf("Retrieved record has wrong key. Expected: %s, Got: %s", key, retrievedRecord.Key)
+		}
 
-// 		expectedValue := fmt.Sprintf("value_%03d", i)
-// 		if string(retrievedRecord.Value) != expectedValue {
-// 			t.Errorf("Retrieved record has wrong value. Expected: %s, Got: %s", expectedValue, string(retrievedRecord.Value))
-// 		}
-// 	}
-// }
+		expectedValue := fmt.Sprintf("value_%03d", i)
+		if string(retrievedRecord.Value) != expectedValue {
+			t.Errorf("Retrieved record has wrong value. Expected: %s, Got: %s", expectedValue, string(retrievedRecord.Value))
+		}
+	}
+}
 
-// func TestGet_NonExistentKey(t *testing.T) {
-// 	setupTestDir(t)
+func TestGet_NonExistentKey(t *testing.T) {
+	setupTestDir(t)
 
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
 
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
 
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
 
-// 	// Create and persist test records
-// 	records := createTestRecords(20)
-// 	err := PersistMemtable(records, 1)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist memtable: %v", err)
-// 	}
+	// Create and persist test records
+	records := createTestRecords(20)
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
 
-// 	// Test retrieving non-existent keys
-// 	nonExistentKeys := []string{
-// 		"key_999",       // Key beyond range
-// 		"key_100",       // Key beyond range
-// 		"nonexistent",   // Completely different key
-// 		"",              // Empty key
-// 		"key_000_extra", // Key with extra suffix
-// 		"aaa",           // Lexicographically before range
-// 		"zzz",           // Lexicographically after range
-// 	}
+	// Test retrieving non-existent keys
+	nonExistentKeys := []string{
+		"key_999",       // Key beyond range
+		"key_100",       // Key beyond range
+		"nonexistent",   // Completely different key
+		"",              // Empty key
+		"key_000_extra", // Key with extra suffix
+		"aaa",           // Lexicographically before range
+		"zzz",           // Lexicographically after range
+	}
 
-// 	for _, key := range nonExistentKeys {
-// 		retrievedRecord, err := Get(key, 1)
+	for _, key := range nonExistentKeys {
+		retrievedRecord, err := Get(key, 1)
 
-// 		if err != nil {
-// 			t.Errorf("Get returned error for non-existent key %s: %v", key, err)
-// 		}
+		if err != nil {
+			t.Errorf("Get returned error for non-existent key %s: %v", key, err)
+		}
 
-// 		if retrievedRecord != nil {
-// 			t.Errorf("Get returned non-nil record for non-existent key %s: %+v", key, retrievedRecord)
-// 		}
-// 	}
-// }
+		if retrievedRecord != nil {
+			t.Errorf("Get returned non-nil record for non-existent key %s: %+v", key, retrievedRecord)
+		}
+	}
+}
 
 func TestGet_SingleFileMode(t *testing.T) {
 	setupTestDir(t)
@@ -693,487 +693,487 @@ func TestGet_SingleFileMode(t *testing.T) {
 	}
 }
 
-// func TestGet_WithCompression(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = true
-// 	SPARSE_STEP_INDEX = 10
-
-// 	// Create and persist test records
-// 	records := createTestRecords(30)
-// 	err := PersistMemtable(records, 3)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist memtable: %v", err)
-// 	}
-
-// 	// Test retrieving keys with compression enabled
-// 	testKeys := []string{"key_000", "key_015", "key_029"}
-
-// 	for _, key := range testKeys {
-// 		retrievedRecord, err := Get(key, 3)
-
-// 		if err != nil {
-// 			t.Errorf("Get failed for key %s with compression: %v", key, err)
-// 			continue
-// 		}
-
-// 		if retrievedRecord == nil {
-// 			t.Errorf("Get returned nil for existing key %s with compression", key)
-// 			continue
-// 		}
-
-// 		if retrievedRecord.Key != key {
-// 			t.Errorf("Retrieved record has wrong key. Expected: %s, Got: %s", key, retrievedRecord.Key)
-// 		}
-// 	}
-// }
-
-// func TestGet_WithTombstones(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
-
-// 	// Create and persist test records with tombstones
-// 	records := createTestRecordsWithTombstones(30)
-// 	err := PersistMemtable(records, 4)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist memtable: %v", err)
-// 	}
-
-// 	// Test retrieving both tombstone and regular records
-// 	for i := 0; i < 30; i += 3 { // Test every 3rd record to cover different tombstone patterns
-// 		key := fmt.Sprintf("key_%03d", i)
-// 		retrievedRecord, err := Get(key, 4)
-
-// 		if err != nil {
-// 			t.Errorf("Get failed for key %s: %v", key, err)
-// 			continue
-// 		}
-
-// 		if retrievedRecord == nil {
-// 			t.Errorf("Get returned nil for existing key %s (even tombstones should be retrievable)", key)
-// 			continue
-// 		}
-
-// 		// Check if tombstone status matches expected (every 3rd record is a tombstone)
-// 		expectedTombstone := i%3 == 0
-// 		if retrievedRecord.Tombstone != expectedTombstone {
-// 			t.Errorf("Retrieved record tombstone status incorrect. Key: %s, Expected: %v, Got: %v",
-// 				key, expectedTombstone, retrievedRecord.Tombstone)
-// 		}
-// 	}
-// }
-
-// func TestGet_DifferentSparseStepIndexes(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-
-// 	// Test different sparse step indexes
-// 	testCases := []struct {
-// 		sparseIndex int
-// 		tableIndex  int
-// 		recordCount int
-// 	}{
-// 		{1, 5, 20},   // Every record in summary
-// 		{5, 6, 50},   // Every 5th record
-// 		{10, 7, 100}, // Every 10th record
-// 		{25, 8, 100}, // Every 25th record
-// 	}
-
-// 	for _, tc := range testCases {
-// 		SPARSE_STEP_INDEX = tc.sparseIndex
-
-// 		records := createTestRecords(tc.recordCount)
-// 		err := PersistMemtable(records, tc.tableIndex)
-// 		if err != nil {
-// 			t.Fatalf("Failed to persist memtable with sparse index %d: %v", tc.sparseIndex, err)
-// 		}
-
-// 		// Test first, middle, and last keys
-// 		testIndices := []int{0, tc.recordCount / 2, tc.recordCount - 1}
-
-// 		for _, idx := range testIndices {
-// 			key := fmt.Sprintf("key_%03d", idx)
-// 			retrievedRecord, err := Get(key, tc.tableIndex)
-
-// 			if err != nil {
-// 				t.Errorf("Get failed for key %s with sparse index %d: %v", key, tc.sparseIndex, err)
-// 				continue
-// 			}
-
-// 			if retrievedRecord == nil {
-// 				t.Errorf("Get returned nil for key %s with sparse index %d", key, tc.sparseIndex)
-// 				continue
-// 			}
-
-// 			if retrievedRecord.Key != key {
-// 				t.Errorf("Wrong key retrieved with sparse index %d. Expected: %s, Got: %s",
-// 					tc.sparseIndex, key, retrievedRecord.Key)
-// 			}
-// 		}
-// 	}
-// }
-
-// func TestGet_BoundaryKeys(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
-
-// 	records := createTestRecords(50)
-// 	err := PersistMemtable(records, 1)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist memtable: %v", err)
-// 	}
-
-// 	// Test boundary conditions
-// 	boundaryTests := []struct {
-// 		key         string
-// 		shouldExist bool
-// 		description string
-// 	}{
-// 		{"key_000", true, "first key"},
-// 		{"key_049", true, "last key"},
-// 		{"key_025", true, "middle key"},
-// 		{"key_00", false, "key shorter than existing"},
-// 		{"key_0000", false, "key longer than existing"},
-// 		{"key_050", false, "key just beyond range"},
-// 		{"key_", false, "partial key prefix"},
-// 	}
-
-// 	for _, test := range boundaryTests {
-// 		retrievedRecord, err := Get(test.key, 1)
-
-// 		if err != nil {
-// 			t.Errorf("Get failed for %s (%s): %v", test.key, test.description, err)
-// 			continue
-// 		}
-
-// 		if test.shouldExist && retrievedRecord == nil {
-// 			t.Errorf("Expected to find %s (%s) but got nil", test.key, test.description)
-// 		} else if !test.shouldExist && retrievedRecord != nil {
-// 			t.Errorf("Expected not to find %s (%s) but got record: %+v", test.key, test.description, retrievedRecord)
-// 		} else if test.shouldExist && retrievedRecord != nil && retrievedRecord.Key != test.key {
-// 			t.Errorf("Wrong key retrieved for %s (%s). Expected: %s, Got: %s",
-// 				test.key, test.description, test.key, retrievedRecord.Key)
-// 		}
-// 	}
-// }
-
-// func TestGet_LargeRecords(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 5
-
-// 	// Create and persist large records
-// 	records := createLargeTestRecords(10)
-// 	err := PersistMemtable(records, 5)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist large records: %v", err)
-// 	}
-
-// 	// Test retrieving large records
-// 	for i := 0; i < 10; i += 2 {
-// 		key := fmt.Sprintf("large_key_%03d", i)
-// 		retrievedRecord, err := Get(key, 5)
-
-// 		if err != nil {
-// 			t.Errorf("Get failed for large record key %s: %v", key, err)
-// 			continue
-// 		}
-
-// 		if retrievedRecord == nil {
-// 			t.Errorf("Get returned nil for existing large record key %s", key)
-// 			continue
-// 		}
-
-// 		if retrievedRecord.Key != key {
-// 			t.Errorf("Retrieved large record has wrong key. Expected: %s, Got: %s", key, retrievedRecord.Key)
-// 		}
-
-// 		if len(retrievedRecord.Value) != 2048 {
-// 			t.Errorf("Retrieved large record has wrong value size. Expected: 2048, Got: %d", len(retrievedRecord.Value))
-// 		}
-// 	}
-// }
-
-// func TestGet_SingleRecord(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
-
-// 	// Test with single record
-// 	records := createTestRecords(1)
-// 	err := PersistMemtable(records, 7)
-// 	if err != nil {
-// 		t.Fatalf("Failed to persist single record: %v", err)
-// 	}
-
-// 	// Test retrieving the single record
-// 	retrievedRecord, err := Get("key_000", 7)
-
-// 	if err != nil {
-// 		t.Errorf("Get failed for single record: %v", err)
-// 	}
-
-// 	if retrievedRecord == nil {
-// 		t.Errorf("Get returned nil for single existing record")
-// 	} else {
-// 		if retrievedRecord.Key != "key_000" {
-// 			t.Errorf("Single record has wrong key. Expected: key_000, Got: %s", retrievedRecord.Key)
-// 		}
-// 		if string(retrievedRecord.Value) != "value_000" {
-// 			t.Errorf("Single record has wrong value. Expected: value_000, Got: %s", string(retrievedRecord.Value))
-// 		}
-// 	}
-
-// 	// Test retrieving non-existent key from single record table
-// 	retrievedRecord, err = Get("key_001", 7)
-
-// 	if err != nil {
-// 		t.Errorf("Get returned error for non-existent key in single record table: %v", err)
-// 	}
-
-// 	if retrievedRecord != nil {
-// 		t.Errorf("Get returned non-nil for non-existent key in single record table: %+v", retrievedRecord)
-// 	}
-// }
-
-// func TestGet_AllConfigurationCombinations(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
-
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
-
-// 	// Test all combinations of configurations
-// 	configurations := []struct {
-// 		separateFiles bool
-// 		compression   bool
-// 		sparseStep    int
-// 		name          string
-// 	}{
-// 		{true, true, 5, "separate_files_compressed_sparse5"},
-// 		{true, false, 5, "separate_files_uncompressed_sparse5"},
-// 		{false, true, 10, "single_file_compressed_sparse10"},
-// 		{false, false, 10, "single_file_uncompressed_sparse10"},
-// 		{true, true, 1, "separate_files_compressed_sparse1"},
-// 		{false, false, 20, "single_file_uncompressed_sparse20"},
-// 	}
-
-// 	for i, config := range configurations {
-// 		USE_SEPARATE_FILES = config.separateFiles
-// 		COMPRESSION_ENABLED = config.compression
-// 		SPARSE_STEP_INDEX = config.sparseStep
-
-// 		records := createTestRecords(40)
-// 		tableIndex := 20 + i
-// 		err := PersistMemtable(records, tableIndex)
-// 		if err != nil {
-// 			t.Fatalf("Failed to persist memtable for config %s: %v", config.name, err)
-// 		}
-
-// 		// Test retrieving keys with this configuration
-// 		testKeys := []string{"key_000", "key_020", "key_039"}
-
-// 		for _, key := range testKeys {
-// 			retrievedRecord, err := Get(key, tableIndex)
-
-// 			if err != nil {
-// 				t.Errorf("Get failed for key %s with config %s: %v", key, config.name, err)
-// 				continue
-// 			}
-
-// 			if retrievedRecord == nil {
-// 				t.Errorf("Get returned nil for key %s with config %s", key, config.name)
-// 				continue
-// 			}
-
-// 			if retrievedRecord.Key != key {
-// 				t.Errorf("Wrong key retrieved with config %s. Expected: %s, Got: %s",
-// 					config.name, key, retrievedRecord.Key)
-// 			}
-// 		}
-
-// 		// Test non-existent key
-// 		retrievedRecord, err := Get("nonexistent", tableIndex)
-// 		if err != nil {
-// 			t.Errorf("Get returned error for non-existent key with config %s: %v", config.name, err)
-// 		}
-// 		if retrievedRecord != nil {
-// 			t.Errorf("Get returned non-nil for non-existent key with config %s: %+v", config.name, retrievedRecord)
-// 		}
-
-// 		t.Logf("Get method tested successfully with config %s", config.name)
-// 	}
-// }
-
-// func TestGet_InvalidSSTableIndex(t *testing.T) {
-// 	setupTestDir(t)
-
-// 	// Try to get from a non-existent SSTable
-// 	retrievedRecord, err := Get("any_key", 999)
-
-// 	if err == nil {
-// 		t.Errorf("Expected error when accessing non-existent SSTable, but got nil")
-// 	}
-
-// 	if retrievedRecord != nil {
-// 		t.Errorf("Expected nil record when accessing non-existent SSTable, but got: %+v", retrievedRecord)
-// 	}
-// }
+func TestGet_WithCompression(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = true
+	SPARSE_STEP_INDEX = 10
+
+	// Create and persist test records
+	records := createTestRecords(30)
+	err := PersistMemtable(records, 3)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test retrieving keys with compression enabled
+	testKeys := []string{"key_000", "key_015", "key_029"}
+
+	for _, key := range testKeys {
+		retrievedRecord, err := Get(key, 3)
+
+		if err != nil {
+			t.Errorf("Get failed for key %s with compression: %v", key, err)
+			continue
+		}
+
+		if retrievedRecord == nil {
+			t.Errorf("Get returned nil for existing key %s with compression", key)
+			continue
+		}
+
+		if retrievedRecord.Key != key {
+			t.Errorf("Retrieved record has wrong key. Expected: %s, Got: %s", key, retrievedRecord.Key)
+		}
+	}
+}
+
+func TestGet_WithTombstones(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create and persist test records with tombstones
+	records := createTestRecordsWithTombstones(30)
+	err := PersistMemtable(records, 4)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test retrieving both tombstone and regular records
+	for i := 0; i < 30; i += 3 { // Test every 3rd record to cover different tombstone patterns
+		key := fmt.Sprintf("key_%03d", i)
+		retrievedRecord, err := Get(key, 4)
+
+		if err != nil {
+			t.Errorf("Get failed for key %s: %v", key, err)
+			continue
+		}
+
+		if retrievedRecord == nil {
+			t.Errorf("Get returned nil for existing key %s (even tombstones should be retrievable)", key)
+			continue
+		}
+
+		// Check if tombstone status matches expected (every 3rd record is a tombstone)
+		expectedTombstone := i%3 == 0
+		if retrievedRecord.Tombstone != expectedTombstone {
+			t.Errorf("Retrieved record tombstone status incorrect. Key: %s, Expected: %v, Got: %v",
+				key, expectedTombstone, retrievedRecord.Tombstone)
+		}
+	}
+}
+
+func TestGet_DifferentSparseStepIndexes(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+
+	// Test different sparse step indexes
+	testCases := []struct {
+		sparseIndex int
+		tableIndex  int
+		recordCount int
+	}{
+		{1, 5, 20},   // Every record in summary
+		{5, 6, 50},   // Every 5th record
+		{10, 7, 100}, // Every 10th record
+		{25, 8, 100}, // Every 25th record
+	}
+
+	for _, tc := range testCases {
+		SPARSE_STEP_INDEX = tc.sparseIndex
+
+		records := createTestRecords(tc.recordCount)
+		err := PersistMemtable(records, tc.tableIndex)
+		if err != nil {
+			t.Fatalf("Failed to persist memtable with sparse index %d: %v", tc.sparseIndex, err)
+		}
+
+		// Test first, middle, and last keys
+		testIndices := []int{0, tc.recordCount / 2, tc.recordCount - 1}
+
+		for _, idx := range testIndices {
+			key := fmt.Sprintf("key_%03d", idx)
+			retrievedRecord, err := Get(key, tc.tableIndex)
+
+			if err != nil {
+				t.Errorf("Get failed for key %s with sparse index %d: %v", key, tc.sparseIndex, err)
+				continue
+			}
+
+			if retrievedRecord == nil {
+				t.Errorf("Get returned nil for key %s with sparse index %d", key, tc.sparseIndex)
+				continue
+			}
+
+			if retrievedRecord.Key != key {
+				t.Errorf("Wrong key retrieved with sparse index %d. Expected: %s, Got: %s",
+					tc.sparseIndex, key, retrievedRecord.Key)
+			}
+		}
+	}
+}
+
+func TestGet_BoundaryKeys(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecords(50)
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test boundary conditions
+	boundaryTests := []struct {
+		key         string
+		shouldExist bool
+		description string
+	}{
+		{"key_000", true, "first key"},
+		{"key_049", true, "last key"},
+		{"key_025", true, "middle key"},
+		{"key_00", false, "key shorter than existing"},
+		{"key_0000", false, "key longer than existing"},
+		{"key_050", false, "key just beyond range"},
+		{"key_", false, "partial key prefix"},
+	}
+
+	for _, test := range boundaryTests {
+		retrievedRecord, err := Get(test.key, 1)
+
+		if err != nil {
+			t.Errorf("Get failed for %s (%s): %v", test.key, test.description, err)
+			continue
+		}
+
+		if test.shouldExist && retrievedRecord == nil {
+			t.Errorf("Expected to find %s (%s) but got nil", test.key, test.description)
+		} else if !test.shouldExist && retrievedRecord != nil {
+			t.Errorf("Expected not to find %s (%s) but got record: %+v", test.key, test.description, retrievedRecord)
+		} else if test.shouldExist && retrievedRecord != nil && retrievedRecord.Key != test.key {
+			t.Errorf("Wrong key retrieved for %s (%s). Expected: %s, Got: %s",
+				test.key, test.description, test.key, retrievedRecord.Key)
+		}
+	}
+}
+
+func TestGet_LargeRecords(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 5
+
+	// Create and persist large records
+	records := createLargeTestRecords(10)
+	err := PersistMemtable(records, 5)
+	if err != nil {
+		t.Fatalf("Failed to persist large records: %v", err)
+	}
+
+	// Test retrieving large records
+	for i := 0; i < 10; i += 2 {
+		key := fmt.Sprintf("large_key_%03d", i)
+		retrievedRecord, err := Get(key, 5)
+
+		if err != nil {
+			t.Errorf("Get failed for large record key %s: %v", key, err)
+			continue
+		}
+
+		if retrievedRecord == nil {
+			t.Errorf("Get returned nil for existing large record key %s", key)
+			continue
+		}
+
+		if retrievedRecord.Key != key {
+			t.Errorf("Retrieved large record has wrong key. Expected: %s, Got: %s", key, retrievedRecord.Key)
+		}
+
+		if len(retrievedRecord.Value) != 2048 {
+			t.Errorf("Retrieved large record has wrong value size. Expected: 2048, Got: %d", len(retrievedRecord.Value))
+		}
+	}
+}
+
+func TestGet_SingleRecord(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Test with single record
+	records := createTestRecords(1)
+	err := PersistMemtable(records, 7)
+	if err != nil {
+		t.Fatalf("Failed to persist single record: %v", err)
+	}
+
+	// Test retrieving the single record
+	retrievedRecord, err := Get("key_000", 7)
+
+	if err != nil {
+		t.Errorf("Get failed for single record: %v", err)
+	}
+
+	if retrievedRecord == nil {
+		t.Errorf("Get returned nil for single existing record")
+	} else {
+		if retrievedRecord.Key != "key_000" {
+			t.Errorf("Single record has wrong key. Expected: key_000, Got: %s", retrievedRecord.Key)
+		}
+		if string(retrievedRecord.Value) != "value_000" {
+			t.Errorf("Single record has wrong value. Expected: value_000, Got: %s", string(retrievedRecord.Value))
+		}
+	}
+
+	// Test retrieving non-existent key from single record table
+	retrievedRecord, err = Get("key_001", 7)
+
+	if err != nil {
+		t.Errorf("Get returned error for non-existent key in single record table: %v", err)
+	}
+
+	if retrievedRecord != nil {
+		t.Errorf("Get returned non-nil for non-existent key in single record table: %+v", retrievedRecord)
+	}
+}
+
+func TestGet_AllConfigurationCombinations(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	// Test all combinations of configurations
+	configurations := []struct {
+		separateFiles bool
+		compression   bool
+		sparseStep    int
+		name          string
+	}{
+		{true, true, 5, "separate_files_compressed_sparse5"},
+		{true, false, 5, "separate_files_uncompressed_sparse5"},
+		{false, true, 10, "single_file_compressed_sparse10"},
+		{false, false, 10, "single_file_uncompressed_sparse10"},
+		{true, true, 1, "separate_files_compressed_sparse1"},
+		{false, false, 20, "single_file_uncompressed_sparse20"},
+	}
+
+	for i, config := range configurations {
+		USE_SEPARATE_FILES = config.separateFiles
+		COMPRESSION_ENABLED = config.compression
+		SPARSE_STEP_INDEX = config.sparseStep
+
+		records := createTestRecords(40)
+		tableIndex := 20 + i
+		err := PersistMemtable(records, tableIndex)
+		if err != nil {
+			t.Fatalf("Failed to persist memtable for config %s: %v", config.name, err)
+		}
+
+		// Test retrieving keys with this configuration
+		testKeys := []string{"key_000", "key_020", "key_039"}
+
+		for _, key := range testKeys {
+			retrievedRecord, err := Get(key, tableIndex)
+
+			if err != nil {
+				t.Errorf("Get failed for key %s with config %s: %v", key, config.name, err)
+				continue
+			}
+
+			if retrievedRecord == nil {
+				t.Errorf("Get returned nil for key %s with config %s", key, config.name)
+				continue
+			}
+
+			if retrievedRecord.Key != key {
+				t.Errorf("Wrong key retrieved with config %s. Expected: %s, Got: %s",
+					config.name, key, retrievedRecord.Key)
+			}
+		}
+
+		// Test non-existent key
+		retrievedRecord, err := Get("nonexistent", tableIndex)
+		if err != nil {
+			t.Errorf("Get returned error for non-existent key with config %s: %v", config.name, err)
+		}
+		if retrievedRecord != nil {
+			t.Errorf("Get returned non-nil for non-existent key with config %s: %+v", config.name, retrievedRecord)
+		}
+
+		t.Logf("Get method tested successfully with config %s", config.name)
+	}
+}
+
+func TestGet_InvalidSSTableIndex(t *testing.T) {
+	setupTestDir(t)
+
+	// Try to get from a non-existent SSTable
+	retrievedRecord, err := Get("any_key", 999)
+
+	if err == nil {
+		t.Errorf("Expected error when accessing non-existent SSTable, but got nil")
+	}
+
+	if retrievedRecord != nil {
+		t.Errorf("Expected nil record when accessing non-existent SSTable, but got: %+v", retrievedRecord)
+	}
+}
 
 // // Benchmark tests for Get method
 
-// func BenchmarkGet_Found(b *testing.B) {
-// 	testDir := setupTestDir(&testing.T{})
-// 	defer os.RemoveAll(testDir)
+func BenchmarkGet_Found(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
 
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
 
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
 
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
 
-// 	records := createTestRecords(1000)
-// 	err := PersistMemtable(records, 1)
-// 	if err != nil {
-// 		b.Fatalf("Failed to persist memtable: %v", err)
-// 	}
+	records := createTestRecords(1000)
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
 
-// 	b.ResetTimer()
-// 	for i := 0; i < b.N; i++ {
-// 		key := fmt.Sprintf("key_%03d", i%1000)
-// 		_, err := Get(key, 1)
-// 		if err != nil {
-// 			b.Fatalf("Get failed: %v", err)
-// 		}
-// 	}
-// }
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := fmt.Sprintf("key_%03d", i%1000)
+		_, err := Get(key, 1)
+		if err != nil {
+			b.Fatalf("Get failed: %v", err)
+		}
+	}
+}
 
-// func BenchmarkGet_NotFound(b *testing.B) {
-// 	testDir := setupTestDir(&testing.T{})
-// 	defer os.RemoveAll(testDir)
+func BenchmarkGet_NotFound(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
 
-// 	// Save original config values
-// 	originalUseSeparateFiles := USE_SEPARATE_FILES
-// 	originalCompressionEnabled := COMPRESSION_ENABLED
-// 	originalSparseStepIndex := SPARSE_STEP_INDEX
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
 
-// 	defer func() {
-// 		USE_SEPARATE_FILES = originalUseSeparateFiles
-// 		COMPRESSION_ENABLED = originalCompressionEnabled
-// 		SPARSE_STEP_INDEX = originalSparseStepIndex
-// 	}()
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
 
-// 	USE_SEPARATE_FILES = true
-// 	COMPRESSION_ENABLED = false
-// 	SPARSE_STEP_INDEX = 10
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
 
-// 	records := createTestRecords(1000)
-// 	err := PersistMemtable(records, 1)
-// 	if err != nil {
-// 		b.Fatalf("Failed to persist memtable: %v", err)
-// 	}
+	records := createTestRecords(1000)
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
 
-// 	b.ResetTimer()
-// 	for i := 0; i < b.N; i++ {
-// 		key := fmt.Sprintf("nonexistent_%d", i)
-// 		_, err := Get(key, 1)
-// 		if err != nil {
-// 			b.Fatalf("Get failed: %v", err)
-// 		}
-// 	}
-// }
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := fmt.Sprintf("nonexistent_%d", i)
+		_, err := Get(key, 1)
+		if err != nil {
+			b.Fatalf("Get failed: %v", err)
+		}
+	}
+}
