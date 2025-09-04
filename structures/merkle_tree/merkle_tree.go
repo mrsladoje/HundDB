@@ -18,6 +18,10 @@ type MerkleNode struct {
 	rightChild  *MerkleNode // Pointer to the right child node
 }
 
+func (mNode *MerkleNode) GetHash() [16]byte {
+	return mNode.hashedValue
+}
+
 // A Merkle tree is a binary tree used to efficiently verify the integrity of data.
 // The tree is defined by its root node, known as the Merkle root, which is a hash that represents the entire tree.
 type MerkleTree struct {

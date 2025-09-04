@@ -12,14 +12,17 @@ import (
 	merkle_tree "hunddb/structures/merkle_tree"
 	byte_util "hunddb/utils/byte_util"
 	crc_util "hunddb/utils/crc"
+	"io"
+	"os"
 )
 
 /*
 TODO:
 1. Serialize and write to disk (DONE)
 2. Get method (DONE)
-3. Merkle validity check
-4. Compaction-merging
+3. Merkle validity check (DONE)
+4. Thread safety
+5. Compaction-merging
 
 Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
 */
@@ -1216,12 +1219,24 @@ func retrieveFromDataComponent(filepath string, offset uint64, compressionEnable
 	return record, nil
 }
 
-func CheckIntegrity(index int) (bool, error) {
+/*
+CheckIntegrity checks the data integrity of the SSTable at the given index.
+
+Returns a boolean indicating whether the integrity check passed, a list of corrupt data blocks,
+if a fatal error occurred (fatal error doesn't allow us to continue with the check), and an error if one occurred.
+*/
+func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, error) {
+
+	corruptDataBlocks := make([]block_location.BlockLocation, 0)
 
 	// 1. Deserialize SSTable Config
 	config, sizes, offsets, err := deserializeSSTableConfig(index)
 	if err != nil {
-		return false, fmt.Errorf("failed to deserialize SSTable config: %v", err)
+		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+			FilePath:   fmt.Sprintf(FILE_NAME_FORMAT, index),
+			BlockIndex: 0,
+		})
+		return false, corruptDataBlocks, true, fmt.Errorf("failed to deserialize SSTable config: %v", err)
 	}
 
 	// 2. Construct new Merkle tree
@@ -1231,8 +1246,12 @@ func CheckIntegrity(index int) (bool, error) {
 	if config.UseSeparateFiles {
 		dataPath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
 		dataCompSizeBytes, dataStartOffset, err := readFromDisk(dataPath, 0, uint64(STANDARD_FLAG_SIZE))
+		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+			FilePath:   dataPath,
+			BlockIndex: 0,
+		})
 		if err != nil {
-			return false, fmt.Errorf("failed to read data file size: %v", err)
+			return false, corruptDataBlocks, true, fmt.Errorf("failed to read data file size: %v", err)
 		}
 		dataOffset = dataStartOffset
 		dataCompSize := binary.LittleEndian.Uint64(dataCompSizeBytes)
@@ -1247,6 +1266,7 @@ func CheckIntegrity(index int) (bool, error) {
 
 	currentOffset := dataOffset
 	recordHashes := make([][]byte, 0)
+	hashToOffset := make(map[[md5.Size]byte]uint64)
 
 	i := 1
 
@@ -1255,23 +1275,37 @@ func CheckIntegrity(index int) (bool, error) {
 
 		recordSizeBytes, currentOffset, err = readFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
 		if err != nil {
-			return false, fmt.Errorf("failed to read record size: %v", err)
+			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+				FilePath:   dataPath,
+				BlockIndex: currentOffset / BLOCK_SIZE,
+			})
+			if errors.Is(err, io.EOF) || os.IsNotExist(err) || os.IsPermission(err) {
+				return false, corruptDataBlocks, true, fmt.Errorf("failed to read record size: %v", err)
+			}
 		}
 		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
 
 		var recordData []byte
+		offsetBeforeRecord := currentOffset
 		recordData, currentOffset, err = readFromDisk(dataPath, currentOffset, recordSize)
 		if err != nil {
-			return false, fmt.Errorf("failed to read record data: %v", err)
+			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+				FilePath:   dataPath,
+				BlockIndex: currentOffset / BLOCK_SIZE,
+			})
+			if errors.Is(err, io.EOF) || os.IsNotExist(err) || os.IsPermission(err) {
+				return false, corruptDataBlocks, true, fmt.Errorf("failed to read record data: %v", err)
+			}
 		}
 		recordHash := md5.Sum(recordData)
 		recordHashes = append(recordHashes, recordHash[:])
+		hashToOffset[recordHash] = offsetBeforeRecord
 		i++
 	}
 
 	merkleTree, err := merkle_tree.NewMerkleTree(recordHashes, true)
 	if err != nil {
-		return false, fmt.Errorf("failed to create Merkle tree: %v", err)
+		return false, corruptDataBlocks, true, fmt.Errorf("failed to create Merkle tree: %v", err)
 	}
 
 	// 3. Load Serialized Merkle Tree
@@ -1285,21 +1319,35 @@ func CheckIntegrity(index int) (bool, error) {
 	} else {
 		metaDatasize, err = getComponentSize(metadataPath)
 		if err != nil {
-			return false, fmt.Errorf("failed to get metadata size: %v", err)
+			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+				FilePath:   metadataPath,
+				BlockIndex: 0,
+			})
+			return false, corruptDataBlocks, true, fmt.Errorf("failed to get metadata size: %v", err)
 		}
 	}
 
 	merkleBytes, _, err := readFromDisk(metadataPath, metadataOffset, metaDatasize)
 	if err != nil {
-		return false, fmt.Errorf("failed to read serialized Merkle tree: %v", err)
+		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+			FilePath:   metadataPath,
+			BlockIndex: metadataOffset / BLOCK_SIZE,
+		})
+		return false, corruptDataBlocks, true, fmt.Errorf("failed to read serialized Merkle tree: %v", err)
 	}
 	merkleTreeStored := merkle_tree.Deserialize(merkleBytes)
 
 	// 4. Validate
-	isValidData, _, _ := merkleTreeStored.Validate(merkleTree)
+	isValidData, mismatchedNodes, _ := merkleTree.Validate(merkleTreeStored)
 	if !isValidData {
-		return false, nil
+		for _, node := range mismatchedNodes {
+			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+				FilePath:   dataPath,
+				BlockIndex: hashToOffset[node.GetHash()] / BLOCK_SIZE,
+			})
+		}
+		return false, corruptDataBlocks, false, nil
 	}
 
-	return true, nil
+	return true, []block_location.BlockLocation{}, false, nil
 }
