@@ -65,7 +65,16 @@ func SizeAfterAddingCRCs(originalSize uint64) uint64 {
 	dataPerBlock := BLOCK_SIZE - CRC_SIZE
 	numBlocks := int(math.Ceil(float64(originalSize) / float64(dataPerBlock)))
 
-	return uint64(numBlocks) * BLOCK_SIZE
+	return originalSize + uint64(numBlocks)*CRC_SIZE
+}
+
+/*
+SizeWithoutCRCs calculates the size of the byte data after removing CRCs for each block.
+*/
+func SizeWithoutCRCs(originalSize uint64) uint64 {
+	numBlocks := uint64(math.Ceil(float64(originalSize) / float64(BLOCK_SIZE)))
+
+	return originalSize - numBlocks*CRC_SIZE
 }
 
 /*

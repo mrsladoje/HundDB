@@ -21,7 +21,7 @@ func TestNewMerkleTree(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		tree, err := NewMerkleTree(test.blocks)
+		tree, err := NewMerkleTree(test.blocks, false)
 		if err != nil {
 			if err != ErrEmptyTree {
 				t.Error(err.Error())
@@ -60,7 +60,7 @@ func TestHeight(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		tree, err := NewMerkleTree(test.blocks)
+		tree, err := NewMerkleTree(test.blocks, false)
 		if err != nil {
 			t.Error(err.Error())
 		}
@@ -95,7 +95,7 @@ func TestMaxNumOfNodes(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		tree, err := NewMerkleTree(test.blocks)
+		tree, err := NewMerkleTree(test.blocks, false)
 		if err != nil {
 			t.Error(err.Error())
 		}
@@ -121,15 +121,15 @@ func TestMaxNumOfNodes(t *testing.T) {
 // TestValidate tests the Validate method of the MerkleTree.
 func TestValidate(t *testing.T) {
 
-	tree1, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
+	tree1, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"}, false)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	tree2, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"})
+	tree2, err := NewMerkleTree([]string{"block1", "block2", "block3", "block4"}, false)
 	if err != nil {
 		t.Error(err.Error())
 	}
-	tree3, err := NewMerkleTree([]string{"block1", "block2", "block3"})
+	tree3, err := NewMerkleTree([]string{"block1", "block2", "block3"}, false)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -176,7 +176,7 @@ func TestValidate(t *testing.T) {
 // Test BFS Traversal
 func TestBFS(t *testing.T) {
 	blocks := []string{"A", "B", "C", "D"}
-	tree, err := NewMerkleTree(blocks)
+	tree, err := NewMerkleTree(blocks, false)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -210,7 +210,7 @@ func TestBFS(t *testing.T) {
 // Test DFS Traversal
 func TestDFS(t *testing.T) {
 	blocks := []string{"A", "B", "C", "D"}
-	tree, err := NewMerkleTree(blocks)
+	tree, err := NewMerkleTree(blocks, false)
 	if err != nil {
 		t.Error(err.Error())
 	}
@@ -254,7 +254,7 @@ func TestSerializeDeserialize(t *testing.T) {
 
 	for _, test := range tests {
 
-		originalTree, err := NewMerkleTree(test.blocks)
+		originalTree, err := NewMerkleTree(test.blocks, false)
 		if err != nil {
 			t.Error(err.Error())
 		}

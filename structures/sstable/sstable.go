@@ -1,6 +1,7 @@
 package sstable
 
 import (
+	"crypto/md5"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,9 +17,9 @@ import (
 /*
 TODO:
 1. Serialize and write to disk (DONE)
-2. Get method
-3. Compaction-merging
-4. Merkle validity check
+2. Get method (DONE)
+3. Merkle validity check
+4. Compaction-merging
 
 Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
 */
@@ -437,7 +438,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 		metaDataFilePath = fmt.Sprintf(METADATA_FILE_NAME_FORMAT, index)
 	}
 
-	merkleTree, err := merkle_tree.NewMerkleTree(serializedRecords)
+	merkleTree, err := merkle_tree.NewMerkleTree(serializedRecords, false)
 	if err != nil {
 		return err
 	}
@@ -504,7 +505,7 @@ func (data *DataComp) serialize() ([]byte, uint64, error) {
 	}
 
 	finalBytes := crc_util.AddCRCsToData(serializedData)
-	finalSizeBytes := uint64(len(finalBytes))
+	finalSizeBytes := uint64(len(serializedData))
 
 	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
 	crc_util.FixLastBlockCRC(finalBytes)
@@ -709,7 +710,7 @@ func (metaComp *MetadataComp) serialize() ([]byte, uint64, error) {
 	}
 
 	finalBytes := crc_util.AddCRCsToData(serializedMerkle)
-	finalSizeBytes := uint64(len(finalBytes))
+	finalSizeBytes := uint64(len(serializedMerkle))
 
 	byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
 	crc_util.FixLastBlockCRC(finalBytes)
@@ -744,43 +745,60 @@ func writeToDisk(serializedData []byte, filePath string, startOffset uint64) err
 Helper function to read serializedData from the disk, using block manager.
 Checks each block's integrity by checking the CRCs, returns the data without the CRCs.
 */
-func readFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, error) {
+func readFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, uint64, error) {
 	blockManager := block_manager.GetBlockManager()
 
-	currentLocation := block_location.BlockLocation{
-		FilePath:   filePath,
-		BlockIndex: startOffset / BLOCK_SIZE,
-	}
+	startBlockIndex := startOffset / BLOCK_SIZE
 	blockOffset := startOffset % BLOCK_SIZE
+
+	// If the offset is within the CRC area, move to after the CRC
 	if blockOffset < CRC_SIZE {
 		blockOffset = CRC_SIZE
 	}
 
-	finalBytes := make([]byte, 0)
+	finalBytes := make([]byte, 0, size) // Pre-allocate capacity
+	currentBlockIndex := startBlockIndex
+	remainingBytes := size
 
-	for uint64(len(finalBytes)) < size {
+	for remainingBytes > 0 {
+		// Read the current block
+		currentLocation := block_location.BlockLocation{
+			FilePath:   filePath,
+			BlockIndex: currentBlockIndex,
+		}
+
 		blockData, err := blockManager.ReadBlock(currentLocation)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+
 		err = crc_util.CheckBlockIntegrity(blockData)
 		if err != nil {
-			return nil, err
-		}
-		remainingBytes := size - uint64(len(finalBytes))
-		var bytesToRead uint64
-		if remainingBytes < BLOCK_SIZE-CRC_SIZE-blockOffset {
-			bytesToRead = remainingBytes
-		} else {
-			bytesToRead = BLOCK_SIZE - CRC_SIZE - blockOffset
+			return nil, 0, err
 		}
 
-		finalBytes = append(finalBytes, blockData[blockOffset:bytesToRead+blockOffset]...)
+		// Calculate how many bytes to read from this block
+		availableInBlock := BLOCK_SIZE - blockOffset
+		bytesToRead := remainingBytes
+		if bytesToRead > availableInBlock {
+			bytesToRead = availableInBlock
+		}
+
+		// Append the bytes from this block
+		finalBytes = append(finalBytes, blockData[blockOffset:blockOffset+bytesToRead]...)
+
+		remainingBytes -= bytesToRead
+		currentBlockIndex++
+
+		// For subsequent blocks, we start reading after the CRC
 		blockOffset = CRC_SIZE
-		currentLocation.BlockIndex++
 	}
 
-	return finalBytes, nil
+	// Calculate the final offset (where reading ended)
+	totalBytesRead := size
+	finalPhysicalOffset := crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(startOffset) + totalBytesRead)
+
+	return finalBytes, finalPhysicalOffset, nil
 }
 
 /*
@@ -1004,7 +1022,7 @@ func deserializeFilter(filepath string, offset uint64, filterSize uint64, useSep
 		actualOffset += STANDARD_FLAG_SIZE + CRC_SIZE
 	}
 
-	filterBytes, err := readFromDisk(filepath, actualOffset, actualSize)
+	filterBytes, _, err := readFromDisk(filepath, actualOffset, actualSize)
 	if err != nil {
 		return nil, err
 	}
@@ -1036,7 +1054,7 @@ func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int
 		return true, true, firstEntryDataOffset, 0, 0, nil
 	}
 
-	lastEntryOffsetBytes, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	lastEntryOffsetBytes, _, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
 	if err != nil {
 		return false, false, 0, 0, 0, err
 	}
@@ -1069,7 +1087,7 @@ Read an index metadata entry from the SSTable Summary Component.
 Takes in the filepath, and offset to the entry start, returns the key, its offset in the data, and any error encountered.
 */
 func readIndexMetadataEntry(filepath string, offset uint64) (string, uint64, error) {
-	entryBytes, err := readFromDisk(filepath, offset, INDEX_ENTRY_METADATA_SIZE)
+	entryBytes, _, err := readFromDisk(filepath, offset, INDEX_ENTRY_METADATA_SIZE)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1078,7 +1096,7 @@ func readIndexMetadataEntry(filepath string, offset uint64) (string, uint64, err
 	keySize := binary.LittleEndian.Uint64(entryBytes[STANDARD_FLAG_SIZE : 2*STANDARD_FLAG_SIZE])
 	offsetInIndex := binary.LittleEndian.Uint64(entryBytes[2*STANDARD_FLAG_SIZE : 3*STANDARD_FLAG_SIZE])
 
-	keyBytes, err := readFromDisk(filepath, offsetInIndex, keySize)
+	keyBytes, _, err := readFromDisk(filepath, offsetInIndex, keySize)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1183,12 +1201,12 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 Retrieve a record from the data component of the SSTable.
 */
 func retrieveFromDataComponent(filepath string, offset uint64, compressionEnabled bool) (*record.Record, error) {
-	recordSize, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	recordSize, _, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
 	if err != nil {
 		return nil, err
 	}
 
-	recordData, err := readFromDisk(filepath, offset+STANDARD_FLAG_SIZE, binary.LittleEndian.Uint64(recordSize))
+	recordData, _, err := readFromDisk(filepath, offset+STANDARD_FLAG_SIZE, binary.LittleEndian.Uint64(recordSize))
 	if err != nil {
 		return nil, err
 	}
@@ -1196,4 +1214,92 @@ func retrieveFromDataComponent(filepath string, offset uint64, compressionEnable
 	record := record.DeserializeForSSTable(recordData, compressionEnabled)
 
 	return record, nil
+}
+
+func CheckIntegrity(index int) (bool, error) {
+
+	// 1. Deserialize SSTable Config
+	config, sizes, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return false, fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 2. Construct new Merkle tree
+	dataPath := ""
+	var dataOffset uint64
+	var dataEndOffset uint64
+	if config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+		dataCompSizeBytes, dataStartOffset, err := readFromDisk(dataPath, 0, uint64(STANDARD_FLAG_SIZE))
+		if err != nil {
+			return false, fmt.Errorf("failed to read data file size: %v", err)
+		}
+		dataOffset = dataStartOffset
+		dataCompSize := binary.LittleEndian.Uint64(dataCompSizeBytes)
+		dataEndOffset = crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(dataOffset) + dataCompSize)
+	}
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		dataOffset = offsets[0] + CRC_SIZE
+		dataCompSize := sizes[0]
+		dataEndOffset = crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(dataOffset) + dataCompSize)
+	}
+
+	currentOffset := dataOffset
+	recordHashes := make([][]byte, 0)
+
+	i := 1
+
+	for currentOffset < dataEndOffset {
+		var recordSizeBytes []byte
+
+		recordSizeBytes, currentOffset, err = readFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			return false, fmt.Errorf("failed to read record size: %v", err)
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+
+		var recordData []byte
+		recordData, currentOffset, err = readFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			return false, fmt.Errorf("failed to read record data: %v", err)
+		}
+		recordHash := md5.Sum(recordData)
+		recordHashes = append(recordHashes, recordHash[:])
+		i++
+	}
+
+	merkleTree, err := merkle_tree.NewMerkleTree(recordHashes, true)
+	if err != nil {
+		return false, fmt.Errorf("failed to create Merkle tree: %v", err)
+	}
+
+	// 3. Load Serialized Merkle Tree
+	metadataPath := fmt.Sprintf(METADATA_FILE_NAME_FORMAT, index)
+	metadataOffset := uint64(CRC_SIZE) + STANDARD_FLAG_SIZE
+	var metaDatasize uint64
+	if !config.UseSeparateFiles {
+		metadataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		metadataOffset = offsets[4]
+		metaDatasize = sizes[4]
+	} else {
+		metaDatasize, err = getComponentSize(metadataPath)
+		if err != nil {
+			return false, fmt.Errorf("failed to get metadata size: %v", err)
+		}
+	}
+
+	merkleBytes, _, err := readFromDisk(metadataPath, metadataOffset, metaDatasize)
+	if err != nil {
+		return false, fmt.Errorf("failed to read serialized Merkle tree: %v", err)
+	}
+	merkleTreeStored := merkle_tree.Deserialize(merkleBytes)
+
+	// 4. Validate
+	isValidData, _, _ := merkleTreeStored.Validate(merkleTree)
+	if !isValidData {
+		return false, nil
+	}
+
+	return true, nil
 }
