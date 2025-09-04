@@ -18,18 +18,27 @@ type MerkleNode struct {
 	rightChild  *MerkleNode // Pointer to the right child node
 }
 
+func (mNode *MerkleNode) GetHash() [16]byte {
+	return mNode.hashedValue
+}
+
 // A Merkle tree is a binary tree used to efficiently verify the integrity of data.
 // The tree is defined by its root node, known as the Merkle root, which is a hash that represents the entire tree.
 type MerkleTree struct {
 	merkleRoot *MerkleNode // Pointer to the root node of the Merkle tree
 }
 
-// TODO: Params will be blocks when that code is done, string for NOW, it will use block manager!
+// Hashable is an interface that represents types that can be hashed.
+// For production, Record will be used, but we keep string to maintain testing simplicity.
+type Hashable interface {
+	string | []byte
+}
+
 // NewMerkleTree creates a new Merkle tree from the given blocks, and to make it a binary tree
 // it will add neutral nodes(nil for all attributes) at the right most side of the tree
 // blocks: a slice of blocks with which the Merkle tree will be created.
 // returns: Merkle tree instance and an error if there was no blocks to construct the tree.
-func NewMerkleTree(blocks []string) (*MerkleTree, error) {
+func NewMerkleTree[T Hashable](blocks []T, hashedAlredy bool) (*MerkleTree, error) {
 	if len(blocks) == 0 {
 		return nil, ErrEmptyTree
 	}
@@ -37,13 +46,28 @@ func NewMerkleTree(blocks []string) (*MerkleTree, error) {
 	// Create leaf nodes
 	nodes := make([]*MerkleNode, 0, len(blocks))
 	for _, block := range blocks {
-		hashedValue := md5.Sum([]byte(block))
+		var hashedValue [16]byte
+
+		switch v := any(block).(type) {
+		case string:
+			hashedValue = md5.Sum([]byte(v))
+		case []byte:
+			if !hashedAlredy {
+				hashedValue = md5.Sum(v)
+			} else {
+				copy(hashedValue[:], v)
+			}
+		}
 		nodes = append(nodes, &MerkleNode{hashedValue: hashedValue})
 	}
 
 	for len(nodes) > 1 {
 		if len(nodes)%2 == 1 {
-			nodes = append(nodes, &MerkleNode{})
+			nodes = append(nodes, &MerkleNode{
+				hashedValue: [16]byte{},
+				leftChild:   nil,
+				rightChild:  nil,
+			})
 		}
 		newNodes := make([]*MerkleNode, 0, len(nodes)/2)
 		for i := 0; i < len(nodes); i += 2 {
@@ -97,10 +121,6 @@ func (mTree *MerkleTree) MaxNumOfLeafs() uint64 {
 	return uint64(math.Pow(2, float64(mTree.Height())))
 }
 
-// TODO: There are issues in this validate logic, when trees have different numbers of leaf nodes, also how should tree
-// validation be done in theory, how should it behave if trees have different heights and different number of leafs.
-// That will be checked and done when the use cases for validation become more clear.
-
 // Validate method of a Merkle tree compares two Merkle trees and returns
 // a bool value to represent the result of the comparison, and two slices of pointers to the
 // leaf nodes that differ in order from left to right.
@@ -120,6 +140,10 @@ func (mTree *MerkleTree) Validate(otherMTree *MerkleTree) (bool, []*MerkleNode, 
 // DeepValidate is a recursive helper function for the Validation method of the merkle tree.
 // More documentation of it will be done when validation is perfected.
 func DeepValidate(mNode, otherMNode *MerkleNode, mismatchesTree1, mismatchesTree2 *[]*MerkleNode) {
+	if mNode == nil || otherMNode == nil {
+		return
+	}
+
 	if mNode.hashedValue == otherMNode.hashedValue {
 		return
 	} else if mNode.leftChild == nil && mNode.rightChild == nil && otherMNode.leftChild == nil && otherMNode.rightChild == nil {
@@ -215,8 +239,15 @@ func DeserializeDFS(data []byte, offset *int) *MerkleNode {
 	*offset += 16
 
 	node := &MerkleNode{hashedValue: hash}
-	node.leftChild = DeserializeDFS(data, offset)
-	node.rightChild = DeserializeDFS(data, offset)
+
+	// if hash != [16]byte{} {
+	if *offset < len(data) {
+		node.leftChild = DeserializeDFS(data, offset)
+	}
+	if *offset < len(data) {
+		node.rightChild = DeserializeDFS(data, offset)
+	}
+	// }
 
 	return node
 }

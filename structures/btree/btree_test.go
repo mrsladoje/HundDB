@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"hunddb/model"
+	record "hunddb/model/record"
 )
 
 // Helper function to create a test record (active)
-func createTestRecord(key, value string) *model.Record {
-	return &model.Record{
+func createTestRecord(key, value string) *record.Record {
+	return &record.Record{
 		Key:       key,
 		Value:     []byte(value),
 		Tombstone: false,
@@ -21,7 +21,7 @@ func createTestRecord(key, value string) *model.Record {
 }
 
 // Helper function to create a tombstoned record
-func createTombstonedRecord(key, value string) *model.Record {
+func createTombstonedRecord(key, value string) *record.Record {
 	record := createTestRecord(key, value)
 	record.Tombstone = true
 	return record
@@ -85,10 +85,10 @@ func TestBTree_AddInvalidRecord(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		record *model.Record
+		record *record.Record
 	}{
 		{"Nil record", nil},
-		{"Empty key", &model.Record{Key: "", Value: []byte("value")}},
+		{"Empty key", &record.Record{Key: "", Value: []byte("value")}},
 	}
 
 	for _, tc := range tests {
@@ -232,7 +232,6 @@ func TestBTree_Delete(t *testing.T) {
 		t.Error("Nonexistent key should be tombstoned and not retrievable")
 	}
 }
-
 
 func TestBTree_Compaction(t *testing.T) {
 	btree := NewBTree(3, math.MaxInt)

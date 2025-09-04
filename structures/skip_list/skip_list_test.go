@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"hunddb/model"
+	model "hunddb/model/record"
 )
 
 // helper to create records with current timestamp

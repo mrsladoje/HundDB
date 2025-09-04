@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"hunddb/model"
+	model "hunddb/model/record"
 )
 
 // ---- helpers ----

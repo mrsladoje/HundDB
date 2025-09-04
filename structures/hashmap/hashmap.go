@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"hunddb/model"
+	model "hunddb/model/record"
 	mt "hunddb/structures/memtable"
 )
 
@@ -73,7 +73,6 @@ func (hm *HashMap) Delete(record *model.Record) bool {
 	}
 	return false
 }
-
 
 // Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
 func (hm *HashMap) Get(key string) *model.Record {

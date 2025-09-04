@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
-	mdl "hunddb/model"
+	block_location "hunddb/model/block_location"
+	record "hunddb/model/record"
 	bm "hunddb/structures/block_manager"
 	"math"
 	"os"
@@ -44,7 +45,7 @@ func NewWAL(dirPath string, logIndex uint32) *WAL {
 // TODO: Implement recovery logic to read the last written block and continue from there. It should be called upon startup.
 
 // WriteRecord writes a WAL record to the log, handling both complete and fragmented records.
-func (wal *WAL) WriteRecord(record *mdl.Record) error {
+func (wal *WAL) WriteRecord(record *record.Record) error {
 	payload := record.Serialize()
 	spaceNeeded := HEADER_TOTAL_SIZE + len(payload)
 
@@ -137,7 +138,7 @@ func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 // TODO: Agree on the correct path to logs
 // flushCurrentAndMakeNewBlock writes the current block to storage and prepares for the next block.
 func (wal *WAL) flushCurrentAndMakeNewBlock() error {
-	err := bm.GetBlockManager().WriteBlock(mdl.BlockLocation{
+	err := bm.GetBlockManager().WriteBlock(block_location.BlockLocation{
 		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, wal.lastLogIndex),
 		BlockIndex: uint64(wal.blocksInCurrentLog),
 	}, wal.lastBlock)
@@ -207,7 +208,7 @@ func (wal *WAL) ReconstructMemtable() error {
 
 	for logIndex := startLogIndex; logIndex <= endLogIndex; logIndex++ {
 		for blockIndex := uint64(0); blockIndex < LOG_SIZE; blockIndex++ {
-			location := mdl.BlockLocation{
+			location := block_location.BlockLocation{
 				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, logIndex),
 				BlockIndex: blockIndex,
 			}
@@ -251,7 +252,7 @@ func (wal *WAL) processBlock(block []byte, fragmentBuffer *[]byte) error {
 
 		switch header.Type {
 		case FRAGMENT_FULL:
-			record := mdl.Deserialize(payload)
+			record := record.Deserialize(payload)
 			// TODO: Insert into memtable when implemented:
 			_ = record // Suppress unused variable warning, remove when used
 
@@ -260,7 +261,7 @@ func (wal *WAL) processBlock(block []byte, fragmentBuffer *[]byte) error {
 
 		case FRAGMENT_LAST:
 			*fragmentBuffer = append(*fragmentBuffer, payload...)
-			record := mdl.Deserialize(*fragmentBuffer)
+			record := record.Deserialize(*fragmentBuffer)
 			// TODO: Insert into memtable when implemented:
 			_ = record // Suppress unused variable warning, remove when used
 

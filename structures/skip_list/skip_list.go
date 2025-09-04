@@ -2,7 +2,7 @@ package skip_list
 
 import (
 	"errors"
-	"hunddb/model"
+	model "hunddb/model/record"
 	"math/rand"
 	"time"
 )

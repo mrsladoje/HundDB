@@ -2,8 +2,8 @@ package block_manager
 
 import (
 	"errors"
-	mdl "hunddb/model"
-	"hunddb/structures/lru_cache"
+	block_location "hunddb/model/block_location"
+	lru_cache "hunddb/structures/lru_cache"
 	"io"
 	"os"
 )
@@ -15,7 +15,7 @@ var instance *BlockManager
 // Implements singleton pattern
 type BlockManager struct {
 	blockSize  uint16 // in bytes
-	blockCache *lru_cache.LRUCache[mdl.BlockLocation, []byte]
+	blockCache *lru_cache.LRUCache[block_location.BlockLocation, []byte]
 }
 
 // GetBlockManager returns the singleton instance
@@ -26,14 +26,14 @@ func GetBlockManager() *BlockManager {
 		// For now dummy values are present
 		instance = &BlockManager{
 			blockSize:  1024 * uint16(4),
-			blockCache: lru_cache.NewLRUCache[mdl.BlockLocation, []byte](100),
+			blockCache: lru_cache.NewLRUCache[block_location.BlockLocation, []byte](100),
 		}
 	}
 	return instance
 }
 
 // ReadBlock reads a block from disk, using cache if available
-func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) ([]byte, error) {
+func (bm *BlockManager) ReadBlock(location block_location.BlockLocation) ([]byte, error) {
 	cachedBlock, err := bm.blockCache.Get(location)
 	if err == nil {
 		return cachedBlock, nil
@@ -50,7 +50,7 @@ func (bm *BlockManager) ReadBlock(location mdl.BlockLocation) ([]byte, error) {
 
 // WriteBlock writes a block to disk and updates cache
 // TODO: Consult with TA should block manager write to disk only when block cache is full
-func (bm *BlockManager) WriteBlock(location mdl.BlockLocation, data []byte) error {
+func (bm *BlockManager) WriteBlock(location block_location.BlockLocation, data []byte) error {
 	err := bm.writeBlockToDisk(location, data)
 	if err != nil {
 		return errors.New("block not written successfully")
@@ -66,7 +66,7 @@ func (bm *BlockManager) GetBlockSize() uint16 {
 }
 
 // Private helper method for ReadBlock
-func (bm *BlockManager) readBlockFromDisk(location mdl.BlockLocation) ([]byte, error) {
+func (bm *BlockManager) readBlockFromDisk(location block_location.BlockLocation) ([]byte, error) {
 	file, err := os.Open(location.FilePath)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (bm *BlockManager) readBlockFromDisk(location mdl.BlockLocation) ([]byte, e
 }
 
 // Private helper method for WriteBlock
-func (bm *BlockManager) writeBlockToDisk(location mdl.BlockLocation, data []byte) error {
+func (bm *BlockManager) writeBlockToDisk(location block_location.BlockLocation, data []byte) error {
 	file, err := os.OpenFile(location.FilePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return err
