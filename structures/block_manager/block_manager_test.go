@@ -4,6 +4,7 @@ import (
 	"bytes"
 	block_location "hunddb/model/block_location"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -29,8 +30,13 @@ func createTestFile(t testing.TB, content []byte) (string, func()) {
 	}
 }
 
-func TestGetBlockManager_Singleton(t *testing.T) {
+func resetBlockManager() {
 	instance = nil
+	once = sync.Once{}
+}
+
+func TestGetBlockManager_Singleton(t *testing.T) {
+	resetBlockManager()
 
 	bm1 := GetBlockManager()
 	bm2 := GetBlockManager()
@@ -49,7 +55,7 @@ func TestGetBlockManager_Singleton(t *testing.T) {
 }
 
 func TestBlockManager_WriteAndReadBlock(t *testing.T) {
-	instance = nil
+	resetBlockManager()
 	bm := GetBlockManager()
 
 	testData := []byte("test data for block manager")
@@ -90,7 +96,7 @@ func TestBlockManager_WriteAndReadBlock(t *testing.T) {
 }
 
 func TestBlockManager_ReadNonExistentFile(t *testing.T) {
-	instance = nil
+	resetBlockManager()
 	bm := GetBlockManager()
 
 	location := block_location.BlockLocation{
@@ -105,7 +111,7 @@ func TestBlockManager_ReadNonExistentFile(t *testing.T) {
 }
 
 func TestBlockManager_MultipleBlocksInFile(t *testing.T) {
-	instance = nil
+	resetBlockManager()
 	bm := GetBlockManager()
 
 	blockSize := int(bm.GetBlockSize())
@@ -151,7 +157,7 @@ func TestBlockManager_MultipleBlocksInFile(t *testing.T) {
 }
 
 func TestBlockManager_CacheIntegration(t *testing.T) {
-	instance = nil
+	resetBlockManager()
 	bm := GetBlockManager()
 
 	testData := make([]byte, int(bm.GetBlockSize()))
@@ -192,7 +198,7 @@ func TestBlockManager_CacheIntegration(t *testing.T) {
 }
 
 func TestBlockManager_WriteToExistingFile(t *testing.T) {
-	instance = nil
+	resetBlockManager()
 	bm := GetBlockManager()
 
 	blockSize := int(bm.GetBlockSize())
@@ -243,5 +249,129 @@ func TestBlockManager_WriteToExistingFile(t *testing.T) {
 	expectedBlock0Data := existingData[:blockSize]
 	if !bytes.Equal(block0, expectedBlock0Data) {
 		t.Error("Original block 0 data should be preserved")
+	}
+}
+
+// ---- New Concurrency and Thread-Safety Tests ----
+
+// TestBlockManager_ConcurrentReads tests that multiple goroutines can read
+// from the same file concurrently without issues.
+func TestBlockManager_ConcurrentReads(t *testing.T) {
+	resetBlockManager()
+	bm := GetBlockManager()
+	blockSize := int(bm.GetBlockSize())
+	numBlocks := 10
+
+	// Prepare a file with multiple distinct blocks
+	var fileContent []byte
+	expectedBlocks := make([][]byte, numBlocks)
+	for i := 0; i < numBlocks; i++ {
+		blockData := make([]byte, blockSize)
+		blockData[0] = byte(i) // Make each block unique
+		expectedBlocks[i] = blockData
+		fileContent = append(fileContent, blockData...)
+	}
+
+	tmpFile, cleanup := createTestFile(t, fileContent)
+	defer cleanup()
+
+	var wg sync.WaitGroup
+	numGoroutines := 20
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			blockIndex := goroutineID % numBlocks
+			location := block_location.BlockLocation{FilePath: tmpFile, BlockIndex: uint64(blockIndex)}
+
+			readData, err := bm.ReadBlock(location)
+			if err != nil {
+				t.Errorf("Goroutine %d failed to read block %d: %v", goroutineID, blockIndex, err)
+				return
+			}
+			if !bytes.Equal(readData, expectedBlocks[blockIndex]) {
+				t.Errorf("Goroutine %d read incorrect data for block %d", goroutineID, blockIndex)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+// TestBlockManager_ConcurrentWritesDifferentFiles tests that multiple goroutines can write
+// to different files concurrently without interfering with each other.
+func TestBlockManager_ConcurrentWritesDifferentFiles(t *testing.T) {
+	resetBlockManager()
+	bm := GetBlockManager()
+	blockSize := int(bm.GetBlockSize())
+	numGoroutines := 5
+
+	var wg sync.WaitGroup
+	files := make([]string, numGoroutines)
+	cleanups := make([]func(), numGoroutines)
+	expectedData := make([][]byte, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			data := make([]byte, blockSize)
+			data[0] = byte(goroutineID) // Unique data for each goroutine
+			expectedData[goroutineID] = data
+
+			file, cleanupFunc := createTestFile(t, nil)
+			files[goroutineID] = file
+			cleanups[goroutineID] = cleanupFunc
+
+			location := block_location.BlockLocation{FilePath: file, BlockIndex: 0}
+			if err := bm.WriteBlock(location, data); err != nil {
+				t.Errorf("Goroutine %d failed to write block: %v", goroutineID, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	// Cleanup and verification
+	for i := 0; i < numGoroutines; i++ {
+		defer cleanups[i]()
+		location := block_location.BlockLocation{FilePath: files[i], BlockIndex: 0}
+		readData, err := bm.ReadBlock(location)
+		if err != nil {
+			t.Fatalf("Failed to read back data from file %d: %v", i, err)
+		}
+		if !bytes.Equal(readData, expectedData[i]) {
+			t.Errorf("Data mismatch for file %d", i)
+		}
+	}
+}
+
+// TestBlockManager_RemoveFileMutex tests that the mutex for a file is correctly
+// removed from the internal map to prevent memory leaks.
+func TestBlockManager_RemoveFileMutex(t *testing.T) {
+	resetBlockManager()
+	bm := GetBlockManager()
+
+	tmpFile, cleanup := createTestFile(t, nil)
+	defer cleanup()
+
+	// Access the file to ensure a mutex is created
+	location := block_location.BlockLocation{FilePath: tmpFile, BlockIndex: 0}
+	_, err := bm.ReadBlock(location)
+	if err != nil {
+		t.Fatalf("Failed to read block to create mutex: %v", err)
+	}
+
+	// Verify the mutex exists in the map
+	if _, ok := bm.fileMutexes.Load(tmpFile); !ok {
+		t.Fatal("Mutex was not created in the map after file access")
+	}
+
+	// Remove the mutex
+	bm.RemoveFileMutex(tmpFile)
+
+	// Verify the mutex no longer exists in the map
+	if _, ok := bm.fileMutexes.Load(tmpFile); ok {
+		t.Error("Mutex was not removed from the map after calling RemoveFileMutex")
 	}
 }
