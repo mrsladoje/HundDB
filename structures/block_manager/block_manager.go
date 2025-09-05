@@ -6,21 +6,25 @@ import (
 	lru_cache "hunddb/structures/lru_cache"
 	"io"
 	"os"
+	"sync"
 )
 
-var instance *BlockManager
+var (
+	instance *BlockManager
+	once     sync.Once
+)
 
-// TODO: Figure out interaction with SSTable
 // BlockManager manages disk I/O operations at block level
 // Implements singleton pattern
 type BlockManager struct {
-	blockSize  uint16 // in bytes
-	blockCache *lru_cache.LRUCache[block_location.BlockLocation, []byte]
+	blockSize   uint16 // in bytes
+	blockCache  *lru_cache.LRUCache[block_location.BlockLocation, []byte]
+	fileMutexes sync.Map
 }
 
 // GetBlockManager returns the singleton instance
 func GetBlockManager() *BlockManager {
-	if instance == nil {
+	once.Do(func() {
 		// TODO: load from config the block size and cache size,
 		// since config will be singleton no function params are needed
 		// For now dummy values are present
@@ -28,13 +32,43 @@ func GetBlockManager() *BlockManager {
 			blockSize:  1024 * uint16(4),
 			blockCache: lru_cache.NewLRUCache[block_location.BlockLocation, []byte](100),
 		}
-	}
+	})
 	return instance
 }
 
-// ReadBlock reads a block from disk, using cache if available
+// getFileMutex retrieves or creates a RWMutex for a given file path.
+func (bm *BlockManager) getFileMutex(filePath string) *sync.RWMutex {
+	if mutex, exists := bm.fileMutexes.Load(filePath); exists {
+		return mutex.(*sync.RWMutex)
+	}
+
+	newMutex := &sync.RWMutex{}
+	actual, _ := bm.fileMutexes.LoadOrStore(filePath, newMutex)
+	return actual.(*sync.RWMutex)
+}
+
+// RemoveFileMutex removes the mutex associated with a file path.
+// This should be called when a file (e.g., an old SSTable) is deleted to prevent memory leaks.
+func (bm *BlockManager) RemoveFileMutex(filePath string) {
+	bm.fileMutexes.Delete(filePath)
+}
+
+// ReadBlock reads a block from disk, using cache if available.
 func (bm *BlockManager) ReadBlock(location block_location.BlockLocation) ([]byte, error) {
+	// Check cache first to avoid locking if the block is already in memory.
 	cachedBlock, err := bm.blockCache.Get(location)
+	if err == nil {
+		return cachedBlock, nil
+	}
+
+	// Acquire a read-lock, allowing multiple concurrent reads from the same file.
+	mutex := bm.getFileMutex(location.FilePath)
+	mutex.RLock()
+	defer mutex.RUnlock()
+
+	// Double-check cache after acquiring the lock, as another goroutine might have
+	// populated it while this one was waiting.
+	cachedBlock, err = bm.blockCache.Get(location)
 	if err == nil {
 		return cachedBlock, nil
 	}
@@ -48,9 +82,13 @@ func (bm *BlockManager) ReadBlock(location block_location.BlockLocation) ([]byte
 	return block, nil
 }
 
-// WriteBlock writes a block to disk and updates cache
-// TODO: Consult with TA should block manager write to disk only when block cache is full
+// WriteBlock writes a block to disk and updates cache.
 func (bm *BlockManager) WriteBlock(location block_location.BlockLocation, data []byte) error {
+	// Acquire an exclusive write-lock to prevent any other reads or writes to the file.
+	mutex := bm.getFileMutex(location.FilePath)
+	mutex.Lock()
+	defer mutex.Unlock()
+
 	err := bm.writeBlockToDisk(location, data)
 	if err != nil {
 		return errors.New("block not written successfully")
