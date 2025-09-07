@@ -3,9 +3,13 @@ package skip_list
 import (
 	"errors"
 	model "hunddb/model/record"
+	memtable "hunddb/structures/memtable"
 	"math/rand"
 	"time"
 )
+
+// Compile-time assertion that SkipList implements the Memtable interface.
+var _ memtable.MemtableInterface = (*SkipList)(nil)
 
 // Node holds the latest model.Record for a key.
 // We do NOT physically remove nodes; Delete() sets tombstone (logical delete).

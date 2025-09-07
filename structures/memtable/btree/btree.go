@@ -5,12 +5,13 @@ package btree
 import (
 	"fmt"
 	model "hunddb/model/record"
-	mt "hunddb/structures/memtable" // memtable interface
+	memtable "hunddb/structures/memtable" // memtable interface
 	"math"
 	"sort"
 )
 
-var _ mt.Memtable = (*BTree)(nil)
+// Compile-time assertion that BTree implements the Memtable interface.
+var _ memtable.MemtableInterface = (*BTree)(nil)
 
 const (
 	// DefaultOrder defines the default order (degree) of the B-tree.

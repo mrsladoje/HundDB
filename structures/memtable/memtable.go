@@ -5,7 +5,7 @@ import model "hunddb/model/record"
 // Memtable is the in-memory KV interface used by the engine.
 // It stores the latest value per key, including logical deletions via tombstones.
 // Capacity is measured in distinct keys present (active + tombstoned).
-type Memtable interface {
+type MemtableInterface interface {
 	// Add inserts or updates the record for its key.
 	// For a NEW key, return a non-nil error if the memtable is full.
 	// Updates MUST succeed even when the memtable is full.

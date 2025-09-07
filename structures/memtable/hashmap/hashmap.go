@@ -3,14 +3,13 @@ package hashmap
 
 import (
 	"fmt"
-	"math"
-
 	model "hunddb/model/record"
-	mt "hunddb/structures/memtable"
+	memtable "hunddb/structures/memtable"
+	"math"
 )
 
 // Compile-time assertion that HashMap implements the Memtable interface.
-var _ mt.Memtable = (*HashMap)(nil)
+var _ memtable.MemtableInterface = (*HashMap)(nil)
 
 // HashMap is a minimal Memtable implementation backed by a Go map.
 // It stores the latest record per key, including tombstones.
