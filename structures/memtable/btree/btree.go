@@ -1,11 +1,9 @@
-// Package btree implements a B-tree data structure for efficient key-value storage
-// with automatic compaction and balancing capabilities.
 package btree
 
 import (
 	"fmt"
 	model "hunddb/model/record"
-	memtable "hunddb/structures/memtable" // memtable interface
+	memtable "hunddb/structures/memtable/memtable_interface"
 	"math"
 	"sort"
 )

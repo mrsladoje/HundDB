@@ -4,7 +4,7 @@ package hashmap
 import (
 	"fmt"
 	model "hunddb/model/record"
-	memtable "hunddb/structures/memtable"
+	memtable "hunddb/structures/memtable/memtable_interface"
 	"math"
 )
 

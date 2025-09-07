@@ -3,7 +3,7 @@ package skip_list
 import (
 	"errors"
 	model "hunddb/model/record"
-	memtable "hunddb/structures/memtable"
+	memtable "hunddb/structures/memtable/memtable_interface"
 	"math/rand"
 	"time"
 )

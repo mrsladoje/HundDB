@@ -1,0 +1,31 @@
+package memtable_interface
+
+import model "hunddb/model/record"
+
+// MemtableInterface defines the operations for an in-memory memtable structure.
+type MemtableInterface interface {
+
+	// Add inserts or updates the record for its key.
+	Add(record *model.Record) error
+
+	// Delete performs logical deletion by inserting a tombstone record for the key.
+	Delete(record *model.Record) bool
+
+	// Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
+	Get(key string) *model.Record
+
+	// Size returns the number of active (non-tombstoned) keys currently stored.
+	Size() int
+
+	// Capacity returns the maximum size allowed.
+	Capacity() int
+
+	// TotalEntries returns the number of distinct keys present (active + tombstoned).
+	TotalEntries() int
+
+	// IsFull reports whether inserting a NEW distinct key would exceed capacity.
+	IsFull() bool
+
+	// Flush persists the memtable contents to disk (SSTable).
+	Flush() error
+}
