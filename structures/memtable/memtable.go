@@ -106,8 +106,8 @@ func (ts *ThreadSafeMemtable) IsFull() bool {
 }
 
 // Flush implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Flush() error {
+func (ts *ThreadSafeMemtable) Flush(index int) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	return ts.memtable.Flush()
+	return ts.memtable.Flush(index)
 }

@@ -111,7 +111,7 @@ func (hm *HashMap) IsFull() bool {
 
 // Flush persists the memtable contents to disk (implementation-specific).
 // Minimal stub to satisfy the interface.
-func (hm *HashMap) Flush() error {
+func (hm *HashMap) Flush(index int) error {
 	// TODO: Implement SSTable flush logic if/when needed.
 	return nil
 }

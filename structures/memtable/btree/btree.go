@@ -4,6 +4,7 @@ import (
 	"fmt"
 	model "hunddb/model/record"
 	memtable "hunddb/structures/memtable/memtable_interface"
+	sstable "hunddb/structures/sstable"
 	"math"
 	"sort"
 )
@@ -325,6 +326,34 @@ func (bt *BTree) insertRecordIntoParent(parent *Node, record *model.Record, righ
 	}
 }
 
+// RetrieveSortedRecords returns all records in sorted order (in-order traversal).
+func (bt *BTree) RetrieveSortedRecords() []model.Record { // Changed return type
+	var records []model.Record // Changed slice element type
+	bt.inOrderTraversal(bt.root, &records)
+
+	return records
+}
+
+// inOrderTraversal performs an in-order traversal of the B-tree to collect records.
+func (bt *BTree) inOrderTraversal(node *Node, records *[]model.Record) { // Changed slice element type in parameter
+	if node == nil {
+		return
+	}
+
+	for i, rec := range node.records { // Assuming node.records still holds []*model.Record
+		// Visit left child before processing record
+		if !node.isLeaf {
+			bt.inOrderTraversal(node.children[i], records)
+		}
+		*records = append(*records, *rec) // Dereference rec before appending to store a value, not a pointer
+	}
+
+	// Visit the rightmost child after all records
+	if !node.isLeaf && len(node.children) > len(node.records) {
+		bt.inOrderTraversal(node.children[len(node.records)], records)
+	}
+}
+
 // Size returns the number of active (non-tombstoned) keys.
 func (bt *BTree) Size() int {
 	return bt.activeRecords
@@ -336,8 +365,15 @@ func (bt *BTree) Capacity() int {
 }
 
 // Flush persists the memtable contents to disk (implementation-specific).
-func (bt *BTree) Flush() error {
-	// TODO: Implement SSTable flush logic here.
+func (bt *BTree) Flush(index int) error {
+
+	sortedRecords := bt.RetrieveSortedRecords()
+
+	err := sstable.PersistMemtable(sortedRecords, index)
+	if err != nil {
+		return fmt.Errorf("failed to flush B-tree memtable: %v", err)
+	}
+
 	return nil
 }
 

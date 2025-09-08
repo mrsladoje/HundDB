@@ -27,5 +27,5 @@ type MemtableInterface interface {
 	IsFull() bool
 
 	// Flush persists the memtable contents to disk (SSTable).
-	Flush() error
+	Flush(index int) error
 }

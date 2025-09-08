@@ -191,7 +191,7 @@ func (s *SkipList) TotalEntries() int { return s.totalCount }
 func (s *SkipList) IsFull() bool      { return s.totalCount >= s.capacity }
 
 // Flush is a stub; implement sorted SSTable write by iterating bottom-level list.
-func (s *SkipList) Flush() error {
+func (s *SkipList) Flush(index int) error {
 	// TODO: emit (key, rec) in sorted order by walking head.nextNodes[0]
 	return nil
 }

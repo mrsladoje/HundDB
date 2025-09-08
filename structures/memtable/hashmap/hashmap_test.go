@@ -194,10 +194,3 @@ func TestHashMap_SizeAndTotals(t *testing.T) {
 		t.Fatalf("after blind tombstone: expected size=7 total=11, got %d/%d", hm.Size(), hm.TotalEntries())
 	}
 }
-
-func TestHashMap_FlushStub(t *testing.T) {
-	hm := NewHashMap(4)
-	if err := hm.Flush(); err != nil {
-		t.Fatalf("Flush should be a no-op stub for now, got %v", err)
-	}
-}

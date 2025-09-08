@@ -3,6 +3,7 @@ package btree
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -337,6 +338,91 @@ func TestBTree_Height(t *testing.T) {
 	height := btree.Height()
 	if height < 2 {
 		t.Errorf("expected height to be at least 2, got %d", height)
+	}
+}
+
+func TestBTree_RetrieveSortedRecords_EmptyTree(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	records := btree.RetrieveSortedRecords()
+
+	if len(records) != 0 {
+		t.Errorf("Expected 0 records from an empty tree, but got %d", len(records))
+	}
+}
+
+func TestBTree_RetrieveSortedRecords_SimpleTree(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+
+	_ = btree.Put(createTestRecord("c", "val_c"))
+	_ = btree.Put(createTestRecord("a", "val_a"))
+	_ = btree.Put(createTestRecord("b", "val_b"))
+
+	records := btree.RetrieveSortedRecords()
+	expectedKeys := []string{"a", "b", "c"}
+	if len(records) != len(expectedKeys) {
+		t.Fatalf("Expected %d records, but got %d", len(expectedKeys), len(records))
+	}
+
+	for i, rec := range records {
+		if rec.Key != expectedKeys[i] {
+			t.Errorf("Mismatch at index %d: expected key '%s', got '%s'", i, expectedKeys[i], rec.Key)
+		}
+	}
+}
+
+func TestBTree_RetrieveSortedRecords_WithSplits(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100) // Order 3 splits after 3 keys in a node.
+
+	keys := []string{"d", "b", "f", "a", "c", "e", "g", "z", "y", "x"}
+	expectedKeys := make([]string, len(keys))
+	copy(expectedKeys, keys)
+	sort.Strings(expectedKeys)
+
+	for _, key := range keys {
+		_ = btree.Put(createTestRecord(key, "val_"+key))
+	}
+
+	records := btree.RetrieveSortedRecords()
+	if len(records) != len(expectedKeys) {
+		t.Fatalf("Expected %d records, but got %d", len(expectedKeys), len(records))
+	}
+
+	for i, rec := range records {
+		if rec.Key != expectedKeys[i] {
+			t.Errorf("Mismatch at index %d: expected key '%s', got '%s'", i, expectedKeys[i], rec.Key)
+		}
+	}
+}
+
+func TestBTree_RetrieveSortedRecords_WithDeletions(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+
+	_ = btree.Put(createTestRecord("c", "val_c"))
+	_ = btree.Put(createTestRecord("a", "val_a"))
+	_ = btree.Put(createTestRecord("b", "val_b"))
+
+	// Delete record 'b'
+	_ = btree.Put(createTombstoneRecord("b"))
+
+	// The traversal should still return all 3 records, including the tombstone
+	records := btree.RetrieveSortedRecords()
+
+	if len(records) != 3 {
+		t.Fatalf("Expected 3 records (including tombstone), got %d", len(records))
+	}
+
+	// Check the order and status of the retrieved records
+	if records[0].Key != "a" || records[1].Key != "b" || records[2].Key != "c" {
+		t.Errorf("Keys are not in correct sorted order: %s, %s, %s", records[0].Key, records[1].Key, records[2].Key)
+	}
+
+	// The record for 'b' should be a tombstone
+	if records[1].Key == "b" && !records[1].Tombstone {
+		t.Errorf("Record 'b' should be a tombstone, but it's not.")
 	}
 }
 
