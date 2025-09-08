@@ -4,6 +4,7 @@ import (
 	"errors"
 	lru_cache "hunddb/lsm/lru_cache"
 	block_location "hunddb/model/block_location"
+	crc_util "hunddb/utils/crc"
 	"io"
 	"os"
 	"sync"
@@ -12,6 +13,12 @@ import (
 var (
 	instance *BlockManager
 	once     sync.Once
+)
+
+// TODO: Load these from config
+const (
+	BLOCK_SIZE = 4096 // 4KB blocks
+	CRC_SIZE   = 4    // 4 bytes for CRC32
 )
 
 // BlockManager manages disk I/O operations at block level
@@ -47,6 +54,7 @@ func (bm *BlockManager) getFileMutex(filePath string) *sync.RWMutex {
 	return actual.(*sync.RWMutex)
 }
 
+// TODO: Call this method when an old SSTable is deleted
 // RemoveFileMutex removes the mutex associated with a file path.
 // This should be called when a file (e.g., an old SSTable) is deleted to prevent memory leaks.
 func (bm *BlockManager) RemoveFileMutex(filePath string) {
@@ -140,4 +148,88 @@ func (bm *BlockManager) writeBlockToDisk(location block_location.BlockLocation, 
 	}
 	_, err = file.Write(data)
 	return err
+}
+
+/*
+Helper function to write serializedData to the disk (size irrelevant, block handling is internally managed).
+
+	!!! Assumes each block of data has a valid CRC at the beginning. !!!
+*/
+func (blockManager *BlockManager) WriteToDisk(serializedData []byte, filePath string, startOffset uint64) error {
+
+	currentLocation := block_location.BlockLocation{
+		FilePath:   filePath,
+		BlockIndex: startOffset / uint64(blockManager.blockSize),
+	}
+	startBlockIndex := currentLocation.BlockIndex
+
+	for i := uint64(0); i < uint64(len(serializedData))/uint64(blockManager.blockSize); i++ {
+		currentLocation.BlockIndex = startBlockIndex + i
+		err := blockManager.WriteBlock(currentLocation, serializedData[i*uint64(blockManager.blockSize):(i+1)*uint64(blockManager.blockSize)])
+		if err != nil {
+			return errors.New("failed to write block to disk")
+		}
+	}
+	return nil
+}
+
+/*
+Helper function to read serializedData from the disk, using block manager.
+Checks each block's integrity by checking the CRCs, returns the data without the CRCs.
+
+	!!! Assumes each block of data has a valid CRC at the beginning. !!!
+*/
+func (blockManager *BlockManager) ReadFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, uint64, error) {
+
+	startBlockIndex := startOffset / uint64(blockManager.blockSize)
+	blockOffset := startOffset % uint64(blockManager.blockSize)
+
+	// If the offset is within the CRC area, move to after the CRC
+	if blockOffset < CRC_SIZE {
+		blockOffset = CRC_SIZE
+	}
+
+	finalBytes := make([]byte, 0, size) // Pre-allocate capacity
+	currentBlockIndex := startBlockIndex
+	remainingBytes := size
+
+	for remainingBytes > 0 {
+		// Read the current block
+		currentLocation := block_location.BlockLocation{
+			FilePath:   filePath,
+			BlockIndex: currentBlockIndex,
+		}
+
+		blockData, err := blockManager.ReadBlock(currentLocation)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		err = crc_util.CheckBlockIntegrity(blockData)
+		if err != nil {
+			return nil, 0, err
+		}
+
+		// Calculate how many bytes to read from this block
+		availableInBlock := uint64(blockManager.blockSize) - blockOffset
+		bytesToRead := remainingBytes
+		if bytesToRead > availableInBlock {
+			bytesToRead = availableInBlock
+		}
+
+		// Append the bytes from this block
+		finalBytes = append(finalBytes, blockData[blockOffset:blockOffset+bytesToRead]...)
+
+		remainingBytes -= bytesToRead
+		currentBlockIndex++
+
+		// For subsequent blocks, we start reading after the CRC
+		blockOffset = CRC_SIZE
+	}
+
+	// Calculate the final offset (where reading ended)
+	totalBytesRead := size
+	finalPhysicalOffset := crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(startOffset) + totalBytesRead)
+
+	return finalBytes, finalPhysicalOffset, nil
 }

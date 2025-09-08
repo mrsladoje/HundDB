@@ -24,6 +24,10 @@ const (
 	MEMTABLE_TYPE = BTree
 )
 
+type MemTable struct {
+	mi.MemtableInterface
+}
+
 func NewMemtable() (mi.MemtableInterface, error) {
 	var base mi.MemtableInterface
 
