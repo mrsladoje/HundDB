@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	block_manager "hunddb/lsm/block_manager"
 	block_location "hunddb/model/block_location"
-	block_manager "hunddb/structures/block_manager"
 	"sync"
 )
 

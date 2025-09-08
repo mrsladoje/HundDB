@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
+	bm "hunddb/lsm/block_manager"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
-	bm "hunddb/structures/block_manager"
 	"math"
 	"os"
 )

@@ -2,8 +2,8 @@ package block_manager
 
 import (
 	"errors"
+	lru_cache "hunddb/lsm/lru_cache"
 	block_location "hunddb/model/block_location"
-	lru_cache "hunddb/structures/lru_cache"
 	"io"
 	"os"
 	"sync"

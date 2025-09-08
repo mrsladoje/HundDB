@@ -2,11 +2,11 @@ package memtable
 
 import (
 	"fmt"
+	"hunddb/lsm/memtable/btree"
+	"hunddb/lsm/memtable/hashmap"
+	mi "hunddb/lsm/memtable/memtable_interface"
+	"hunddb/lsm/memtable/skip_list"
 	model "hunddb/model/record"
-	"hunddb/structures/memtable/btree"
-	"hunddb/structures/memtable/hashmap"
-	mi "hunddb/structures/memtable/memtable_interface"
-	"hunddb/structures/memtable/skip_list"
 	"sync"
 )
 

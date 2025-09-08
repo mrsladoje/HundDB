@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	memtable "hunddb/lsm/memtable/memtable_interface"
 	record "hunddb/model/record"
-	memtable "hunddb/structures/memtable/memtable_interface"
 )
 
 // --- Helper Functions ---

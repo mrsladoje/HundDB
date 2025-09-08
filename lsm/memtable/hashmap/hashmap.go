@@ -3,9 +3,9 @@ package hashmap
 
 import (
 	"fmt"
+	memtable "hunddb/lsm/memtable/memtable_interface"
+	sstable "hunddb/lsm/sstable"
 	model "hunddb/model/record"
-	memtable "hunddb/structures/memtable/memtable_interface"
-	sstable "hunddb/structures/sstable"
 	"math"
 	"sort"
 )

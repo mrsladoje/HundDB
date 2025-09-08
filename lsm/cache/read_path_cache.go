@@ -1,7 +1,7 @@
 package cache
 
 import (
-	lru_cache "hunddb/structures/lru_cache"
+	lru_cache "hunddb/lsm/lru_cache"
 )
 
 // ReadPathCache wraps the LRU cache for the read path
