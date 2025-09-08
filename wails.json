@@ -1,9 +1,15 @@
 {
   "name": "HundDB",
   "outputfilename": "HundDB",
-  "frontend:dir": "./gui",
-  "frontend:install": "npm install",
-  "frontend:build": "npm run build",
-  "frontend:dev": "npm run dev",
-  "frontend:bridge": "wailsjs"
+  "frontend": {
+    "dir": "./gui",
+    "install": "npm install",
+    "build": "npm run build",
+    "dev": "npm run dev",
+    "bridge": "wailsjs"
+  },
+  "build": {
+    "preBuild": "copy .\\gui\\pics\\rokica_icon.png .\\build\\appicon.png || cp ./gui/pics/rokica_icon.png ./build/appicon.png",
+    "postBuild": "del .\\build\\appicon.png || rm ./build/appicon.png"
+  }
 }
