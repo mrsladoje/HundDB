@@ -5,11 +5,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	block_manager "hunddb/lsm/block_manager"
+	bloom_filter "hunddb/lsm/sstable/bloom_filter"
+	merkle_tree "hunddb/lsm/sstable/merkle_tree"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
-	block_manager "hunddb/structures/block_manager"
-	bloom_filter "hunddb/structures/sstable/bloom_filter"
-	merkle_tree "hunddb/structures/sstable/merkle_tree"
 	byte_util "hunddb/utils/byte_util"
 	crc_util "hunddb/utils/crc"
 	"io"
@@ -315,6 +315,8 @@ due to increased size, so we work block by block there.
 */
 func PersistMemtable(sortedRecords []record.Record, index int) error {
 
+	blockManager := block_manager.GetBlockManager()
+
 	// 1. Persist SSTableConfig
 	SSTableConfig := &SSTableConfig{
 		UseSeparateFiles:   USE_SEPARATE_FILES,
@@ -326,7 +328,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	if err != nil {
 		return err
 	}
-	err = writeToDisk(serializedConfig, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
+	err = blockManager.WriteToDisk(serializedConfig, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
 	if err != nil {
 		return err
 	}
@@ -348,7 +350,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	if err != nil {
 		return err
 	}
-	err = writeToDisk(serializedData, dataComp.FilePath, dataComp.StartOffset)
+	err = blockManager.WriteToDisk(serializedData, dataComp.FilePath, dataComp.StartOffset)
 	if err != nil {
 		return err
 	}
@@ -376,7 +378,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	if err != nil {
 		return err
 	}
-	err = writeToDisk(serializedIndex, indexComp.FilePath, indexComp.StartOffset)
+	err = blockManager.WriteToDisk(serializedIndex, indexComp.FilePath, indexComp.StartOffset)
 	if err != nil {
 		return err
 	}
@@ -401,7 +403,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	if err != nil {
 		return err
 	}
-	err = writeToDisk(serializedSummary, summaryComp.FilePath, summaryComp.StartOffset)
+	err = blockManager.WriteToDisk(serializedSummary, summaryComp.FilePath, summaryComp.StartOffset)
 	if err != nil {
 		return err
 	}
@@ -428,7 +430,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	if err != nil {
 		return err
 	}
-	err = writeToDisk(serializedFilter, filterComp.FilePath, filterComp.StartOffset)
+	err = blockManager.WriteToDisk(serializedFilter, filterComp.FilePath, filterComp.StartOffset)
 	if err != nil {
 		return err
 	}
@@ -455,7 +457,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	if err != nil {
 		return err
 	}
-	err = writeToDisk(serializedMerkle, metadataComp.FilePath, metadataComp.StartOffset)
+	err = blockManager.WriteToDisk(serializedMerkle, metadataComp.FilePath, metadataComp.StartOffset)
 	if err != nil {
 		return err
 	}
@@ -722,89 +724,6 @@ func (metaComp *MetadataComp) serialize() ([]byte, uint64, error) {
 }
 
 /*
-Helper function to write serializedData to the disk, using block manager.
-Assumes each block of data has a valid CRC at the beginning.
-*/
-func writeToDisk(serializedData []byte, filePath string, startOffset uint64) error {
-	blockManager := block_manager.GetBlockManager()
-
-	currentLocation := block_location.BlockLocation{
-		FilePath:   filePath,
-		BlockIndex: startOffset / BLOCK_SIZE,
-	}
-	startBlockIndex := currentLocation.BlockIndex
-
-	for i := uint64(0); i < uint64(len(serializedData))/BLOCK_SIZE; i++ {
-		currentLocation.BlockIndex = startBlockIndex + i
-		err := blockManager.WriteBlock(currentLocation, serializedData[i*BLOCK_SIZE:(i+1)*BLOCK_SIZE])
-		if err != nil {
-			return errors.New("failed to write block to disk")
-		}
-	}
-	return nil
-}
-
-/*
-Helper function to read serializedData from the disk, using block manager.
-Checks each block's integrity by checking the CRCs, returns the data without the CRCs.
-*/
-func readFromDisk(filePath string, startOffset uint64, size uint64) ([]byte, uint64, error) {
-	blockManager := block_manager.GetBlockManager()
-
-	startBlockIndex := startOffset / BLOCK_SIZE
-	blockOffset := startOffset % BLOCK_SIZE
-
-	// If the offset is within the CRC area, move to after the CRC
-	if blockOffset < CRC_SIZE {
-		blockOffset = CRC_SIZE
-	}
-
-	finalBytes := make([]byte, 0, size) // Pre-allocate capacity
-	currentBlockIndex := startBlockIndex
-	remainingBytes := size
-
-	for remainingBytes > 0 {
-		// Read the current block
-		currentLocation := block_location.BlockLocation{
-			FilePath:   filePath,
-			BlockIndex: currentBlockIndex,
-		}
-
-		blockData, err := blockManager.ReadBlock(currentLocation)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		err = crc_util.CheckBlockIntegrity(blockData)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		// Calculate how many bytes to read from this block
-		availableInBlock := BLOCK_SIZE - blockOffset
-		bytesToRead := remainingBytes
-		if bytesToRead > availableInBlock {
-			bytesToRead = availableInBlock
-		}
-
-		// Append the bytes from this block
-		finalBytes = append(finalBytes, blockData[blockOffset:blockOffset+bytesToRead]...)
-
-		remainingBytes -= bytesToRead
-		currentBlockIndex++
-
-		// For subsequent blocks, we start reading after the CRC
-		blockOffset = CRC_SIZE
-	}
-
-	// Calculate the final offset (where reading ended)
-	totalBytesRead := size
-	finalPhysicalOffset := crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(startOffset) + totalBytesRead)
-
-	return finalBytes, finalPhysicalOffset, nil
-}
-
-/*
 Used to read just the component size, placed at the beginning of the serialized bytes.
 Component size is prepended in case of USE_SEPERATE_FILES = true, otherwise, we read the size
 from the config.
@@ -863,7 +782,8 @@ func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint6
 
 	configBlock = crc_util.AddCRCToBlockData(configBlock)
 
-	err := writeToDisk(configBlock, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
+	blockManager := block_manager.GetBlockManager()
+	err := blockManager.WriteToDisk(configBlock, fmt.Sprintf(FILE_NAME_FORMAT, index), 0)
 	if err != nil {
 		return err
 	}
@@ -1025,7 +945,8 @@ func deserializeFilter(filepath string, offset uint64, filterSize uint64, useSep
 		actualOffset += STANDARD_FLAG_SIZE + CRC_SIZE
 	}
 
-	filterBytes, _, err := readFromDisk(filepath, actualOffset, actualSize)
+	blockManager := block_manager.GetBlockManager()
+	filterBytes, _, err := blockManager.ReadFromDisk(filepath, actualOffset, actualSize)
 	if err != nil {
 		return nil, err
 	}
@@ -1057,7 +978,8 @@ func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int
 		return true, true, firstEntryDataOffset, 0, 0, nil
 	}
 
-	lastEntryOffsetBytes, _, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
 	if err != nil {
 		return false, false, 0, 0, 0, err
 	}
@@ -1090,7 +1012,8 @@ Read an index metadata entry from the SSTable Summary Component.
 Takes in the filepath, and offset to the entry start, returns the key, its offset in the data, and any error encountered.
 */
 func readIndexMetadataEntry(filepath string, offset uint64) (string, uint64, error) {
-	entryBytes, _, err := readFromDisk(filepath, offset, INDEX_ENTRY_METADATA_SIZE)
+	blockManager := block_manager.GetBlockManager()
+	entryBytes, _, err := blockManager.ReadFromDisk(filepath, offset, INDEX_ENTRY_METADATA_SIZE)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1099,7 +1022,7 @@ func readIndexMetadataEntry(filepath string, offset uint64) (string, uint64, err
 	keySize := binary.LittleEndian.Uint64(entryBytes[STANDARD_FLAG_SIZE : 2*STANDARD_FLAG_SIZE])
 	offsetInIndex := binary.LittleEndian.Uint64(entryBytes[2*STANDARD_FLAG_SIZE : 3*STANDARD_FLAG_SIZE])
 
-	keyBytes, _, err := readFromDisk(filepath, offsetInIndex, keySize)
+	keyBytes, _, err := blockManager.ReadFromDisk(filepath, offsetInIndex, keySize)
 	if err != nil {
 		return "", 0, err
 	}
@@ -1204,12 +1127,14 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 Retrieve a record from the data component of the SSTable.
 */
 func retrieveFromDataComponent(filepath string, offset uint64, compressionEnabled bool) (*record.Record, error) {
-	recordSize, _, err := readFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+
+	blockManager := block_manager.GetBlockManager()
+	recordSize, _, err := blockManager.ReadFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
 	if err != nil {
 		return nil, err
 	}
 
-	recordData, _, err := readFromDisk(filepath, offset+STANDARD_FLAG_SIZE, binary.LittleEndian.Uint64(recordSize))
+	recordData, _, err := blockManager.ReadFromDisk(filepath, offset+STANDARD_FLAG_SIZE, binary.LittleEndian.Uint64(recordSize))
 	if err != nil {
 		return nil, err
 	}
@@ -1228,6 +1153,7 @@ if a fatal error occurred (fatal error doesn't allow us to continue with the che
 func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, error) {
 
 	corruptDataBlocks := make([]block_location.BlockLocation, 0)
+	blockManager := block_manager.GetBlockManager()
 
 	// 1. Deserialize SSTable Config
 	config, sizes, offsets, err := deserializeSSTableConfig(index)
@@ -1245,7 +1171,7 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 	var dataEndOffset uint64
 	if config.UseSeparateFiles {
 		dataPath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
-		dataCompSizeBytes, dataStartOffset, err := readFromDisk(dataPath, 0, uint64(STANDARD_FLAG_SIZE))
+		dataCompSizeBytes, dataStartOffset, err := blockManager.ReadFromDisk(dataPath, 0, uint64(STANDARD_FLAG_SIZE))
 		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
 			FilePath:   dataPath,
 			BlockIndex: 0,
@@ -1273,7 +1199,7 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 	for currentOffset < dataEndOffset {
 		var recordSizeBytes []byte
 
-		recordSizeBytes, currentOffset, err = readFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		recordSizeBytes, currentOffset, err = blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
 		if err != nil {
 			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
 				FilePath:   dataPath,
@@ -1287,7 +1213,7 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 
 		var recordData []byte
 		offsetBeforeRecord := currentOffset
-		recordData, currentOffset, err = readFromDisk(dataPath, currentOffset, recordSize)
+		recordData, currentOffset, err = blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
 		if err != nil {
 			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
 				FilePath:   dataPath,
@@ -1327,7 +1253,7 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 		}
 	}
 
-	merkleBytes, _, err := readFromDisk(metadataPath, metadataOffset, metaDatasize)
+	merkleBytes, _, err := blockManager.ReadFromDisk(metadataPath, metadataOffset, metaDatasize)
 	if err != nil {
 		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
 			FilePath:   metadataPath,

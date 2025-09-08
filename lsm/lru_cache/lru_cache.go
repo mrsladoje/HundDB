@@ -190,3 +190,9 @@ func TestLRUCache_Concurrency(t *testing.T) {
 
 	wg.Wait()
 }
+
+func (lru *LRUCache[K, V]) SetCapacity(newCapacity uint32) {
+	lru.mutex.Lock()
+	defer lru.mutex.Unlock()
+	lru.capacity = newCapacity
+}

@@ -1,29 +1,35 @@
 package cache
 
 import (
-	lru_cache "hunddb/structures/lru_cache"
+	lru_cache "hunddb/lsm/lru_cache"
+	model "hunddb/model/record"
+)
+
+// TODO: Load capacity from config
+const (
+	READ_PATH_CACHE_CAPACITY = 1000
 )
 
 // ReadPathCache wraps the LRU cache for the read path
 // This cache stores actual key-value pairs read from SSTables
 type ReadPathCache struct {
-	cache *lru_cache.LRUCache[string, []byte]
+	cache *lru_cache.LRUCache[string, *model.Record]
 }
 
 // NewReadPathCache creates a new cache for the read path
-func NewReadPathCache(capacity uint32) *ReadPathCache {
+func NewReadPathCache() *ReadPathCache {
 	return &ReadPathCache{
-		cache: lru_cache.NewLRUCache[string, []byte](capacity),
+		cache: lru_cache.NewLRUCache[string, *model.Record](READ_PATH_CACHE_CAPACITY),
 	}
 }
 
 // Get retrieves a value from the cache
-func (rpc *ReadPathCache) Get(key string) ([]byte, error) {
+func (rpc *ReadPathCache) Get(key string) (*model.Record, error) {
 	return rpc.cache.Get(key)
 }
 
 // Put stores a value in the cache
-func (rpc *ReadPathCache) Put(key string, value []byte) error {
+func (rpc *ReadPathCache) Put(key string, value *model.Record) error {
 	return rpc.cache.Put(key, value)
 }
 
@@ -50,4 +56,8 @@ func (rpc *ReadPathCache) Size() uint32 {
 // Capacity returns cache capacity
 func (rpc *ReadPathCache) Capacity() uint32 {
 	return rpc.cache.Capacity()
+}
+
+func (rpc *ReadPathCache) SetCapacity(newCapacity uint32) {
+	rpc.cache.SetCapacity(newCapacity)
 }
