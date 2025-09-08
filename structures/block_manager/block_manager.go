@@ -3,7 +3,7 @@ package block_manager
 import (
 	"errors"
 	block_location "hunddb/model/block_location"
-	lru_cache "hunddb/structures/block_manager/lru_cache"
+	lru_cache "hunddb/structures/lru_cache"
 	"io"
 	"os"
 	"sync"
