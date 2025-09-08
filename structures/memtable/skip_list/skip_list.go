@@ -4,7 +4,7 @@ import (
 	"errors"
 	model "hunddb/model/record"
 	memtable "hunddb/structures/memtable/memtable_interface"
-	"hunddb/structures/sstable"
+	sstable "hunddb/structures/sstable"
 	"math/rand"
 	"time"
 )
@@ -192,8 +192,7 @@ func (s *SkipList) TotalEntries() int { return s.totalCount }
 func (s *SkipList) IsFull() bool      { return s.totalCount >= s.capacity }
 
 // RetrieveSortedRecords returns all records (including tombstones) in sorted key order.
-// This is useful for flushing the memtable to an SSTable or for debugging/testing.
-// The returned slice contains copies of the records to prevent external modification.
+// This is used for flushing the memtable to an SSTable.
 func (s *SkipList) RetrieveSortedRecords() []model.Record {
 	var records []model.Record
 

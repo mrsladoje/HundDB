@@ -5,7 +5,9 @@ import (
 	"fmt"
 	model "hunddb/model/record"
 	memtable "hunddb/structures/memtable/memtable_interface"
+	sstable "hunddb/structures/sstable"
 	"math"
+	"sort"
 )
 
 // Compile-time assertion that HashMap implements the Memtable interface.
@@ -109,9 +111,49 @@ func (hm *HashMap) IsFull() bool {
 	return len(hm.data) >= hm.capacity
 }
 
-// Flush persists the memtable contents to disk (implementation-specific).
-// Minimal stub to satisfy the interface.
+// RetrieveSortedRecords returns all records (including tombstones) in sorted key order.
+// This is used for flushing the memtable to an SSTable.
+func (hm *HashMap) RetrieveSortedRecords() []model.Record {
+	if len(hm.data) == 0 {
+		return []model.Record{}
+	}
+
+	// Extract keys and sort them
+	keys := make([]string, 0, len(hm.data))
+	for key := range hm.data {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	// Build result slice in sorted order
+	records := make([]model.Record, 0, len(hm.data))
+	for _, key := range keys {
+		rec := hm.data[key]
+		if rec != nil {
+			// Create a copy of the record to prevent external modification
+			recordCopy := model.Record{
+				Key:       rec.Key,
+				Value:     make([]byte, len(rec.Value)),
+				Timestamp: rec.Timestamp,
+				Tombstone: rec.Tombstone,
+			}
+			copy(recordCopy.Value, rec.Value)
+			records = append(records, recordCopy)
+		}
+	}
+
+	return records
+}
+
+// Flush persists the memtable contents to disk (SSTable).
 func (hm *HashMap) Flush(index int) error {
-	// TODO: Implement SSTable flush logic if/when needed.
+
+	sortedRecords := hm.RetrieveSortedRecords()
+
+	err := sstable.PersistMemtable(sortedRecords, index)
+	if err != nil {
+		return fmt.Errorf("failed to flush HashMap memtable to SSTable: %v", err)
+	}
+
 	return nil
 }
