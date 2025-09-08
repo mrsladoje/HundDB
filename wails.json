@@ -1,0 +1,9 @@
+{
+  "name": "HundDB",
+  "outputfilename": "HundDB",
+  "frontend:dir": "./gui",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev": "npm run dev",
+  "frontend:bridge": "wailsjs"
+}
