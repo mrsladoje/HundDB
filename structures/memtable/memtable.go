@@ -35,7 +35,7 @@ func NewMemtable() (mi.MemtableInterface, error) {
 	case HashMap:
 		base = hashmap.NewHashMap(CAPACITY)
 	default:
-		return btree.NewBTree(btree.DefaultOrder, CAPACITY), fmt.Errorf("unknown memtable type: %s", MEMTABLE_TYPE)
+		return nil, fmt.Errorf("unknown memtable type: %s", MEMTABLE_TYPE)
 	}
 
 	return NewThreadSafeMemtable(base), nil
