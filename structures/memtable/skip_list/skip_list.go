@@ -108,11 +108,11 @@ func (s *SkipList) insert(rec *model.Record, update []*Node) *Node {
 
 var ErrCapacityExceeded = errors.New("memtable capacity exceeded")
 
-// Add inserts or updates a record for its key.
+// Put inserts or updates a record for its key.
 // NEW key: if IsFull() -> error; else insert and update counters.
 // EXISTING key: replace record and adjust activeCount on tombstone transitions.
 // If record.Tombstone == true, this acts as a logical delete update.
-func (s *SkipList) Add(record *model.Record) error {
+func (s *SkipList) Put(record *model.Record) error {
 	if record == nil {
 		return errors.New("nil record")
 	}

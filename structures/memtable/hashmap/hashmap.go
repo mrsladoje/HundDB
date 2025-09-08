@@ -30,9 +30,9 @@ func NewHashMap(capacity int) *HashMap {
 	}
 }
 
-// Add inserts or updates the record for its key.
+// Put inserts or updates the record for its key.
 // Capacity applies only when inserting a NEW distinct key.
-func (hm *HashMap) Add(record *model.Record) error {
+func (hm *HashMap) Put(record *model.Record) error {
 	if record == nil || record.Key == "" {
 		return fmt.Errorf("invalid record: record and key cannot be nil/empty")
 	}
@@ -67,7 +67,7 @@ func (hm *HashMap) Delete(record *model.Record) bool {
 	}
 
 	// Missing key: delegate to Add (handles capacity + counters).
-	if err := hm.Add(record); err != nil {
+	if err := hm.Put(record); err != nil {
 		return false // capacity exceeded → no blind tombstone
 	}
 	return false

@@ -42,13 +42,13 @@ func TestNewSkipList(t *testing.T) {
 func TestAddAndGet(t *testing.T) {
 	sl := New(5, 100)
 
-	if err := sl.Add(rec("key1", []byte("value1"), false)); err != nil {
+	if err := sl.Put(rec("key1", []byte("value1"), false)); err != nil {
 		t.Fatalf("Add key1 failed: %v", err)
 	}
-	if err := sl.Add(rec("key2", []byte("value2"), false)); err != nil {
+	if err := sl.Put(rec("key2", []byte("value2"), false)); err != nil {
 		t.Fatalf("Add key2 failed: %v", err)
 	}
-	if err := sl.Add(rec("key3", []byte("value3"), false)); err != nil {
+	if err := sl.Put(rec("key3", []byte("value3"), false)); err != nil {
 		t.Fatalf("Add key3 failed: %v", err)
 	}
 
@@ -74,10 +74,10 @@ func TestAddAndGet(t *testing.T) {
 func TestUpdateSameKey(t *testing.T) {
 	sl := New(5, 100)
 
-	if err := sl.Add(rec("k", []byte("v1"), false)); err != nil {
+	if err := sl.Put(rec("k", []byte("v1"), false)); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
-	if err := sl.Add(rec("k", []byte("v2"), false)); err != nil {
+	if err := sl.Put(rec("k", []byte("v2"), false)); err != nil {
 		t.Fatalf("Update failed: %v", err)
 	}
 
@@ -93,9 +93,9 @@ func TestUpdateSameKey(t *testing.T) {
 func TestDeleteTombstone(t *testing.T) {
 	sl := New(5, 100)
 
-	_ = sl.Add(rec("key1", []byte("v1"), false))
-	_ = sl.Add(rec("key2", []byte("v2"), false))
-	_ = sl.Add(rec("key3", []byte("v3"), false))
+	_ = sl.Put(rec("key1", []byte("v1"), false))
+	_ = sl.Put(rec("key2", []byte("v2"), false))
+	_ = sl.Put(rec("key3", []byte("v3"), false))
 
 	// delete key2
 	existed := sl.Delete(rec("key2", nil, true))
@@ -126,8 +126,8 @@ func TestDeleteTombstone(t *testing.T) {
 func TestDeleteNonExistent(t *testing.T) {
 	sl := New(5, 100)
 
-	_ = sl.Add(rec("key1", []byte("v1"), false))
-	_ = sl.Add(rec("key2", []byte("v2"), false))
+	_ = sl.Put(rec("key1", []byte("v1"), false))
+	_ = sl.Put(rec("key2", []byte("v2"), false))
 
 	// delete missing -> inserts tombstone, returns false
 	existed := sl.Delete(rec("key3", nil, true))
@@ -150,20 +150,20 @@ func TestDeleteNonExistent(t *testing.T) {
 func TestCapacity(t *testing.T) {
 	sl := New(5, 2) // capacity for 2 distinct keys
 
-	if err := sl.Add(rec("a", []byte("1"), false)); err != nil {
+	if err := sl.Put(rec("a", []byte("1"), false)); err != nil {
 		t.Fatalf("Add a failed: %v", err)
 	}
-	if err := sl.Add(rec("b", []byte("2"), false)); err != nil {
+	if err := sl.Put(rec("b", []byte("2"), false)); err != nil {
 		t.Fatalf("Add b failed: %v", err)
 	}
 
 	// updating existing key is OK
-	if err := sl.Add(rec("a", []byte("1b"), false)); err != nil {
+	if err := sl.Put(rec("a", []byte("1b"), false)); err != nil {
 		t.Fatalf("Update a failed: %v", err)
 	}
 
 	// inserting third distinct key should fail
-	if err := sl.Add(rec("c", []byte("3"), false)); err == nil {
+	if err := sl.Put(rec("c", []byte("3"), false)); err == nil {
 		t.Fatalf("Expected ErrCapacityExceeded, got nil")
 	} else if err != ErrCapacityExceeded {
 		t.Fatalf("Expected ErrCapacityExceeded, got %v", err)
@@ -184,7 +184,7 @@ func TestCapacity(t *testing.T) {
 func TestTombstoneTransitions(t *testing.T) {
 	sl := New(5, 10)
 
-	_ = sl.Add(rec("k", []byte("v1"), false)) // active
+	_ = sl.Put(rec("k", []byte("v1"), false)) // active
 	if sl.Size() != 1 {
 		t.Fatalf("Expected Size=1, got %d", sl.Size())
 	}
@@ -199,7 +199,7 @@ func TestTombstoneTransitions(t *testing.T) {
 	}
 
 	// re-add (remove tombstone) -> active++
-	if err := sl.Add(rec("k", []byte("v2"), false)); err != nil {
+	if err := sl.Put(rec("k", []byte("v2"), false)); err != nil {
 		t.Fatalf("Re-add failed: %v", err)
 	}
 	if sl.Size() != 1 || sl.TotalEntries() != 1 {

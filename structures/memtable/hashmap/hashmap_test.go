@@ -43,7 +43,7 @@ func TestHashMap_NewHashMap(t *testing.T) {
 func TestHashMap_AddAndGet_Single(t *testing.T) {
 	hm := NewHashMap(math.MaxInt)
 
-	if err := hm.Add(makeRec("k1", "v1")); err != nil {
+	if err := hm.Put(makeRec("k1", "v1")); err != nil {
 		t.Fatalf("Add failed: %v", err)
 	}
 
@@ -60,10 +60,10 @@ func TestHashMap_AddAndGet_Single(t *testing.T) {
 func TestHashMap_AddInvalid(t *testing.T) {
 	hm := NewHashMap(math.MaxInt)
 
-	if err := hm.Add(nil); err == nil {
+	if err := hm.Put(nil); err == nil {
 		t.Fatalf("expected error for nil record")
 	}
-	if err := hm.Add(&model.Record{Key: ""}); err == nil {
+	if err := hm.Put(&model.Record{Key: ""}); err == nil {
 		t.Fatalf("expected error for empty key")
 	}
 }
@@ -71,8 +71,8 @@ func TestHashMap_AddInvalid(t *testing.T) {
 func TestHashMap_UpdateExisting(t *testing.T) {
 	hm := NewHashMap(math.MaxInt)
 
-	_ = hm.Add(makeRec("k1", "v1"))
-	_ = hm.Add(makeRec("k1", "v2")) // update
+	_ = hm.Put(makeRec("k1", "v1"))
+	_ = hm.Put(makeRec("k1", "v2")) // update
 
 	got := hm.Get("k1")
 	if got == nil || string(got.Value) != "v2" {
@@ -93,7 +93,7 @@ func TestHashMap_Delete_ExistingAndBlind(t *testing.T) {
 	// Insert 5 keys
 	keys := []string{"k1", "k2", "k3", "k4", "k5"}
 	for _, k := range keys {
-		_ = hm.Add(makeRec(k, "v_"+k))
+		_ = hm.Put(makeRec(k, "v_"+k))
 	}
 
 	// Delete existing
@@ -133,10 +133,10 @@ func TestHashMap_IsFullAndCapacity(t *testing.T) {
 	hm := NewHashMap(2)
 
 	// Fill with 2 distinct keys
-	if err := hm.Add(makeRec("a", "1")); err != nil {
+	if err := hm.Put(makeRec("a", "1")); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if err := hm.Add(makeRec("b", "2")); err != nil {
+	if err := hm.Put(makeRec("b", "2")); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if !hm.IsFull() {
@@ -144,12 +144,12 @@ func TestHashMap_IsFullAndCapacity(t *testing.T) {
 	}
 
 	// New distinct key should fail (capacity applies to NEW keys)
-	if err := hm.Add(makeRec("c", "3")); err == nil {
+	if err := hm.Put(makeRec("c", "3")); err == nil {
 		t.Fatalf("expected capacity error for new key when full")
 	}
 
 	// Update existing should still succeed when "full"
-	if err := hm.Add(makeRec("b", "22")); err != nil {
+	if err := hm.Put(makeRec("b", "22")); err != nil {
 		t.Fatalf("update existing should not be blocked by capacity: %v", err)
 	}
 	if got := hm.Get("b"); got == nil || string(got.Value) != "22" {
@@ -171,7 +171,7 @@ func TestHashMap_SizeAndTotals(t *testing.T) {
 	// Add 10
 	for i := 0; i < 10; i++ {
 		key := fmt.Sprintf("k%d", i)
-		_ = hm.Add(makeRec(key, "v"))
+		_ = hm.Put(makeRec(key, "v"))
 	}
 	if hm.Size() != 10 || hm.TotalEntries() != 10 {
 		t.Fatalf("after add: expected size=10 total=10, got %d/%d", hm.Size(), hm.TotalEntries())

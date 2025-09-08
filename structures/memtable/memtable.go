@@ -38,7 +38,6 @@ func NewMemtable() (mi.MemtableInterface, error) {
 		return btree.NewBTree(btree.DefaultOrder, CAPACITY), fmt.Errorf("unknown memtable type: %s", MEMTABLE_TYPE)
 	}
 
-	// Always wrap with thread safety
 	return NewThreadSafeMemtable(base), nil
 }
 
@@ -57,11 +56,11 @@ func NewThreadSafeMemtable(memtable mi.MemtableInterface) *ThreadSafeMemtable {
 	}
 }
 
-// Add implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Add(record *model.Record) error {
+// Put implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Put(record *model.Record) error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	return ts.memtable.Add(record)
+	return ts.memtable.Put(record)
 }
 
 // Delete implements MemtableInterface with thread safety

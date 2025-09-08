@@ -5,8 +5,8 @@ import model "hunddb/model/record"
 // MemtableInterface defines the operations for an in-memory memtable structure.
 type MemtableInterface interface {
 
-	// Add inserts or updates the record for its key.
-	Add(record *model.Record) error
+	// Put inserts or updates the record for its key.
+	Put(record *model.Record) error
 
 	// Delete performs logical deletion by inserting a tombstone record for the key.
 	Delete(record *model.Record) bool
