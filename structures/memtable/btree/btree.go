@@ -345,7 +345,13 @@ func (bt *BTree) inOrderTraversal(node *Node, records *[]model.Record) { // Chan
 		if !node.isLeaf {
 			bt.inOrderTraversal(node.children[i], records)
 		}
-		*records = append(*records, *rec) // Dereference rec before appending to store a value, not a pointer
+		// Deep copy the Value field to avoid sharing the underlying array
+		copiedRecord := *rec
+		if rec.Value != nil {
+			copiedRecord.Value = make([]byte, len(rec.Value))
+			copy(copiedRecord.Value, rec.Value)
+		}
+		*records = append(*records, copiedRecord)
 	}
 
 	// Visit the rightmost child after all records
