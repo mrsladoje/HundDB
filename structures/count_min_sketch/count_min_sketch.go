@@ -3,7 +3,6 @@ package count_min_sketch
 import (
 	"encoding/binary"
 	"math"
-	"sync"
 
 	sh "hunddb/utils/seeded_hash"
 )
@@ -11,13 +10,11 @@ import (
 // CMS is a probabilistic data structure that efficiently counts the frequency of elements in a set.
 // It can over-estimate the count by the desired error rate passed as a parameter when creating an instance
 // It works with uint32 for efficiency given the data size in our project.
-// This implementation is thread-safe using RWMutex.
 type CMS struct {
 	m     uint32            // Size of the sets (columns)
 	k     uint32            // Number of hash functions (rows)
 	h     []sh.HashWithSeed // Array of hash functions
 	table [][]uint32        // Table of uint32 values
-	mu    sync.RWMutex      // RWMutex for thread-safety
 }
 
 // NewCMS creates a new instance of a Count-Min Sketch.
@@ -50,11 +47,7 @@ func CalculateK(delta float64) uint {
 
 // Add inserts an element into the Count-Min Sketch by incrementing the corresponding cells in the table.
 // item: the element to be added to the sketch.
-// This method is thread-safe and uses a write lock.
 func (cms *CMS) Add(item []byte) {
-	cms.mu.Lock()
-	defer cms.mu.Unlock()
-
 	for i := uint32(0); i < cms.k; i++ {
 		j := cms.h[i].Hash(item) % uint64(cms.m)
 		cms.table[i][j]++
@@ -63,11 +56,7 @@ func (cms *CMS) Add(item []byte) {
 
 // Count estimates the frequency of an element in the Count-Min Sketch.
 // item: the element to be checked.
-// This method is thread-safe and uses a read lock.
 func (cms *CMS) Count(item []byte) uint32 {
-	cms.mu.RLock()
-	defer cms.mu.RUnlock()
-
 	min := uint32(4294967295) // Initialize to max uint32 value
 	for i := uint32(0); i < cms.k; i++ {
 		j := cms.h[i].Hash(item) % uint64(cms.m)
@@ -85,11 +74,7 @@ func (cms *CMS) Count(item []byte) uint32 {
 // - 4 bytes for the k value of uint32 (number of rows)
 // - 8 bytes for each uint64 Seed of a hash function (k seeds in total)
 // - (4 * m * k) bytes, representing the size of the table (matrix of uint32)
-// This method is thread-safe and uses a read lock.
 func (cms *CMS) Serialize() []byte {
-	cms.mu.RLock()
-	defer cms.mu.RUnlock()
-
 	// Total size of the entire structure in a byte array
 	totalSize := 4 + 4 + 8*cms.k + 4*cms.k*cms.m
 	data := make([]byte, totalSize)
