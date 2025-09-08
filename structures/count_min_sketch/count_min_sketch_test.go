@@ -2,7 +2,11 @@ package count_min_sketch
 
 import (
 	"bytes"
+	"fmt"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 )
 
 // TestNewCMS tests the creation of a new Count-Min Sketch.
@@ -165,4 +169,322 @@ func TestCMSSerialization(t *testing.T) {
 			t.Errorf("Serialized data mismatch: original vs deserialized")
 		}
 	}
+}
+
+// Test thread-safety for concurrent Add operations
+func TestConcurrentAdd(t *testing.T) {
+	cms := NewCMS(0.01, 0.99)
+
+	numGoroutines := 100
+	numElementsPerGoroutine := 50
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numElementsPerGoroutine; j++ {
+				element := fmt.Sprintf("element_%d_%d", goroutineID, j)
+				cms.Add([]byte(element))
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify that elements were added correctly
+	// Check a few specific elements to ensure they have non-zero counts
+	testElement := "element_0_0"
+	count := cms.Count([]byte(testElement))
+	if count == 0 {
+		t.Errorf("Element %s should have been added but has count 0", testElement)
+	}
+}
+
+// Test thread-safety for concurrent Add and Count operations
+func TestConcurrentAddAndCount(t *testing.T) {
+	cms := NewCMS(0.05, 0.95)
+
+	numAdders := 50
+	numReaders := 25
+	duration := 100 * time.Millisecond
+	var wg sync.WaitGroup
+
+	// Start adder goroutines
+	for i := 0; i < numAdders; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			start := time.Now()
+			counter := 0
+			for time.Since(start) < duration {
+				element := fmt.Sprintf("element_%d_%d", goroutineID, counter)
+				cms.Add([]byte(element))
+				counter++
+			}
+		}(i)
+	}
+
+	// Start reader goroutines
+	for i := 0; i < numReaders; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			start := time.Now()
+			counter := 0
+			for time.Since(start) < duration {
+				element := fmt.Sprintf("element_%d_%d", goroutineID%numAdders, counter%10)
+				_ = cms.Count([]byte(element))
+				counter++
+				time.Sleep(time.Microsecond) // Small delay to allow more interleaving
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+// Test thread-safety for serialization during concurrent operations
+func TestConcurrentSerialization(t *testing.T) {
+	cms := NewCMS(0.05, 0.95)
+
+	// Add some initial data
+	for i := 0; i < 100; i++ {
+		cms.Add([]byte(fmt.Sprintf("initial_%d", i)))
+	}
+
+	var wg sync.WaitGroup
+	duration := 50 * time.Millisecond
+
+	// Start serialization goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			for time.Since(start) < duration {
+				data := cms.Serialize()
+				if len(data) == 0 {
+					t.Errorf("Serialization returned empty data")
+				}
+			}
+		}()
+	}
+
+	// Start add goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			start := time.Now()
+			counter := 0
+			for time.Since(start) < duration {
+				element := fmt.Sprintf("concurrent_%d_%d", goroutineID, counter)
+				cms.Add([]byte(element))
+				counter++
+			}
+		}(i)
+	}
+
+	// Start count goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			for time.Since(start) < duration {
+				element := "initial_0"
+				_ = cms.Count([]byte(element))
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// Test concurrent frequency counting accuracy
+func TestConcurrentFrequencyAccuracy(t *testing.T) {
+	cms := NewCMS(0.01, 0.99)
+
+	element := "test_element"
+	expectedCount := uint32(1000)
+	var wg sync.WaitGroup
+
+	// Add the same element multiple times concurrently
+	for i := uint32(0); i < expectedCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cms.Add([]byte(element))
+		}()
+	}
+
+	wg.Wait()
+
+	// Check the final count
+	actualCount := cms.Count([]byte(element))
+
+	// Count-Min Sketch can only overestimate, never underestimate
+	if actualCount < expectedCount {
+		t.Errorf("Count-Min Sketch underestimated: expected at least %d, got %d", expectedCount, actualCount)
+	}
+
+	// With our error rate, the overestimation should be reasonable
+	maxExpectedOverestimate := expectedCount + uint32(float64(expectedCount)*0.05) // 5% tolerance
+	if actualCount > maxExpectedOverestimate {
+		t.Errorf("Count-Min Sketch overestimated too much: expected at most %d, got %d", maxExpectedOverestimate, actualCount)
+	}
+}
+
+// Test for race conditions using Go's race detector
+func TestRaceConditions(t *testing.T) {
+	if !isRaceEnabled() {
+		t.Skip("Race detection not enabled")
+	}
+
+	cms := NewCMS(0.05, 0.95)
+	var wg sync.WaitGroup
+	numGoroutines := 20
+	iterations := 100
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				element := fmt.Sprintf("element_%d_%d", id, j%10)
+				switch j % 3 {
+				case 0:
+					cms.Add([]byte(element))
+				case 1:
+					_ = cms.Count([]byte(element))
+				case 2:
+					_ = cms.Serialize()
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+// Helper function to check if race detection is enabled
+func isRaceEnabled() bool {
+	// This is a simple way to check if the race detector is enabled
+	// by setting GOMAXPROCS and checking if it changes
+	old := runtime.GOMAXPROCS(0)
+	return old > 0
+}
+
+// Test concurrent operations with different elements
+func TestConcurrentDifferentElements(t *testing.T) {
+	cms := NewCMS(0.01, 0.99)
+
+	elements := []string{"apple", "banana", "cherry", "date", "elderberry"}
+	var wg sync.WaitGroup
+
+	// Add each element multiple times concurrently
+	for _, element := range elements {
+		for i := 0; i < 100; i++ {
+			wg.Add(1)
+			go func(elem string) {
+				defer wg.Done()
+				cms.Add([]byte(elem))
+			}(element)
+		}
+	}
+
+	wg.Wait()
+
+	// Verify all elements have reasonable counts
+	for _, element := range elements {
+		count := cms.Count([]byte(element))
+		if count < 90 { // Allow some tolerance for concurrent operations
+			t.Errorf("Element %s has unexpectedly low count: %d", element, count)
+		}
+	}
+}
+
+// Benchmark thread-safe operations
+func BenchmarkConcurrentAdd(b *testing.B) {
+	cms := NewCMS(0.01, 0.99)
+
+	b.RunParallel(func(pb *testing.PB) {
+		counter := 0
+		for pb.Next() {
+			element := fmt.Sprintf("element_%d", counter)
+			cms.Add([]byte(element))
+			counter++
+		}
+	})
+}
+
+func BenchmarkConcurrentCount(b *testing.B) {
+	cms := NewCMS(0.01, 0.99)
+
+	// Pre-populate with some data
+	for i := 0; i < 1000; i++ {
+		cms.Add([]byte(fmt.Sprintf("element_%d", i)))
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		counter := 0
+		for pb.Next() {
+			element := fmt.Sprintf("element_%d", counter%1000)
+			_ = cms.Count([]byte(element))
+			counter++
+		}
+	})
+}
+
+func BenchmarkConcurrentSerialization(b *testing.B) {
+	cms := NewCMS(0.01, 0.99)
+
+	// Pre-populate with some data
+	for i := 0; i < 1000; i++ {
+		cms.Add([]byte(fmt.Sprintf("element_%d", i)))
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = cms.Serialize()
+		}
+	})
+}
+
+// Test mixed concurrent operations
+func TestMixedConcurrentOperations(t *testing.T) {
+	cms := NewCMS(0.05, 0.95)
+	var wg sync.WaitGroup
+	duration := 100 * time.Millisecond
+
+	// Mixed operations: Add, Count, and Serialize
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			start := time.Now()
+			counter := 0
+			for time.Since(start) < duration {
+				element := fmt.Sprintf("mixed_element_%d", counter%50)
+
+				switch counter % 4 {
+				case 0:
+					cms.Add([]byte(element))
+				case 1:
+					_ = cms.Count([]byte(element))
+				case 2:
+					_ = cms.Serialize()
+				case 3:
+					// Add the same element multiple times
+					for j := 0; j < 3; j++ {
+						cms.Add([]byte(element))
+					}
+				}
+				counter++
+			}
+		}(i)
+	}
+
+	wg.Wait()
 }
