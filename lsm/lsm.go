@@ -10,6 +10,7 @@ import (
 	wal "hunddb/lsm/wal"
 	model "hunddb/model/record"
 	"os"
+	"time"
 )
 
 // TODO: load from config
@@ -248,6 +249,39 @@ func (lsm *LSM) checkSSTables(key string) *model.Record {
 				return record
 			}
 		}
+	}
+	return nil
+}
+
+func (lsm *LSM) Put(key string, value []byte) error {
+
+	record := model.NewRecord(key, value, uint64(time.Now().UnixNano()), false)
+
+	err := lsm.wal.WriteRecord(record)
+	if err != nil {
+		return err
+	}
+
+	err = lsm.memtables[len(lsm.memtables)-1].Put(record)
+	if err != nil {
+		return err
+	}
+
+	err = lsm.checkIfToFlush(key)
+	if err != nil {
+		return err
+	}
+
+	lsm.cache.Invalidate(key)
+
+	return nil
+}
+
+func (lsm *LSM) checkIfToFlush(key string) error {
+	n := lsm.memtables[len(lsm.memtables)-1]
+	if len(lsm.memtables) == MAX_MEMTABLES && n.IsFull() {
+		// Flush the memtable to disk
+		// TODO: concurrently flush
 	}
 	return nil
 }
