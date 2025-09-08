@@ -2,7 +2,10 @@ package hyperloglog
 
 import (
 	"bytes"
+	"fmt"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestNewHLL(t *testing.T) {
@@ -172,4 +175,182 @@ func TestHLLSerialization(t *testing.T) {
 		t.Errorf("Serialized data mismatch: original vs deserialized")
 		t.Errorf("Serialized data len mismatch: original %d vs deserialized %d", len(serializedData), len(deserializedData))
 	}
+}
+
+// Test thread-safety for concurrent Add operations
+func TestConcurrentAdd(t *testing.T) {
+	hll, err := NewHLL(10)
+	if err != nil {
+		t.Fatalf("Failed to create HLL: %v", err)
+	}
+
+	numGoroutines := 100
+	numElementsPerGoroutine := 100
+	var wg sync.WaitGroup
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numElementsPerGoroutine; j++ {
+				element := fmt.Sprintf("element_%d_%d", goroutineID, j)
+				hll.Add([]byte(element))
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Check that the estimate is reasonable
+	estimate := hll.Estimate()
+	expectedElements := float64(numGoroutines * numElementsPerGoroutine)
+
+	// Allow for 20% variance due to probabilistic nature
+	if estimate < expectedElements*0.8 || estimate > expectedElements*1.2 {
+		t.Errorf("Estimate out of expected range: got %f, expected around %f", estimate, expectedElements)
+	}
+}
+
+// Test thread-safety for concurrent Add and Estimate operations
+func TestConcurrentAddAndEstimate(t *testing.T) {
+	hll, err := NewHLL(12)
+	if err != nil {
+		t.Fatalf("Failed to create HLL: %v", err)
+	}
+
+	numAdders := 50
+	numReaders := 10
+	duration := 100 * time.Millisecond
+	var wg sync.WaitGroup
+
+	// Start adder goroutines
+	for i := 0; i < numAdders; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			start := time.Now()
+			counter := 0
+			for time.Since(start) < duration {
+				element := fmt.Sprintf("element_%d_%d", goroutineID, counter)
+				hll.Add([]byte(element))
+				counter++
+			}
+		}(i)
+	}
+
+	// Start reader goroutines
+	for i := 0; i < numReaders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			for time.Since(start) < duration {
+				_ = hll.Estimate()
+				_ = hll.emptyCount()
+				_ = hll.GetPrecision()
+				_ = hll.GetSize()
+				time.Sleep(time.Microsecond) // Small delay to allow more interleaving
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Final estimate should be reasonable
+	finalEstimate := hll.Estimate()
+	if finalEstimate <= 0 {
+		t.Errorf("Final estimate should be positive, got %f", finalEstimate)
+	}
+}
+
+// Test thread-safety for serialization during concurrent operations
+func TestConcurrentSerialization(t *testing.T) {
+	hll, err := NewHLL(10)
+	if err != nil {
+		t.Fatalf("Failed to create HLL: %v", err)
+	}
+
+	// Add some initial data
+	for i := 0; i < 100; i++ {
+		hll.Add([]byte(fmt.Sprintf("initial_%d", i)))
+	}
+
+	var wg sync.WaitGroup
+	duration := 50 * time.Millisecond
+
+	// Start serialization goroutines
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := time.Now()
+			for time.Since(start) < duration {
+				data := hll.Serialize()
+				if len(data) == 0 {
+					t.Errorf("Serialization returned empty data")
+				}
+			}
+		}()
+	}
+
+	// Start add goroutines
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			start := time.Now()
+			counter := 0
+			for time.Since(start) < duration {
+				element := fmt.Sprintf("concurrent_%d_%d", goroutineID, counter)
+				hll.Add([]byte(element))
+				counter++
+			}
+		}(i)
+	}
+
+	wg.Wait()
+}
+
+// Benchmark thread-safe operations
+func BenchmarkConcurrentAdd(b *testing.B) {
+	hll, _ := NewHLL(12)
+
+	b.RunParallel(func(pb *testing.PB) {
+		counter := 0
+		for pb.Next() {
+			element := fmt.Sprintf("element_%d", counter)
+			hll.Add([]byte(element))
+			counter++
+		}
+	})
+}
+
+func BenchmarkConcurrentEstimate(b *testing.B) {
+	hll, _ := NewHLL(12)
+
+	// Pre-populate with some data
+	for i := 0; i < 1000; i++ {
+		hll.Add([]byte(fmt.Sprintf("element_%d", i)))
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = hll.Estimate()
+		}
+	})
+}
+
+func BenchmarkConcurrentSerialization(b *testing.B) {
+	hll, _ := NewHLL(12)
+
+	// Pre-populate with some data
+	for i := 0; i < 1000; i++ {
+		hll.Add([]byte(fmt.Sprintf("element_%d", i)))
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_ = hll.Serialize()
+		}
+	})
 }
