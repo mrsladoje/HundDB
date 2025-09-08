@@ -6,7 +6,9 @@ import (
 	"hunddb/lsm/block_manager"
 	cache "hunddb/lsm/cache"
 	memtable "hunddb/lsm/memtable"
+	"hunddb/lsm/sstable"
 	wal "hunddb/lsm/wal"
+	model "hunddb/model/record"
 	"os"
 )
 
@@ -195,4 +197,57 @@ This can happen if the LSM file doesn't exist, is corrupted, or unreadable.
 */
 func (lsm *LSM) IsDataLost() bool {
 	return lsm.DataLost
+}
+
+// Get retrieves a record from the LSM by checking the memtables, cache, and SSTables in order.
+func (lsm *LSM) Get(key string) *model.Record {
+
+	// 1. Check memtables first
+	if record := lsm.checkMemtables(key); record != nil {
+		return record
+	}
+
+	// 2. Check cache
+	record, err := lsm.cache.Get(key)
+	if err == nil {
+		return record
+	}
+
+	// 3. Check SSTables
+	if record := lsm.checkSSTables(key); record != nil {
+		lsm.cache.Put(key, record)
+		return record
+	}
+
+	return nil
+}
+
+/*
+checkMemtables checks the memtables in reverse order (newest to oldest) for the given key.
+*/
+func (lsm *LSM) checkMemtables(key string) *model.Record {
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		if record := mt.Get(key); record != nil {
+			return record
+		}
+	}
+	return nil
+}
+
+/*
+checkSSTables checks the SSTables in reverse order (newest to oldest) for the given key.
+*/
+func (lsm *LSM) checkSSTables(key string) *model.Record {
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			record, err := sstable.Get(key, tableIndex)
+			if err == nil && record != nil {
+				return record
+			}
+		}
+	}
+	return nil
 }

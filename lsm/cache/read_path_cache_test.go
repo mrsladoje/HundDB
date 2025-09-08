@@ -1,58 +1,102 @@
 package cache
 
 import (
+	model "hunddb/model/record"
 	"testing"
+	"time"
 )
 
-// These tests would integrate with your actual database components
-// They're pseudocode examples of what you should test
-
-// TestReadPath_CacheIntegration tests cache in the full read path
-func TestReadPath_CacheIntegration(t *testing.T) {
-	// This would be a more complex test involving:
-	// - Memtable
-	// - Cache
-	// - SSTables
-
-	// Pseudocode:
-	// 1. PUT a key-value pair (goes to memtable)
-	// 2. Flush memtable to SSTable
-	// 3. GET the key (should read from SSTable and populate cache)
-	// 4. GET the key again (should hit cache)
-	// 5. Verify cache contains the key
-
-	t.Skip("Integration test - implement when you have memtable and sstable components")
+// Helper function to create a new Record
+func newRecord(key string, value string) *model.Record {
+	return model.NewRecord(key, []byte(value), uint64(time.Now().UnixNano()), false)
 }
 
-// TestReadPath_CacheInvalidation tests cache invalidation scenarios
-func TestReadPath_CacheInvalidation(t *testing.T) {
-	// Pseudocode:
-	// 1. PUT key1=value1, flush to SSTable
-	// 2. GET key1 (populates cache)
-	// 3. PUT key1=value2 (should invalidate cache entry)
-	// 4. GET key1 (should return value2, not cached value1)
+func TestReadPathCache(t *testing.T) {
+	cache := NewReadPathCache()
 
-	t.Skip("Integration test - implement when you have write path components")
-}
+	t.Run("Put and Get", func(t *testing.T) {
+		record := newRecord("key1", "value1")
+		err := cache.Put("key1", record)
+		if err != nil {
+			t.Errorf("Put failed: %v", err)
+		}
 
-// TestReadPath_CacheEvictionWithSSTables tests cache behavior with multiple SSTables
-func TestReadPath_CacheEvictionWithSSTables(t *testing.T) {
-	// Pseudocode:
-	// 1. Create small cache (capacity 2)
-	// 2. PUT and GET keys to fill cache
-	// 3. GET additional keys that force eviction
-	// 4. Verify that subsequent GETs read from SSTables correctly
+		retrievedRecord, err := cache.Get("key1")
+		if err != nil {
+			t.Errorf("Get failed: %v", err)
+		}
+		if retrievedRecord == nil {
+			t.Fatalf("Get returned nil record")
+		}
+		if string(retrievedRecord.Value) != "value1" {
+			t.Errorf("Expected value 'value1', got '%s'", string(retrievedRecord.Value))
+		}
+	})
 
-	t.Skip("Integration test - implement when you have SSTable reading")
-}
+	t.Run("Get non-existent key", func(t *testing.T) {
+		_, err := cache.Get("nonexistent")
+		if err == nil {
+			t.Errorf("Expected an error for non-existent key, but got nil")
+		}
+	})
 
-// TestReadPath_CacheConsistency tests cache consistency after compaction
-func TestReadPath_CacheConsistency(t *testing.T) {
-	// Pseudocode:
-	// 1. Have keys cached from multiple SSTables
-	// 2. Perform compaction that merges/removes SSTables
-	// 3. Verify cache still returns correct values
-	// 4. Or verify cache is properly invalidated if needed
+	t.Run("Contains", func(t *testing.T) {
+		cache.Put("key2", newRecord("key2", "value2"))
+		if !cache.Contains("key2") {
+			t.Errorf("Expected cache to contain 'key2', but it didn't")
+		}
+		if cache.Contains("nonexistent") {
+			t.Errorf("Expected cache not to contain 'nonexistent', but it did")
+		}
+	})
 
-	t.Skip("Integration test - implement when you have compaction")
+	t.Run("Remove", func(t *testing.T) {
+		cache.Put("key3", newRecord("key3", "value3"))
+		err := cache.Remove("key3")
+		if err != nil {
+			t.Errorf("Remove failed: %v", err)
+		}
+		if cache.Contains("key3") {
+			t.Errorf("Expected cache not to contain 'key3' after removal, but it did")
+		}
+	})
+
+	t.Run("Invalidate", func(t *testing.T) {
+		cache.Put("key4", newRecord("key4", "value4"))
+		cache.Invalidate("key4")
+		if cache.Contains("key4") {
+			t.Errorf("Expected key 'key4' to be invalidated, but it wasn't")
+		}
+	})
+
+	t.Run("Size and Capacity", func(t *testing.T) {
+		newCache := NewReadPathCache()
+		if newCache.Size() != 0 {
+			t.Errorf("Expected initial size to be 0, got %d", newCache.Size())
+		}
+		if newCache.Capacity() != READ_PATH_CACHE_CAPACITY {
+			t.Errorf("Expected capacity to be %d, got %d", READ_PATH_CACHE_CAPACITY, newCache.Capacity())
+		}
+	})
+
+	t.Run("LRU eviction", func(t *testing.T) {
+		// Create a cache with a small capacity for easier testing
+		capacity := cache.Capacity()
+		cache.SetCapacity(2)
+		defer cache.SetCapacity(capacity) // Restore original capacity after test
+
+		cache.Put("a", newRecord("a", "1"))
+		cache.Put("b", newRecord("b", "2"))
+		// Access 'a' to make it recently used
+		cache.Get("a")
+		// Add a new item, 'b' should be evicted
+		cache.Put("c", newRecord("c", "3"))
+
+		if cache.Contains("b") {
+			t.Errorf("Expected key 'b' to be evicted, but it was still in the cache")
+		}
+		if !cache.Contains("a") {
+			t.Errorf("Expected key 'a' to remain, but it was evicted")
+		}
+	})
 }
