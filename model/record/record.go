@@ -7,7 +7,6 @@ import (
 )
 
 // TODO: Displace the filepath for globalKeyDict to a config file
-// TODO: Remove the Compressed field, we get compression status from SSTable config
 
 // Record represents a key-value pair with metadata for the storage engine.
 // It includes tombstone marking for deletion and timestamp for versioning.

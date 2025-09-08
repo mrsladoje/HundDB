@@ -1,24 +1,21 @@
-// Package btree implements a B-tree data structure for efficient key-value storage
-// with automatic compaction and balancing capabilities.
 package btree
 
 import (
 	"fmt"
 	model "hunddb/model/record"
-	mt "hunddb/structures/memtable" // memtable interface
+	memtable "hunddb/structures/memtable/memtable_interface"
+	sstable "hunddb/structures/sstable"
 	"math"
 	"sort"
 )
 
-var _ mt.Memtable = (*BTree)(nil)
+// Compile-time assertion that BTree implements the Memtable interface.
+var _ memtable.MemtableInterface = (*BTree)(nil)
 
 const (
 	// DefaultOrder defines the default order (degree) of the B-tree.
 	// A B-tree of order m can have at most m-1 keys and m children per node.
 	DefaultOrder = 5
-
-	// CompactionThreshold is the percentage of tombstoned records that triggers compaction.
-	CompactionThreshold = 0.30 // 30%
 )
 
 // Node represents a node in the B-tree containing records and child nodes.
@@ -37,7 +34,7 @@ type Node struct {
 	isLeaf bool
 }
 
-// BTree represents a B-tree data structure with automatic balancing and compaction.
+// BTree represents a B-tree data structure
 type BTree struct {
 	// root points to the root node of the tree
 	root *Node
@@ -45,21 +42,14 @@ type BTree struct {
 	// order defines the maximum number of children a node can have
 	order int
 
-	// stats tracks tree statistics for compaction decisions
-	stats *TreeStats
+	// totalRecords tracks the total number of distinct keys (active + tombstoned)
+	totalRecords int
 
-	// compacting flag to prevent recursive compaction
-	compacting bool
+	// activeRecords tracks the number of non-tombstoned keys
+	activeRecords int
 
 	// capacity is the maximum number of distinct keys (active + tombstoned)
 	capacity int
-}
-
-// TreeStats maintains statistics about the B-tree for compaction decisions.
-type TreeStats struct {
-	TotalRecords      int
-	TombstonedRecords int
-	ActiveRecords     int
 }
 
 // NewBTree creates a B-tree with an explicit capacity (distinct keys).
@@ -71,9 +61,9 @@ func NewBTree(order, capacity int) *BTree {
 		capacity = math.MaxInt
 	}
 	return &BTree{
-		order:    order,
-		capacity: capacity,
-		stats:    &TreeStats{},
+		order:        order,
+		capacity:     capacity,
+		totalRecords: 0,
 	}
 }
 
@@ -97,14 +87,14 @@ func (bt *BTree) Get(key string) *model.Record {
 	return nil
 }
 
-// Add inserts or updates a record in the B-tree.
+// Put inserts or updates a record in the B-tree.
 //
 // Parameters:
 //   - record: the record to insert or update
 //
 // Returns:
 //   - error: any error that occurred during insertion
-func (bt *BTree) Add(record *model.Record) error {
+func (bt *BTree) Put(record *model.Record) error {
 	if record == nil || len(record.Key) == 0 {
 		return fmt.Errorf("invalid record: record and key cannot be nil/empty")
 	}
@@ -119,36 +109,43 @@ func (bt *BTree) Add(record *model.Record) error {
 			isLeaf:  true,
 			records: []*model.Record{record},
 		}
-		bt.updateStats(record, false) // new distinct key accounted
+		bt.totalRecords++
+		if !record.Tombstone {
+			bt.activeRecords++
+		}
 		return nil
 	}
 
 	// Check if key already exists
 	existingNode, existingIndex := bt.search(record.Key, bt.root)
 	if existingNode != nil && existingIndex >= 0 {
-		// Update existing key .
 		oldRecord := existingNode.records[existingIndex]
+		wasActive := !oldRecord.Tombstone
+		isActive := !record.Tombstone
+		if wasActive && !isActive {
+			bt.activeRecords--
+		} else if !wasActive && isActive {
+			bt.activeRecords++
+		}
 		existingNode.records[existingIndex] = record
-		bt.updateStatsOnUpdate(oldRecord, record)
 	} else {
 		// NEW distinct key → must respect capacity.
 		if bt.IsFull() {
 			return fmt.Errorf("memtable is full (capacity=%d)", bt.capacity)
 		}
 		bt.insertRecord(bt.root, record)
-		bt.updateStats(record, false)
+		bt.totalRecords++
+		if !record.Tombstone {
+			bt.activeRecords++
+		}
 	}
 
-	// Trigger compaction if needed (avoid recursion).
-	if !bt.compacting && !record.IsDeleted() && bt.needsCompaction() {
-		bt.compact()
-	}
 	return nil
 }
 
 // IsFull reports whether inserting a NEW distinct key would exceed capacity.
 func (bt *BTree) IsFull() bool {
-	return bt.stats.TotalRecords >= bt.capacity
+	return bt.totalRecords >= bt.capacity
 }
 
 // Delete marks the key as tombstoned.
@@ -172,13 +169,13 @@ func (bt *BTree) Delete(record *model.Record) bool {
 			}
 			// Replace with tombstone and adjust stats.
 			node.records[idx] = record
-			bt.updateStatsOnUpdate(old, record)
+			bt.activeRecords--
 			return true
 		}
 	}
 
-	// Not found → delegate to Add().
-	if err := bt.Add(record); err != nil { // capacity reached for new key
+	// Not found → delegate to Put().
+	if err := bt.Put(record); err != nil { // capacity reached for new key
 		return false
 	}
 	return false
@@ -329,127 +326,43 @@ func (bt *BTree) insertRecordIntoParent(parent *Node, record *model.Record, righ
 	}
 }
 
-// needsCompaction determines if the tree needs compaction based on tombstoned records.
-func (bt *BTree) needsCompaction() bool {
-	if bt.stats.TotalRecords == 0 {
-		return false
-	}
+// RetrieveSortedRecords returns all records in sorted order (in-order traversal).
+func (bt *BTree) RetrieveSortedRecords() []model.Record { // Changed return type
+	var records []model.Record // Changed slice element type
+	bt.inOrderTraversal(bt.root, &records)
 
-	tombstoneRatio := float64(bt.stats.TombstonedRecords) / float64(bt.stats.TotalRecords)
-	return tombstoneRatio >= CompactionThreshold
+	return records
 }
 
-// compact rebuilds the tree removing all tombstoned records.
-func (bt *BTree) compact() {
-	if bt.root == nil || bt.compacting {
-		return
-	}
-
-	bt.compacting = true
-	defer func() {
-		bt.compacting = false
-	}()
-
-	// Collect all active records
-	var activeRecords []*model.Record
-	bt.collectActiveRecords(bt.root, &activeRecords)
-
-	// Sort records by key
-	sort.Slice(activeRecords, func(i, j int) bool {
-		return activeRecords[i].Key < activeRecords[j].Key
-	})
-
-	// Rebuild tree - reset everything
-	bt.root = nil
-	bt.stats = &TreeStats{
-		TotalRecords:      0,
-		TombstonedRecords: 0,
-		ActiveRecords:     0,
-	}
-
-	// Re-insert only active records
-	for _, record := range activeRecords {
-		// Make sure the record is not marked as tombstoned
-		record.Tombstone = false
-
-		if bt.root == nil {
-			bt.root = &Node{
-				isLeaf:  true,
-				records: []*model.Record{record},
-			}
-		} else {
-			bt.insertRecord(bt.root, record)
-		}
-		// Update stats - each record should be active
-		bt.stats.TotalRecords++
-		bt.stats.ActiveRecords++
-	}
-}
-
-// collectActiveRecords recursively collects all active (non-tombstoned) records.
-func (bt *BTree) collectActiveRecords(node *Node, records *[]*model.Record) {
+// inOrderTraversal performs an in-order traversal of the B-tree to collect records.
+func (bt *BTree) inOrderTraversal(node *Node, records *[]model.Record) { // Changed slice element type in parameter
 	if node == nil {
 		return
 	}
 
-	// Collect active records from this node
-	for _, record := range node.records {
-		if !record.IsDeleted() {
-			*records = append(*records, record)
+	for i, rec := range node.records { // Assuming node.records still holds []*model.Record
+		// Visit left child before processing record
+		if !node.isLeaf {
+			bt.inOrderTraversal(node.children[i], records)
 		}
-	}
-
-	// Recursively collect from children
-	for _, child := range node.children {
-		bt.collectActiveRecords(child, records)
-	}
-}
-
-// updateStats updates tree statistics when adding/modifying records.
-func (bt *BTree) updateStats(record *model.Record, isDeleting bool) {
-	if isDeleting {
-		// This path is used when marking records as deleted
-		bt.stats.TombstonedRecords++
-		bt.stats.ActiveRecords--
-	} else {
-		// This path is used when adding new records
-		bt.stats.TotalRecords++
-		if record.IsDeleted() {
-			bt.stats.TombstonedRecords++
-		} else {
-			bt.stats.ActiveRecords++
+		// Deep copy the Value field to avoid sharing the underlying array
+		copiedRecord := *rec
+		if rec.Value != nil {
+			copiedRecord.Value = make([]byte, len(rec.Value))
+			copy(copiedRecord.Value, rec.Value)
 		}
-	}
-}
-
-// updateStatsOnUpdate updates statistics when updating an existing record.
-func (bt *BTree) updateStatsOnUpdate(oldRecord, newRecord *model.Record) {
-	// Remove old record stats
-	if oldRecord.IsDeleted() {
-		bt.stats.TombstonedRecords--
-	} else {
-		bt.stats.ActiveRecords--
+		*records = append(*records, copiedRecord)
 	}
 
-	// Add new record stats
-	if newRecord.IsDeleted() {
-		bt.stats.TombstonedRecords++
-	} else {
-		bt.stats.ActiveRecords++
+	// Visit the rightmost child after all records
+	if !node.isLeaf && len(node.children) > len(node.records) {
+		bt.inOrderTraversal(node.children[len(node.records)], records)
 	}
-}
-
-// GetStats returns a copy of the current tree statistics.
-func (bt *BTree) GetStats() TreeStats {
-	if bt.stats == nil {
-		return TreeStats{}
-	}
-	return *bt.stats
 }
 
 // Size returns the number of active (non-tombstoned) keys.
 func (bt *BTree) Size() int {
-	return bt.stats.ActiveRecords
+	return bt.activeRecords
 }
 
 // Capacity returns the maximum number of distinct keys allowed.
@@ -457,15 +370,22 @@ func (bt *BTree) Capacity() int {
 	return bt.capacity
 }
 
-// Flush persists the memtable contents to disk (implementation-specific).
-func (bt *BTree) Flush() error {
-	// TODO: Implement SSTable flush logic here.
+// Flush persists the memtable contents to disk (SSTable).
+func (bt *BTree) Flush(index int) error {
+
+	sortedRecords := bt.RetrieveSortedRecords()
+
+	err := sstable.PersistMemtable(sortedRecords, index)
+	if err != nil {
+		return fmt.Errorf("failed to flush B-tree memtable: %v", err)
+	}
+
 	return nil
 }
 
 // TotalEntries returns the number of distinct keys (active + tombstoned).
 func (bt *BTree) TotalEntries() int {
-	return bt.stats.TotalRecords
+	return bt.totalRecords
 }
 
 // Height returns the height of the B-tree.

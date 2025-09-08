@@ -1,38 +1,113 @@
 package memtable
 
-import model "hunddb/model/record"
+import (
+	"fmt"
+	model "hunddb/model/record"
+	"hunddb/structures/memtable/btree"
+	"hunddb/structures/memtable/hashmap"
+	mi "hunddb/structures/memtable/memtable_interface"
+	"hunddb/structures/memtable/skip_list"
+	"sync"
+)
 
-// Memtable is the in-memory KV interface used by the engine.
-// It stores the latest value per key, including logical deletions via tombstones.
-// Capacity is measured in distinct keys present (active + tombstoned).
-type Memtable interface {
-	// Add inserts or updates the record for its key.
-	// For a NEW key, return a non-nil error if the memtable is full.
-	// Updates MUST succeed even when the memtable is full.
-	Add(record *model.Record) error
+type MemtableType string
 
-	// Delete permors logi (implementations may force record.Tombstone = true).
-	// If the key exists (active or already tombstoned), replace the record and return true.
-	// If the key does not exist, insert a “blind tombstone” if capacity allows and return false.
-	// If capacity is full, do nothing and return false.
-	Delete(record *model.Record) bool
+const (
+	BTree    MemtableType = "btree"
+	SkipList MemtableType = "skiplist"
+	HashMap  MemtableType = "hashmap"
+)
 
-	// Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
-	Get(key string) *model.Record
+// TODO: Get these from config
+const (
+	CAPACITY      = 1000
+	MEMTABLE_TYPE = BTree
+)
 
-	// Size returns the number of active (non-tombstoned) keys currently stored.
-	Size() int
+func NewMemtable() (mi.MemtableInterface, error) {
+	var base mi.MemtableInterface
 
-	// Capacity returns the maximum size allowed.
-	Capacity() int
+	switch MEMTABLE_TYPE {
+	case BTree:
+		base = btree.NewBTree(btree.DefaultOrder, CAPACITY)
+	case SkipList:
+		base = skip_list.New(16, CAPACITY)
+	case HashMap:
+		base = hashmap.NewHashMap(CAPACITY)
+	default:
+		return nil, fmt.Errorf("unknown memtable type: %s", MEMTABLE_TYPE)
+	}
 
-	// TotalEntries returns the number of distinct keys present (active + tombstoned).
-	TotalEntries() int
+	return NewThreadSafeMemtable(base), nil
+}
 
-	// IsFull reports whether inserting a NEW distinct key would exceed capacity.
-	IsFull() bool
+/*
+Thread-safe wrapper for MemtableInterface.
+Decorator pattern.
+*/
+type ThreadSafeMemtable struct {
+	memtable mi.MemtableInterface
+	mu       sync.RWMutex
+}
 
-	// Flush persists the memtable contents to disk (e.g., write an SSTable).
-	// Exact semantics are implementation-specific.
-	Flush() error
+func NewThreadSafeMemtable(memtable mi.MemtableInterface) *ThreadSafeMemtable {
+	return &ThreadSafeMemtable{
+		memtable: memtable,
+	}
+}
+
+// Put implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Put(record *model.Record) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.memtable.Put(record)
+}
+
+// Delete implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Delete(record *model.Record) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.memtable.Delete(record)
+}
+
+// Get implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Get(key string) *model.Record {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.memtable.Get(key)
+}
+
+// Size implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Size() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.memtable.Size()
+}
+
+// Capacity implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Capacity() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.memtable.Capacity()
+}
+
+// TotalEntries implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) TotalEntries() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.memtable.TotalEntries()
+}
+
+// IsFull implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) IsFull() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.memtable.IsFull()
+}
+
+// Flush implements MemtableInterface with thread safety
+func (ts *ThreadSafeMemtable) Flush(index int) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.memtable.Flush(index)
 }

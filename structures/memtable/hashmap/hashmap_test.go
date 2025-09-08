@@ -1,0 +1,594 @@
+package hashmap
+
+import (
+	"fmt"
+	"math"
+	"testing"
+	"time"
+
+	model "hunddb/model/record"
+)
+
+// ---- helpers ----
+
+func makeRec(key, val string) *model.Record {
+	return &model.Record{
+		Key:       key,
+		Value:     []byte(val),
+		Tombstone: false,
+		Timestamp: uint64(time.Now().UnixNano()),
+	}
+}
+
+func makeTomb(key string) *model.Record {
+	r := makeRec(key, "")
+	r.Tombstone = true
+	return r
+}
+
+func rec(key string, val []byte, tomb bool) *model.Record {
+	return model.NewRecord(key, val, uint64(time.Now().UnixNano()), tomb)
+}
+
+// ---- tests ----
+
+func TestHashMap_NewHashMap(t *testing.T) {
+	hm := NewHashMap(0) // <=0 -> unbounded
+	if hm.Capacity() != math.MaxInt {
+		t.Fatalf("expected unbounded capacity=%d, got %d", math.MaxInt, hm.Capacity())
+	}
+
+	hm2 := NewHashMap(5)
+	if hm2.Capacity() != 5 {
+		t.Fatalf("expected capacity=5, got %d", hm2.Capacity())
+	}
+}
+
+func TestHashMap_AddAndGet_Single(t *testing.T) {
+	hm := NewHashMap(math.MaxInt)
+
+	if err := hm.Put(makeRec("k1", "v1")); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+
+	got := hm.Get("k1")
+	if got == nil || got.Key != "k1" || string(got.Value) != "v1" {
+		t.Fatalf("Get mismatch: want k1/v1, got %#v", got)
+	}
+
+	if hm.Get("nope") != nil {
+		t.Fatalf("expected nil for non-existent key")
+	}
+}
+
+func TestHashMap_AddInvalid(t *testing.T) {
+	hm := NewHashMap(math.MaxInt)
+
+	if err := hm.Put(nil); err == nil {
+		t.Fatalf("expected error for nil record")
+	}
+	if err := hm.Put(&model.Record{Key: ""}); err == nil {
+		t.Fatalf("expected error for empty key")
+	}
+}
+
+func TestHashMap_UpdateExisting(t *testing.T) {
+	hm := NewHashMap(math.MaxInt)
+
+	_ = hm.Put(makeRec("k1", "v1"))
+	_ = hm.Put(makeRec("k1", "v2")) // update
+
+	got := hm.Get("k1")
+	if got == nil || string(got.Value) != "v2" {
+		t.Fatalf("expected updated value v2, got %#v", got)
+	}
+
+	if hm.TotalEntries() != 1 {
+		t.Fatalf("expected TotalEntries=1 after update, got %d", hm.TotalEntries())
+	}
+	if hm.Size() != 1 {
+		t.Fatalf("expected Size=1 after update, got %d", hm.Size())
+	}
+}
+
+func TestHashMap_Delete_ExistingAndBlind(t *testing.T) {
+	hm := NewHashMap(math.MaxInt)
+
+	// Insert 5 keys
+	keys := []string{"k1", "k2", "k3", "k4", "k5"}
+	for _, k := range keys {
+		_ = hm.Put(makeRec(k, "v_"+k))
+	}
+
+	// Delete existing
+	if ok := hm.Delete(makeTomb("k3")); !ok {
+		t.Fatalf("delete existing should return true")
+	}
+	if hm.Get("k3") != nil {
+		t.Fatalf("deleted key should not be retrievable")
+	}
+
+	// Others still retrievable
+	for _, k := range []string{"k1", "k2", "k4", "k5"} {
+		if hm.Get(k) == nil {
+			t.Fatalf("key %s should be retrievable", k)
+		}
+	}
+
+	// Delete non-existent -> blind tombstone (returns false), increases TotalEntries
+	if ok := hm.Delete(makeTomb("ghost")); ok {
+		t.Fatalf("delete of non-existent should return false (blind tombstone)")
+	}
+
+	// After: active=4 (k1,k2,k4,k5), total=6 (5 originals + ghost tombstone)
+	if hm.Size() != 4 {
+		t.Fatalf("expected Size=4, got %d", hm.Size())
+	}
+	if hm.TotalEntries() != 6 {
+		t.Fatalf("expected TotalEntries=6, got %d", hm.TotalEntries())
+	}
+	// ghost is tombstoned, not retrievable
+	if hm.Get("ghost") != nil {
+		t.Fatalf("ghost should be tombstoned and not retrievable")
+	}
+}
+
+func TestHashMap_IsFullAndCapacity(t *testing.T) {
+	hm := NewHashMap(2)
+
+	// Fill with 2 distinct keys
+	if err := hm.Put(makeRec("a", "1")); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if err := hm.Put(makeRec("b", "2")); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !hm.IsFull() {
+		t.Fatalf("expected IsFull=true")
+	}
+
+	// New distinct key should fail (capacity applies to NEW keys)
+	if err := hm.Put(makeRec("c", "3")); err == nil {
+		t.Fatalf("expected capacity error for new key when full")
+	}
+
+	// Update existing should still succeed when "full"
+	if err := hm.Put(makeRec("b", "22")); err != nil {
+		t.Fatalf("update existing should not be blocked by capacity: %v", err)
+	}
+	if got := hm.Get("b"); got == nil || string(got.Value) != "22" {
+		t.Fatalf("expected updated b=22, got %#v", got)
+	}
+
+	// Delete non-existent when full -> blind tombstone should NOT be inserted
+	if ok := hm.Delete(makeTomb("zzz")); ok {
+		t.Fatalf("delete of non-existent should return false")
+	}
+	if hm.TotalEntries() != 2 {
+		t.Fatalf("total should remain 2, got %d", hm.TotalEntries())
+	}
+}
+
+func TestHashMap_SizeAndTotals(t *testing.T) {
+	hm := NewHashMap(math.MaxInt)
+
+	// Add 10
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("k%d", i)
+		_ = hm.Put(makeRec(key, "v"))
+	}
+	if hm.Size() != 10 || hm.TotalEntries() != 10 {
+		t.Fatalf("after add: expected size=10 total=10, got %d/%d", hm.Size(), hm.TotalEntries())
+	}
+
+	// Delete 3 existing keys
+	for _, k := range []string{"k0", "k1", "k2"} {
+		_ = hm.Delete(makeTomb(k))
+	}
+	if hm.Size() != 7 {
+		t.Fatalf("after deletes: expected size=7, got %d", hm.Size())
+	}
+	if hm.TotalEntries() != 10 {
+		t.Fatalf("after deletes: expected total still 10, got %d", hm.TotalEntries())
+	}
+
+	// Blind tombstone one missing key -> total +1, size unchanged
+	_ = hm.Delete(makeTomb("missing"))
+	if hm.Size() != 7 || hm.TotalEntries() != 11 {
+		t.Fatalf("after blind tombstone: expected size=7 total=11, got %d/%d", hm.Size(), hm.TotalEntries())
+	}
+}
+
+// TestRetrieveSortedRecords_Empty verifies empty HashMap returns empty slice
+func TestHashMapRetrieveSortedRecords_Empty(t *testing.T) {
+	hm := NewHashMap(100)
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 0 {
+		t.Errorf("Expected empty slice, got %d records", len(records))
+	}
+}
+
+// TestRetrieveSortedRecords_SingleRecord verifies single record retrieval
+func TestHashMapRetrieveSortedRecords_SingleRecord(t *testing.T) {
+	hm := NewHashMap(100)
+
+	original := rec("key1", []byte("value1"), false)
+	if err := hm.Put(original); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(records))
+	}
+
+	r := records[0]
+	if r.Key != "key1" || string(r.Value) != "value1" || r.Tombstone {
+		t.Errorf("Record mismatch: got %+v", r)
+	}
+}
+
+// TestRetrieveSortedRecords_SortedOrder verifies records are returned in sorted key order
+func TestHashMapRetrieveSortedRecords_SortedOrder(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Insert keys in non-sorted order
+	keys := []string{"zebra", "apple", "dog", "cat", "banana"}
+	values := []string{"z-val", "a-val", "d-val", "c-val", "b-val"}
+
+	for i, key := range keys {
+		if err := hm.Put(rec(key, []byte(values[i]), false)); err != nil {
+			t.Fatalf("Put %s failed: %v", key, err)
+		}
+	}
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 5 {
+		t.Fatalf("Expected 5 records, got %d", len(records))
+	}
+
+	// Verify sorted order
+	expectedKeys := []string{"apple", "banana", "cat", "dog", "zebra"}
+	expectedValues := []string{"a-val", "b-val", "c-val", "d-val", "z-val"}
+
+	for i, record := range records {
+		if record.Key != expectedKeys[i] {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expectedKeys[i], record.Key)
+		}
+		if string(record.Value) != expectedValues[i] {
+			t.Errorf("Value at index %d: expected %s, got %s", i, expectedValues[i], string(record.Value))
+		}
+		if record.Tombstone {
+			t.Errorf("Record at index %d should not be tombstoned", i)
+		}
+	}
+}
+
+// TestRetrieveSortedRecords_WithTombstones verifies tombstones are included in results
+func TestHashMapRetrieveSortedRecords_WithTombstones(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Add some records
+	_ = hm.Put(rec("a", []byte("val-a"), false))
+	_ = hm.Put(rec("b", []byte("val-b"), false))
+	_ = hm.Put(rec("c", []byte("val-c"), false))
+	_ = hm.Put(rec("d", []byte("val-d"), false))
+
+	// Delete middle records
+	_ = hm.Delete(rec("b", nil, true))
+	_ = hm.Delete(rec("c", nil, true))
+
+	// Add a tombstone for non-existing key
+	_ = hm.Delete(rec("z", nil, true))
+
+	// All records including tombstones
+	allRecords := hm.RetrieveSortedRecords()
+	expectedCount := 5 // a, b(tomb), c(tomb), d, z(tomb)
+	if len(allRecords) != expectedCount {
+		t.Fatalf("Expected %d total records, got %d", expectedCount, len(allRecords))
+	}
+
+	// Verify order and tombstone status
+	expected := []struct {
+		key       string
+		tombstone bool
+	}{
+		{"a", false},
+		{"b", true},
+		{"c", true},
+		{"d", false},
+		{"z", true},
+	}
+
+	for i, exp := range expected {
+		record := allRecords[i]
+		if record.Key != exp.key {
+			t.Errorf("Record[%d]: expected key %s, got %s", i, exp.key, record.Key)
+		}
+		if record.Tombstone != exp.tombstone {
+			t.Errorf("Record[%d]: expected tombstone %v, got %v", i, exp.tombstone, record.Tombstone)
+		}
+	}
+}
+
+// TestRetrieveSortedRecords_UpdatedRecords verifies updated records show latest values
+func TestHashMapRetrieveSortedRecords_UpdatedRecords(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Insert initial records
+	_ = hm.Put(rec("key1", []byte("value1"), false))
+	_ = hm.Put(rec("key2", []byte("value2"), false))
+
+	// Update records
+	_ = hm.Put(rec("key1", []byte("updated1"), false))
+	_ = hm.Put(rec("key2", []byte("updated2"), false))
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 2 {
+		t.Fatalf("Expected 2 records, got %d", len(records))
+	}
+
+	// Verify updated values (key1 comes before key2 in sorted order)
+	if string(records[0].Value) != "updated1" {
+		t.Errorf("Expected updated1, got %s", string(records[0].Value))
+	}
+	if string(records[1].Value) != "updated2" {
+		t.Errorf("Expected updated2, got %s", string(records[1].Value))
+	}
+}
+
+// TestRetrieveSortedRecords_RecordCopy verifies returned records are copies
+func TestHashMapRetrieveSortedRecords_RecordCopy(t *testing.T) {
+	hm := NewHashMap(100)
+
+	original := rec("key1", []byte("original"), false)
+	_ = hm.Put(original)
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(records))
+	}
+
+	retrieved := records[0]
+
+	// Modify the retrieved record's value
+	retrieved.Value[0] = 'X'
+	retrieved.Tombstone = true
+
+	// Verify original in HashMap is unchanged
+	fromHM := hm.Get("key1")
+	if fromHM == nil {
+		t.Fatal("Original record should still exist and be active")
+	}
+	if string(fromHM.Value) != "original" {
+		t.Errorf("Original value modified: expected 'original', got %s", string(fromHM.Value))
+	}
+	if fromHM.Tombstone {
+		t.Error("Original record should not be tombstoned")
+	}
+}
+
+// TestRetrieveSortedRecords_TombstoneResurrection verifies tombstone -> active transitions
+func TestHashMapRetrieveSortedRecords_TombstoneResurrection(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Add a record
+	_ = hm.Put(rec("key1", []byte("value1"), false))
+
+	// Delete it (tombstone)
+	_ = hm.Delete(rec("key1", nil, true))
+
+	// Verify tombstone exists
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 1 || !records[0].Tombstone {
+		t.Fatalf("Expected 1 tombstoned record, got %d records, tombstone=%v",
+			len(records), len(records) > 0 && records[0].Tombstone)
+	}
+
+	// Resurrect the key
+	_ = hm.Put(rec("key1", []byte("resurrected"), false))
+
+	// Verify record is now active
+	records = hm.RetrieveSortedRecords()
+	if len(records) != 1 || records[0].Tombstone {
+		t.Fatalf("Expected 1 active record, got %d records, tombstone=%v",
+			len(records), len(records) > 0 && records[0].Tombstone)
+	}
+	if string(records[0].Value) != "resurrected" {
+		t.Errorf("Expected 'resurrected', got %s", string(records[0].Value))
+	}
+}
+
+// TestRetrieveSortedRecords_MixedOperations verifies complex scenario with multiple operations
+func TestHashMapRetrieveSortedRecords_MixedOperations(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Mixed operations: inserts, updates, deletes
+	_ = hm.Put(rec("c", []byte("val-c"), false))
+	_ = hm.Put(rec("a", []byte("val-a"), false))
+	_ = hm.Put(rec("b", []byte("val-b"), false))
+	_ = hm.Delete(rec("d", nil, true))               // tombstone for non-existing key
+	_ = hm.Put(rec("a", []byte("updated-a"), false)) // update existing
+	_ = hm.Delete(rec("b", nil, true))               // delete existing
+	_ = hm.Put(rec("e", []byte("val-e"), false))
+
+	records := hm.RetrieveSortedRecords()
+	expectedCount := 5 // a(updated), b(tomb), c, d(tomb), e
+	if len(records) != expectedCount {
+		t.Fatalf("Expected %d records, got %d", expectedCount, len(records))
+	}
+
+	// Verify sorted order and correct states
+	expected := []struct {
+		key       string
+		value     string
+		tombstone bool
+	}{
+		{"a", "updated-a", false},
+		{"b", "", true}, // tombstoned, value may be empty
+		{"c", "val-c", false},
+		{"d", "", true}, // tombstoned, value may be empty
+		{"e", "val-e", false},
+	}
+
+	for i, exp := range expected {
+		record := records[i]
+		if record.Key != exp.key {
+			t.Errorf("Record[%d]: expected key %s, got %s", i, exp.key, record.Key)
+		}
+		if record.Tombstone != exp.tombstone {
+			t.Errorf("Record[%d]: expected tombstone %v, got %v", i, exp.tombstone, record.Tombstone)
+		}
+		if !exp.tombstone && string(record.Value) != exp.value {
+			t.Errorf("Record[%d]: expected value %s, got %s", i, exp.value, string(record.Value))
+		}
+	}
+}
+
+// TestRetrieveSortedRecords_NilValueHandling verifies handling of nil values in tombstones
+func TestHashMapRetrieveSortedRecords_NilValueHandling(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Add a record and then delete it with nil value
+	_ = hm.Put(rec("key1", []byte("value1"), false))
+	tombstoneRec := rec("key1", nil, true)
+	_ = hm.Delete(tombstoneRec)
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 1 {
+		t.Fatalf("Expected 1 record, got %d", len(records))
+	}
+
+	record := records[0]
+	if !record.Tombstone {
+		t.Error("Record should be tombstoned")
+	}
+	if record.Key != "key1" {
+		t.Errorf("Expected key 'key1', got %s", record.Key)
+	}
+	// Value should be handled gracefully (empty slice, not nil)
+	if record.Value == nil {
+		t.Error("Value should not be nil (should be empty slice)")
+	}
+}
+
+// TestRetrieveSortedRecords_Capacity verifies behavior with capacity constraints
+func TestHashMapRetrieveSortedRecords_Capacity(t *testing.T) {
+	hm := NewHashMap(3) // Small capacity
+
+	// Fill to capacity
+	_ = hm.Put(rec("c", []byte("val-c"), false))
+	_ = hm.Put(rec("a", []byte("val-a"), false))
+	_ = hm.Put(rec("b", []byte("val-b"), false))
+
+	// Attempt to add one more (should fail)
+	err := hm.Put(rec("d", []byte("val-d"), false))
+	if err == nil {
+		t.Fatal("Expected capacity error when adding 4th record")
+	}
+
+	// Verify only 3 records in sorted order
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 3 {
+		t.Fatalf("Expected 3 records, got %d", len(records))
+	}
+
+	expectedKeys := []string{"a", "b", "c"}
+	for i, expected := range expectedKeys {
+		if records[i].Key != expected {
+			t.Errorf("Record[%d]: expected key %s, got %s", i, expected, records[i].Key)
+		}
+	}
+
+	// Update existing record (should work even at capacity)
+	_ = hm.Put(rec("a", []byte("updated-a"), false))
+
+	records = hm.RetrieveSortedRecords()
+	if len(records) != 3 {
+		t.Fatalf("Expected 3 records after update, got %d", len(records))
+	}
+
+	if string(records[0].Value) != "updated-a" {
+		t.Errorf("Expected updated value, got %s", string(records[0].Value))
+	}
+}
+
+// TestRetrieveSortedRecords_LargeDataset verifies performance with many records
+func TestHashMapRetrieveSortedRecords_LargeDataset(t *testing.T) {
+	hm := NewHashMap(1000)
+
+	// Insert many records in random order
+	numRecords := 100
+	for i := 0; i < numRecords; i++ {
+		// Create keys that will sort differently than insertion order
+		key := string(rune('A'+i%26)) + string(rune('A'+(i/26)%26)) + string(rune('0'+i%10))
+		value := []byte("value-" + key)
+		if err := hm.Put(rec(key, value, false)); err != nil {
+			t.Fatalf("Put failed at %d: %v", i, err)
+		}
+	}
+
+	// Delete every 5th record
+	recordsToDelete := []string{}
+	tempRecords := hm.RetrieveSortedRecords()
+	for i := 0; i < len(tempRecords); i += 5 {
+		recordsToDelete = append(recordsToDelete, tempRecords[i].Key)
+	}
+	for _, key := range recordsToDelete {
+		_ = hm.Delete(rec(key, nil, true))
+	}
+
+	allRecords := hm.RetrieveSortedRecords()
+
+	if len(allRecords) != numRecords {
+		t.Errorf("Expected %d total records, got %d", numRecords, len(allRecords))
+	}
+
+	// Verify records are in sorted order
+	for i := 1; i < len(allRecords); i++ {
+		if allRecords[i-1].Key >= allRecords[i].Key {
+			t.Errorf("Records not in sorted order: %s >= %s at indices %d, %d",
+				allRecords[i-1].Key, allRecords[i].Key, i-1, i)
+		}
+	}
+
+	// Count tombstones and verify they match our deletions
+	tombstoneCount := 0
+	for _, record := range allRecords {
+		if record.Tombstone {
+			tombstoneCount++
+		}
+	}
+
+	if tombstoneCount != len(recordsToDelete) {
+		t.Errorf("Expected %d tombstones, got %d", len(recordsToDelete), tombstoneCount)
+	}
+}
+
+// TestRetrieveSortedRecords_EmptyValuesAndKeys verifies edge cases
+func TestHashMapRetrieveSortedRecords_EmptyValuesAndKeys(t *testing.T) {
+	hm := NewHashMap(100)
+
+	// Add records with empty values
+	_ = hm.Put(rec("key1", []byte(""), false))
+	_ = hm.Put(rec("key2", []byte{}, false))
+	_ = hm.Put(rec("key3", nil, false))
+
+	records := hm.RetrieveSortedRecords()
+	if len(records) != 3 {
+		t.Fatalf("Expected 3 records, got %d", len(records))
+	}
+
+	// All should be in sorted order
+	expectedKeys := []string{"key1", "key2", "key3"}
+	for i, expected := range expectedKeys {
+		if records[i].Key != expected {
+			t.Errorf("Record[%d]: expected key %s, got %s", i, expected, records[i].Key)
+		}
+		// Values should be handled gracefully (empty slice, not nil)
+		if records[i].Value == nil {
+			t.Errorf("Record[%d]: Value should not be nil", i)
+		}
+	}
+}

@@ -3,9 +3,14 @@ package skip_list
 import (
 	"errors"
 	model "hunddb/model/record"
+	memtable "hunddb/structures/memtable/memtable_interface"
+	sstable "hunddb/structures/sstable"
 	"math/rand"
 	"time"
 )
+
+// Compile-time assertion that SkipList implements the Memtable interface.
+var _ memtable.MemtableInterface = (*SkipList)(nil)
 
 // Node holds the latest model.Record for a key.
 // We do NOT physically remove nodes; Delete() sets tombstone (logical delete).
@@ -104,11 +109,11 @@ func (s *SkipList) insert(rec *model.Record, update []*Node) *Node {
 
 var ErrCapacityExceeded = errors.New("memtable capacity exceeded")
 
-// Add inserts or updates a record for its key.
+// Put inserts or updates a record for its key.
 // NEW key: if IsFull() -> error; else insert and update counters.
 // EXISTING key: replace record and adjust activeCount on tombstone transitions.
 // If record.Tombstone == true, this acts as a logical delete update.
-func (s *SkipList) Add(record *model.Record) error {
+func (s *SkipList) Put(record *model.Record) error {
 	if record == nil {
 		return errors.New("nil record")
 	}
@@ -186,8 +191,41 @@ func (s *SkipList) Capacity() int     { return s.capacity }
 func (s *SkipList) TotalEntries() int { return s.totalCount }
 func (s *SkipList) IsFull() bool      { return s.totalCount >= s.capacity }
 
-// Flush is a stub; implement sorted SSTable write by iterating bottom-level list.
-func (s *SkipList) Flush() error {
-	// TODO: emit (key, rec) in sorted order by walking head.nextNodes[0]
+// RetrieveSortedRecords returns all records (including tombstones) in sorted key order.
+// This is used for flushing the memtable to an SSTable.
+func (s *SkipList) RetrieveSortedRecords() []model.Record {
+	var records []model.Record
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		if current.rec != nil {
+			// Create a copy of the record to prevent external modification
+			recordCopy := model.Record{
+				Key:       current.rec.Key,
+				Value:     make([]byte, len(current.rec.Value)),
+				Timestamp: current.rec.Timestamp,
+				Tombstone: current.rec.Tombstone,
+			}
+			copy(recordCopy.Value, current.rec.Value)
+			records = append(records, recordCopy)
+		}
+		current = current.nextNodes[0]
+	}
+
+	return records
+}
+
+// Flush persists the memtable contents to disk (SSTable).
+func (s *SkipList) Flush(index int) error {
+
+	sortedRecords := s.RetrieveSortedRecords()
+
+	err := sstable.PersistMemtable(sortedRecords, index)
+	if err != nil {
+		return errors.New("failed to flush SkipList memtable: " + err.Error())
+	}
+
 	return nil
 }
