@@ -4,6 +4,11 @@ import (
 	lru_cache "hunddb/lsm/lru_cache"
 )
 
+// TODO: Load capacity from config
+const (
+	READ_PATH_CACHE_CAPACITY = 1000
+)
+
 // ReadPathCache wraps the LRU cache for the read path
 // This cache stores actual key-value pairs read from SSTables
 type ReadPathCache struct {
@@ -11,9 +16,9 @@ type ReadPathCache struct {
 }
 
 // NewReadPathCache creates a new cache for the read path
-func NewReadPathCache(capacity uint32) *ReadPathCache {
+func NewReadPathCache() *ReadPathCache {
 	return &ReadPathCache{
-		cache: lru_cache.NewLRUCache[string, []byte](capacity),
+		cache: lru_cache.NewLRUCache[string, []byte](READ_PATH_CACHE_CAPACITY),
 	}
 }
 

@@ -3,9 +3,11 @@ package lsm
 import (
 	"encoding/binary"
 	"fmt"
+	"hunddb/lsm/block_manager"
 	cache "hunddb/lsm/cache"
 	memtable "hunddb/lsm/memtable"
 	wal "hunddb/lsm/wal"
+	"os"
 )
 
 // TODO: load from config
@@ -15,18 +17,21 @@ const (
 	MAX_TABLES_PER_LEVEL = 4
 	MAX_MEMTABLES        = 4
 	LSM_PATH             = "lsm.db"
+	CRC_SIZE             = 4
 )
 
 /*
 LSM represents a Log-Structured Merge Tree
 */
 type LSM struct {
-
 	// Each level holds the indexes of its SSTables
 	levels    [][]int
 	memtables []*memtable.MemTable
 	wal       *wal.WAL
 	cache     *cache.ReadPathCache
+
+	// Flag to indicate if previous data was lost during loading
+	DataLost bool
 }
 
 /*
@@ -55,14 +60,139 @@ func (lsm *LSM) serialize() []byte {
 	return finalBytes
 }
 
-// func (lsm *LSM) PersistLSM() error {
-// 	// Get the serialized data
-// 	data := lsm.serialize()
+/*
+PersistLSM persists the LSM parts that need to be persisted (the levels and their SSTable indexes).
+*/
+func (lsm *LSM) PersistLSM() error {
+	// Get the serialized data
+	data := lsm.serialize()
 
-// 	return nil
-// }
+	blockManager := block_manager.GetBlockManager()
+
+	err := blockManager.WriteToDisk(data, LSM_PATH, 0)
+
+	return err
+}
 
 /*
 Deserialize the LSM parts that need to be persisted (the levels and their SSTable indexes).
 */
-// func (lsm *LSM) Deserialize(data []byte) error {
+func (lsm *LSM) deserialize(data []byte) error {
+	if len(data) == 0 {
+		return fmt.Errorf("invalid data: empty")
+	}
+
+	// Convert bytes directly to string
+	stringifiedLevels := string(data)
+
+	// Parse the stringified levels back into the levels slice
+	lsm.levels = make([][]int, MAX_LEVELS)
+
+	i := 0
+	for i < len(stringifiedLevels) {
+		// Find level number
+		levelStart := i
+		for i < len(stringifiedLevels) && stringifiedLevels[i] != '[' {
+			i++
+		}
+		if i >= len(stringifiedLevels) {
+			break
+		}
+
+		levelNum := 0
+		fmt.Sscanf(stringifiedLevels[levelStart:i], "%d", &levelNum)
+		i++ // skip '['
+
+		// Parse table indexes for this level
+		var tableIndexes []int
+		for i < len(stringifiedLevels) && stringifiedLevels[i] != ']' {
+			numStart := i
+			for i < len(stringifiedLevels) && stringifiedLevels[i] != ',' && stringifiedLevels[i] != ']' {
+				i++
+			}
+
+			if i > numStart {
+				var tableIndex int
+				fmt.Sscanf(stringifiedLevels[numStart:i], "%d", &tableIndex)
+				tableIndexes = append(tableIndexes, tableIndex)
+			}
+
+			if i < len(stringifiedLevels) && stringifiedLevels[i] == ',' {
+				i++ // skip ','
+			}
+		}
+
+		if i < len(stringifiedLevels) && stringifiedLevels[i] == ']' {
+			i++ // skip ']'
+		}
+
+		if levelNum < MAX_LEVELS {
+			lsm.levels[levelNum] = tableIndexes
+		}
+	}
+
+	return nil
+}
+
+/*
+LoadLSM loads the LSM from disk, or creates a new one if it doesn't exist.
+Always returns an LSM instance. If previous data couldn't be loaded, the DataLost flag will be set to true.
+*/
+func LoadLSM() (*LSM, error) {
+	// Create a new LSM instance with default values
+	lsm := &LSM{
+		levels:    make([][]int, MAX_LEVELS),
+		memtables: make([]*memtable.MemTable, 0, MAX_MEMTABLES),
+		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
+		cache:     cache.NewReadPathCache(),
+		DataLost:  false, // Initially assume no data loss
+	}
+
+	blockManager := block_manager.GetBlockManager()
+
+	// Check if the file exists using os.Stat
+	_, err := os.Stat(LSM_PATH)
+	if os.IsNotExist(err) {
+		// File doesn't exist - this is a fresh start (not data loss)
+		return lsm, nil
+	}
+
+	// File exists, so any errors from here on are considered data corruption
+
+	// Try to read the levels size
+	levelsSizeBytes, _, err := blockManager.ReadFromDisk(LSM_PATH, 0, 8)
+	if err != nil {
+		// File exists but can't read size header - corruption
+		lsm.DataLost = true
+		return lsm, nil
+	}
+
+	levelsSize := binary.LittleEndian.Uint64(levelsSizeBytes)
+
+	// Try to read the actual levels data
+	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8+CRC_SIZE, uint64(levelsSize))
+	if err != nil {
+		// File exists but can't read data - corruption
+		lsm.DataLost = true
+		return lsm, nil
+	}
+
+	// Try to deserialize the data
+	err = lsm.deserialize(data)
+	if err != nil {
+		// File exists but data format is invalid - corruption
+		lsm.DataLost = true
+		return lsm, nil
+	}
+
+	// Successfully loaded previous data
+	return lsm, nil
+}
+
+/*
+IsDataLost returns true if the previous LSM data was lost during loading.
+This can happen if the LSM file doesn't exist, is corrupted, or unreadable.
+*/
+func (lsm *LSM) IsDataLost() bool {
+	return lsm.DataLost
+}
