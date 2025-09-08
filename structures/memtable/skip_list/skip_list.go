@@ -4,6 +4,7 @@ import (
 	"errors"
 	model "hunddb/model/record"
 	memtable "hunddb/structures/memtable/memtable_interface"
+	"hunddb/structures/sstable"
 	"math/rand"
 	"time"
 )
@@ -190,8 +191,42 @@ func (s *SkipList) Capacity() int     { return s.capacity }
 func (s *SkipList) TotalEntries() int { return s.totalCount }
 func (s *SkipList) IsFull() bool      { return s.totalCount >= s.capacity }
 
-// Flush is a stub; implement sorted SSTable write by iterating bottom-level list.
+// RetrieveSortedRecords returns all records (including tombstones) in sorted key order.
+// This is useful for flushing the memtable to an SSTable or for debugging/testing.
+// The returned slice contains copies of the records to prevent external modification.
+func (s *SkipList) RetrieveSortedRecords() []model.Record {
+	var records []model.Record
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		if current.rec != nil {
+			// Create a copy of the record to prevent external modification
+			recordCopy := model.Record{
+				Key:       current.rec.Key,
+				Value:     make([]byte, len(current.rec.Value)),
+				Timestamp: current.rec.Timestamp,
+				Tombstone: current.rec.Tombstone,
+			}
+			copy(recordCopy.Value, current.rec.Value)
+			records = append(records, recordCopy)
+		}
+		current = current.nextNodes[0]
+	}
+
+	return records
+}
+
+// Flush persists the memtable contents to disk (SSTable).
 func (s *SkipList) Flush(index int) error {
-	// TODO: emit (key, rec) in sorted order by walking head.nextNodes[0]
+
+	sortedRecords := s.RetrieveSortedRecords()
+
+	err := sstable.PersistMemtable(sortedRecords, index)
+	if err != nil {
+		return errors.New("failed to flush SkipList memtable: " + err.Error())
+	}
+
 	return nil
 }

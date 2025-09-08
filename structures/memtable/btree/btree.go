@@ -364,7 +364,7 @@ func (bt *BTree) Capacity() int {
 	return bt.capacity
 }
 
-// Flush persists the memtable contents to disk (implementation-specific).
+// Flush persists the memtable contents to disk (SSTable).
 func (bt *BTree) Flush(index int) error {
 
 	sortedRecords := bt.RetrieveSortedRecords()
