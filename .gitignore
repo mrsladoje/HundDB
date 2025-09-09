@@ -32,5 +32,4 @@ structures/**/*.mod
 
 # wails build
 build/
-frontend/
 wailsjs/
