@@ -181,7 +181,7 @@ const MobileMenu = ({ isOpen, navItems, activeTab, onTabClick }) => {
 
   return (
     <div className="md:hidden absolute top-full left-0 w-full bg-sloth-yellow z-40">
-      <div className="p-4 !pt-3 space-y-3 relative overflow-hidden">
+      <div className="p-4 !pt-[0.55rem] space-y-3 relative overflow-hidden">
         <FaPaw className="absolute top-2.5 left-[50%] md:left-[22%] opacity-30 text-sloth-brown -rotate-12 text-4xl" />
         <FaPaw className="absolute top-1 right-[15%] opacity-20 text-sloth-brown rotate-30 text-2xl" />
         <FaPaw className="absolute bottom-1.5 -left-[3%] opacity-25 text-sloth-brown -rotate-12 text-3xl" />
@@ -200,14 +200,14 @@ const MobileMenu = ({ isOpen, navItems, activeTab, onTabClick }) => {
               to={item.to}
               onClick={() => onTabClick(item.id)}
               className={`
-                w-full p-4 text-left border-4 border-black font-black text-lg
+                block rounded-lg w-full p-4 text-left border-4 border-black font-black text-lg
                 transform transition-all duration-200
                 ${
                   isActive
-                    ? "bg-sloth-brown text-sloth-yellow shadow-[4px_4px_0px_0px_#000000] translate-x-1"
-                    : "bg-sloth-yellow-lite text-sloth-brown hover:bg-sloth-yellow shadow-[3px_3px_0px_0px_#000000] hover:shadow-[4px_4px_0px_0px_#000000] hover:translate-x-1 active:translate-y-1"
+                    ? "bg-sloth-brown text-sloth-yellow shadow-none translate-x-1"
+                    : "bg-sloth-yellow-lite text-sloth-brown hover:bg-sloth-yellow shadow-[3px_3px_0px_0px_#000000] hover:shadow-[4px_4px_0px_0px_#000000] active:translate-y-1"
                 }
-                active:translate-x-2 active:shadow-[2px_2px_0px_0px_#000000]
+                active:translate-x-1 active:shadow-none
               `}
               style={{
                 animationDelay: `${index * 100}ms`,
