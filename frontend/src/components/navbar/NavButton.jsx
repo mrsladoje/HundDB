@@ -25,7 +25,7 @@ export const NavButton = ({
       </div>
 
       {/* Top border accent */}
-      <div className="absolute -top-1.5 left-1/2 transform -translate-x-1/2 w-8 h-2 bg-sloth-brown border-l-2 border-r-2 border-t-2 border-black" />
+      <div className={`absolute -top-1.5 left-1/2 transform -translate-x-1/2 w-8 h-2 ${isActive ? "bg-[#a5deff]" : "bg-sloth-brown-dark"} border-l-2 border-r-2 border-t-2 border-black`} />
     </button>
   );
 };

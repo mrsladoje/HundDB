@@ -1,16 +1,20 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { FaShield, FaX } from "react-icons/fa6";
 import { FaHome, FaPaw } from "react-icons/fa";
 import { MdMenu } from "react-icons/md";
 import { FiSettings } from "react-icons/fi";
 import NavButton from "@/components/navbar/NavButton.jsx";
 import { Link, useNavigate } from "react-router-dom";
+import { useNavbar } from "@/context/NavbarContext.jsx";
+import { throttle } from "lodash";
 
 export const Navbar = () => {
   const navigate = useNavigate();
+  const { setNavbarHeight } = useNavbar();
 
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("home");
+  const navbarRef = useRef(null);
 
   useEffect(() => {
     const handleResize = () => {
@@ -24,7 +28,40 @@ export const Navbar = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, [isMenuOpen]);
 
-  navigate
+  const updateNavbarHeight = () => {
+    if (navbarRef.current) {
+      const height = navbarRef.current.offsetHeight;
+      setNavbarHeight(height);
+    }
+  };
+
+  useEffect(() => {
+    updateNavbarHeight();
+
+    const handleResize = () => {
+      updateNavbarHeight();
+    };
+    const throttledHandleResize = throttle(handleResize, 100);
+
+    const handleScroll = () => {
+      updateNavbarHeight();
+    };
+
+    const throttledHandleScroll = throttle(handleScroll, 100);
+
+    window.addEventListener("resize", throttledHandleResize);
+    window.addEventListener("scroll", throttledHandleScroll);
+
+    return () => {
+      window.removeEventListener("resize", throttledHandleResize);
+      window.removeEventListener("scroll", throttledHandleScroll);
+    };
+  }, [setNavbarHeight]);
+
+  useEffect(() => {
+    updateNavbarHeight();
+  }, [isMenuOpen]);
+
   const navItems = [
     {
       id: "home",
@@ -55,7 +92,10 @@ export const Navbar = () => {
   };
 
   return (
-    <nav className="bg-sloth-yellow border-b-2 border-sloth-brown shadow-[0_4px_0px_0px_#6b5e4a] absolute top-0 left-0 w-full z-50 select-none">
+    <nav 
+      ref={navbarRef}
+      className="bg-sloth-yellow border-b-2 border-sloth-brown shadow-[0_4px_0px_0px_#6b5e4a] sticky top-0 left-0 w-full z-50 select-none"
+    >
       <div className="max-w-[90rem] mx-auto px-4 sm:px-6 lg:px-8 relative overflow-hidden">
         <FaPaw className="absolute top-2.5 left-[50%] md:left-[22%] opacity-30 text-sloth-brown -rotate-12 text-4xl" />
         <FaPaw className="absolute top-1 right-[15%] opacity-20 text-sloth-brown rotate-30 text-2xl" />
