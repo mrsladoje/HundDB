@@ -3,3 +3,29 @@
   margin: 0 auto;
   text-align: center;
 }
+
+/* WebKit (Chrome, Safari) scrollbar styles */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: #fcefd7; /* sloth-yellow-lite */
+  border-radius: 0px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #6b5e4a; /* sloth-brown */
+  border-radius: 0px;
+  border: 2px solid #fcefd7; /* sloth-yellow-lite border */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #4b4436; /* sloth-brown-dark on hover */
+}
+
+/* Firefox and other browsers scrollbar styles */
+* {
+  scrollbar-color: #6b5e4a #fcefd7; /* thumb color, track color */
+  scroll-behavior: smooth;
+}

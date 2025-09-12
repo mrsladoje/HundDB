@@ -74,3 +74,19 @@ func (a *App) IsDataLost() bool {
 func (a *App) PersistLSM() error {
 	return a.lsm.PersistLSM()
 }
+
+func (a *App) Delete() string {
+	return "Not implemented yet"
+}
+func (a *App) PrefixScan() string {
+	return "Not implemented yet"
+}
+func (a *App) RangeScan() string {
+	return "Not implemented yet"
+}
+func (a *App) PrefixIterate() string {
+	return "Not implemented yet"
+}
+func (a *App) RangeIterate() string {
+	return "Not implemented yet"
+}

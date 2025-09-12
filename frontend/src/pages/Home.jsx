@@ -1,5 +1,15 @@
+import StyledOperationSelect from "@/components/select/StyledOperationSelect";
 import { NavbarContext } from "@/context/NavbarContext";
-import { Get, IsDataLost, Put } from "@wails/main/App.js";
+import {
+  Get,
+  Put,
+  Delete,
+  PrefixScan,
+  RangeScan,
+  PrefixIterate,
+  RangeIterate,
+  IsDataLost,
+} from "@wails/main/App.js";
 import React, { useContext, useEffect, useState } from "react";
 import {
   FaBone,
@@ -8,12 +18,14 @@ import {
   FaHeart,
   FaPlus,
   FaSearch,
+  FaTrash,
+  FaList,
+  FaArrowRight,
 } from "react-icons/fa";
 import { FiActivity } from "react-icons/fi";
 
-// Dog images - you'll need to add these to your pics folder
-const HappyDogPic = "../../pics/rokica.png"; // Replace with actual dog image
-const SleepyDogPic = "../../pics/rokica.png"; // Replace with actual dog image
+const HappyDogPic = "../../pics/rokica.png";
+const SleepyDogPic = "../../pics/rokica.png";
 const RokicaRunning = "../../pics/rokica_running.png";
 const Bone = "../../pics/bone.png";
 
@@ -34,10 +46,17 @@ const sleepyDogMessages = [
 ];
 
 export const Home = () => {
+  const [selectedOperation, setSelectedOperation] = useState("GET");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
+  const [prefix, setPrefix] = useState("");
+  const [minKey, setMinKey] = useState("");
+  const [maxKey, setMaxKey] = useState("");
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [validationError, setValidationError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [dataLost, setDataLost] = useState(false);
   const [dogMessage, setDogMessage] = useState("");
@@ -45,7 +64,14 @@ export const Home = () => {
   const [isDogHovered, setIsDogHovered] = useState(false);
   const [isSleepyDogHovered, setIsSleepyDogHovered] = useState(false);
   const [operations, setOperations] = useState([]);
-  const [stats, setStats] = useState({ gets: 0, puts: 0, errors: 0 });
+  const [stats, setStats] = useState({
+    gets: 0,
+    puts: 0,
+    deletes: 0,
+    scans: 0,
+    iterates: 0,
+    errors: 0,
+  });
   const containerRef = React.useRef(null);
   const { navbarHeight } = useContext(NavbarContext);
 
@@ -104,12 +130,43 @@ export const Home = () => {
     setOperations((prev) => [operation, ...prev.slice(0, 4)]);
   };
 
-  const handleGet = async () => {
-    if (!key.trim()) {
-      setError("Please enter a key to fetch");
-      return;
+  const validateOperation = () => {
+    switch (selectedOperation) {
+      case "GET":
+      case "DELETE":
+        if (!key.trim()) {
+          return selectedOperation === "GET" 
+            ? "Please enter a key to fetch!" 
+            : "Please enter a key to delete!";
+        }
+        break;
+      case "PUT":
+        if (!key.trim() || !value.trim()) {
+          return "Please enter both key and value!";
+        }
+        break;
+      case "PREFIX_SCAN":
+      case "PREFIX_ITERATE":
+        if (!prefix.trim()) {
+          return selectedOperation === "PREFIX_SCAN" 
+            ? "Please enter a prefix to scan!" 
+            : "Please enter a prefix to iterate!";
+        }
+        break;
+      case "RANGE_SCAN":
+      case "RANGE_ITERATE":
+        if (!minKey.trim() || !maxKey.trim()) {
+          return "Please enter both minimum and maximum keys!";
+        }
+        if (minKey.trim() > maxKey.trim()) {
+          return "Minimum key cannot be greater than maximum key!";
+        }
+        break;
     }
+    return null;
+  };
 
+  const handleGet = async () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
@@ -136,11 +193,6 @@ export const Home = () => {
   };
 
   const handlePut = async () => {
-    if (!key.trim() || !value.trim()) {
-      setError("Please enter both key and value");
-      return;
-    }
-
     setError(null);
     setResult(null);
     setIsLoading(true);
@@ -164,6 +216,324 @@ export const Home = () => {
     }
   };
 
+  const handleDelete = async () => {
+    setError(null);
+    setResult(null);
+    setIsLoading(true);
+
+    try {
+      await Delete(key);
+      setResult(`Successfully deleted record with key: ${key}`);
+      addOperation("DELETE", key, true, "Record deleted");
+      setStats((prev) => ({ ...prev, deletes: prev.deletes + 1 }));
+      setKey("");
+    } catch (err) {
+      const errorMsg = `Error deleting record: ${err}`;
+      setError(errorMsg);
+      addOperation("DELETE", key, false, err.toString());
+      setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePrefixScan = async () => {
+    setError(null);
+    setResult(null);
+    setIsLoading(true);
+
+    try {
+      const records = await PrefixScan(prefix, pageNumber, pageSize);
+      const resultText = `Prefix scan results (page ${pageNumber}):\n${JSON.stringify(
+        records,
+        null,
+        2
+      )}`;
+      setResult(resultText);
+      addOperation(
+        "PREFIX_SCAN",
+        prefix,
+        true,
+        `Found ${records.length} records`
+      );
+      setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
+    } catch (err) {
+      const errorMsg = `Error in prefix scan: ${err}`;
+      setError(errorMsg);
+      addOperation("PREFIX_SCAN", prefix, false, err.toString());
+      setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRangeScan = async () => {
+    setError(null);
+    setResult(null);
+    setIsLoading(true);
+
+    try {
+      const records = await RangeScan(minKey, maxKey, pageNumber, pageSize);
+      const resultText = `Range scan results (page ${pageNumber}):\n${JSON.stringify(
+        records,
+        null,
+        2
+      )}`;
+      setResult(resultText);
+      addOperation(
+        "RANGE_SCAN",
+        `${minKey}-${maxKey}`,
+        true,
+        `Found ${records.length} records`
+      );
+      setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
+    } catch (err) {
+      const errorMsg = `Error in range scan: ${err}`;
+      setError(errorMsg);
+      addOperation("RANGE_SCAN", `${minKey}-${maxKey}`, false, err.toString());
+      setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePrefixIterate = async () => {
+    setError(null);
+    setResult(null);
+    setIsLoading(true);
+
+    try {
+      const iterator = await PrefixIterate(prefix);
+      setResult(
+        `Created prefix iterator for: ${prefix}\nUse next() and stop() methods to control iteration.`
+      );
+      addOperation("PREFIX_ITERATE", prefix, true, "Iterator created");
+      setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
+    } catch (err) {
+      const errorMsg = `Error creating prefix iterator: ${err}`;
+      setError(errorMsg);
+      addOperation("PREFIX_ITERATE", prefix, false, err.toString());
+      setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleRangeIterate = async () => {
+    setError(null);
+    setResult(null);
+    setIsLoading(true);
+
+    try {
+      const iterator = await RangeIterate(minKey, maxKey);
+      setResult(
+        `Created range iterator for: ${minKey} to ${maxKey}\nUse next() and stop() methods to control iteration.`
+      );
+      addOperation(
+        "RANGE_ITERATE",
+        `${minKey}-${maxKey}`,
+        true,
+        "Iterator created"
+      );
+      setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
+    } catch (err) {
+      const errorMsg = `Error creating range iterator: ${err}`;
+      setError(errorMsg);
+      addOperation(
+        "RANGE_ITERATE",
+        `${minKey}-${maxKey}`,
+        false,
+        err.toString()
+      );
+      setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleExecute = () => {
+    // Clear any previous validation errors
+    setValidationError(null);
+    
+    // Validate the operation
+    const validation = validateOperation();
+    if (validation) {
+      setValidationError(validation);
+      return;
+    }
+
+    switch (selectedOperation) {
+      case "GET":
+        handleGet();
+        break;
+      case "PUT":
+        handlePut();
+        break;
+      case "DELETE":
+        handleDelete();
+        break;
+      case "PREFIX_SCAN":
+        handlePrefixScan();
+        break;
+      case "RANGE_SCAN":
+        handleRangeScan();
+        break;
+      case "PREFIX_ITERATE":
+        handlePrefixIterate();
+        break;
+      case "RANGE_ITERATE":
+        handleRangeIterate();
+        break;
+    }
+  };
+
+  const getOperationIcon = () => {
+    switch (selectedOperation) {
+      case "GET":
+        return <FaSearch />;
+      case "PUT":
+        return <FaPlus />;
+      case "DELETE":
+        return <FaTrash />;
+      case "PREFIX_SCAN":
+      case "RANGE_SCAN":
+        return <FaList />;
+      case "PREFIX_ITERATE":
+      case "RANGE_ITERATE":
+        return <FaArrowRight />;
+      default:
+        return <FaDatabase />;
+    }
+  };
+
+  const getOperationText = () => {
+    switch (selectedOperation) {
+      case "GET":
+        return isLoading ? "Sniffing..." : "Fetch Record";
+      case "PUT":
+        return isLoading ? "Burying..." : "Bury Record";
+      case "DELETE":
+        return isLoading ? "Digging up..." : "Delete Record";
+      case "PREFIX_SCAN":
+        return isLoading ? "Scanning..." : "Prefix Scan";
+      case "RANGE_SCAN":
+        return isLoading ? "Scanning..." : "Range Scan";
+      case "PREFIX_ITERATE":
+        return isLoading ? "Creating..." : "Create Iterator";
+      case "RANGE_ITERATE":
+        return isLoading ? "Creating..." : "Create Iterator";
+      default:
+        return "Execute";
+    }
+  };
+
+  const renderInputFields = () => {
+    switch (selectedOperation) {
+      case "GET":
+      case "DELETE":
+        return (
+          <div>
+            <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+              🔑 Key{" "}
+              {selectedOperation === "GET"
+                ? "(What are we looking for?)"
+                : "(What are we trying to delete?)"}
+            </label>
+            <input
+              type="text"
+              placeholder="Enter your ...woof.. key!"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+              disabled={isLoading}
+            />
+          </div>
+        );
+      case "PUT":
+        return (
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                🔑 Key (The map to the treasure...)
+              </label>
+              <input
+                type="text"
+                placeholder="Enter your ...woof.. key!"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                disabled={isLoading}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                📝 Value (The treasure to bury!)
+              </label>
+              <textarea
+                placeholder="Enter the value... woof!"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                rows={4}
+                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200 resize-vertical"
+                disabled={isLoading}
+              />
+            </div>
+          </div>
+        );
+      case "PREFIX_SCAN":
+      case "PREFIX_ITERATE":
+        return (
+          <div>
+            <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+              🎯 Prefix (Starting pattern)
+            </label>
+            <input
+              type="text"
+              placeholder="Enter prefix... woof!"
+              value={prefix}
+              onChange={(e) => setPrefix(e.target.value)}
+              className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+              disabled={isLoading}
+            />
+          </div>
+        );
+      case "RANGE_SCAN":
+      case "RANGE_ITERATE":
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                🏁 Min Key (Range start)
+              </label>
+              <input
+                type="text"
+                placeholder="From key..."
+                value={minKey}
+                onChange={(e) => setMinKey(e.target.value)}
+                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                disabled={isLoading}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                🏆 Max Key (Range end)
+              </label>
+              <input
+                type="text"
+                placeholder="To key..."
+                value={maxKey}
+                onChange={(e) => setMaxKey(e.target.value)}
+                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                disabled={isLoading}
+              />
+            </div>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div
       ref={containerRef}
@@ -181,7 +551,6 @@ export const Home = () => {
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header */}
         <div className="flex justify-center items-start space-x-5 md:space-x-8 relative">
-          
           <div className="flex-shrink-0">
             <img
               src={Bone}
@@ -230,59 +599,50 @@ export const Home = () => {
                 </h2>
               </div>
 
-              <div className="grid md:grid-cols-2 gap-4 mb-6">
-                <div>
-                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                    🔑 Key (What are we looking for?)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Enter your key... good dog!"
-                    value={key}
-                    onChange={(e) => setKey(e.target.value)}
-                    className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[4px_4px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[-1px] focus:translate-y-[-1px] transition-all duration-200"
-                    disabled={isLoading}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                    📝 Value (The treasure to bury!)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Enter your value... such a good value!"
-                    value={value}
-                    onChange={(e) => setValue(e.target.value)}
-                    className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[4px_4px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[-1px] focus:translate-y-[-1px] transition-all duration-200"
-                    disabled={isLoading}
-                  />
-                </div>
+              {/* Operation Selection */}
+              <div className="mb-6">
+                <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                  🐕 Operation Type (What's the mission?)
+                </label>
+                <StyledOperationSelect
+                  value={selectedOperation}
+                  onChange={(o) => {
+                    setValidationError(null);
+                    setSelectedOperation(o);
+                  }}
+                  isDisabled={isLoading}
+                />
               </div>
 
-              <div className="flex flex-wrap justify-end gap-4">
-                <button
-                  onClick={handleGet}
-                  disabled={isLoading}
-                  className="flex items-center gap-2 px-6 py-3 bg-sloth-brown text-sloth-yellow font-bold rounded-lg border-4 border-sloth-brown-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <FaSearch />
-                  {isLoading ? "Sniffing..." : "Fetch Record"}
-                </button>
+              {/* Dynamic Input Fields */}
+              <div className="mb-6">{renderInputFields()}</div>
 
+              <div className="flex flex-wrap justify-between items-center gap-4">
+                {/* Validation Error */}
+                {validationError && (
+                  <div className="flex items-center gap-2 text-red-600 bg-red-50 px-4 py-2 rounded-lg border-2 border-red-300">
+                    <FaDog className="text-lg flex-shrink-0" />
+                    <span className="font-medium">{validationError}</span>
+                  </div>
+                )}
+
+                {/* Spacer when no validation error */}
+                {!validationError && <div></div>}
+
+                {/* Execute Button */}
                 <button
-                  onClick={handlePut}
+                  onClick={handleExecute}
                   disabled={isLoading}
                   className="flex items-center gap-2 px-6 py-3 bg-sloth-brown text-sloth-yellow font-bold rounded-lg border-4 border-sloth-brown-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <FaPlus />
-                  {isLoading ? "Burying..." : "Bury Record"}
+                  {getOperationIcon()}
+                  {getOperationText()}
                 </button>
               </div>
             </div>
 
-            {/* Results Section */}
-            {(result || error) && (
+            {/* Results Section - Only show for execution errors, not validation errors */}
+            {(result || error) && !validationError && (
               <div
                 className={`rounded-xl p-6 border-4 font-mono text-sm relative overflow-hidden ${
                   error
@@ -343,6 +703,18 @@ export const Home = () => {
                   <span className="font-bold">{stats.puts}</span>
                 </div>
                 <div className="flex justify-between">
+                  <span>🗑️ Records Deleted:</span>
+                  <span className="font-bold">{stats.deletes}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>📋 Scans Performed:</span>
+                  <span className="font-bold">{stats.scans}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>🔄 Iterators Created:</span>
+                  <span className="font-bold">{stats.iterates}</span>
+                </div>
+                <div className="flex justify-between">
                   <span>❌ Errors:</span>
                   <span className="font-bold">{stats.errors}</span>
                 </div>
@@ -372,9 +744,11 @@ export const Home = () => {
                       }`}
                     >
                       <div className="flex justify-between items-start text-sm">
-                        <div>
+                        <div className="flex items-start">
                           <span className="font-bold">{op.type}</span>
-                          <span className="text-gray-600 ml-2">{op.key}</span>
+                          <span className="text-gray-600 ml-2 inline-block w-32 truncate text-left">
+                            {op.key}
+                          </span>
                         </div>
                         <span className="text-xs text-gray-500">
                           {op.timestamp}
@@ -406,10 +780,12 @@ export const Home = () => {
               <p className="text-sloth-brown leading-relaxed">
                 <strong>Training your database:</strong> Use GET to retrieve
                 records (like fetching a stick!), PUT to store new data (like
-                burying a bone). The backend handles all the heavy lifting
-                automatically - no need to worry about <em>ruff</em> details!
-                Remember, every good database needs regular maintenance, just
-                like every good dog needs daily walks! 🦴
+                burying a bone), DELETE to remove records, SCAN operations for
+                bulk retrievals with pagination, and ITERATE for creating
+                cursors over data ranges. The backend handles all the heavy
+                lifting automatically - no need to worry about <em>ruff</em>{" "}
+                details! Remember, every good database needs regular
+                maintenance, just like every good dog needs daily walks! 🦴
               </p>
             </div>
           </div>
