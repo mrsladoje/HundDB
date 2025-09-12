@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"log"
 
@@ -13,44 +12,31 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// App struct
-type App struct {
-	ctx context.Context
-}
-
-// NewApp creates a new App application struct
-func NewApp() *App {
-	return &App{}
-}
-
-// startup is called when the app starts up
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-}
-
-// Example method - you can add your own methods here
-func (a *App) Greet(name string) string {
-	return "Hello " + name + ", It's show time!"
-}
-
 func main() {
-	// Create an instance of the app structure
+	// Create the application (this will handle LSM loading internally)
 	app := NewApp()
 
-	// Create application with options
+	// Log data loss status
+	if app.IsDataLost() {
+		log.Println("Warning: Previous LSM data was lost or corrupted. Starting with fresh instance.")
+	} else {
+		log.Println("LSM loaded successfully.")
+	}
+
+	// Run the Wails application
 	err := wails.Run(&options.App{
 		Title:  "HundDB",
-		Width:  1024,
-		Height: 768,
+		Width:  800,
+		Height: 600,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
 		BackgroundColour: &options.RGBA{R: 27, G: 38, B: 54, A: 1},
 		OnStartup:        app.startup,
-		Bind:             []interface{}{app}, // Bind your app methods to frontend
+		Bind:             []interface{}{app},
 	})
 
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to start application:", err)
 	}
 }

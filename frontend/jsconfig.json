@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "baseUrl": "src",
+    "baseUrl": ".",
     "target": "es6",
     "lib": ["dom", "dom.iterable", "es6"],
     "allowJs": true,
@@ -15,7 +15,8 @@
     "noEmit": true,
     "jsx": "react",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["src/*"],
+      "@wails/*": ["wailsjs/wailsjs/go/*"]
     }
   },
   "include": ["src"],

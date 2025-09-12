@@ -141,7 +141,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 LoadLSM loads the LSM from disk, or creates a new one if it doesn't exist.
 Always returns an LSM instance. If previous data couldn't be loaded, the DataLost flag will be set to true.
 */
-func LoadLSM() (*LSM, error) {
+func LoadLSM() *LSM {
 	// Create a new LSM instance with default values
 	lsm := &LSM{
 		levels:    make([][]int, MAX_LEVELS),
@@ -157,7 +157,9 @@ func LoadLSM() (*LSM, error) {
 	_, err := os.Stat(LSM_PATH)
 	if os.IsNotExist(err) {
 		// File doesn't exist - this is a fresh start (not data loss)
-		return lsm, nil
+		firstMemtable, _ := memtable.NewMemtable()
+		lsm.memtables = append(lsm.memtables, firstMemtable)
+		return lsm
 	}
 
 	// File exists, so any errors from here on are considered data corruption
@@ -167,7 +169,7 @@ func LoadLSM() (*LSM, error) {
 	if err != nil {
 		// File exists but can't read size header - corruption
 		lsm.DataLost = true
-		return lsm, nil
+		return lsm
 	}
 
 	levelsSize := binary.LittleEndian.Uint64(levelsSizeBytes)
@@ -177,7 +179,7 @@ func LoadLSM() (*LSM, error) {
 	if err != nil {
 		// File exists but can't read data - corruption
 		lsm.DataLost = true
-		return lsm, nil
+		return lsm
 	}
 
 	// Try to deserialize the data
@@ -185,11 +187,11 @@ func LoadLSM() (*LSM, error) {
 	if err != nil {
 		// File exists but data format is invalid - corruption
 		lsm.DataLost = true
-		return lsm, nil
+		return lsm
 	}
 
 	// Successfully loaded previous data
-	return lsm, nil
+	return lsm
 }
 
 /*

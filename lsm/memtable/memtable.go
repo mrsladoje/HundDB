@@ -1,3 +1,4 @@
+// memtable/memtable.go
 package memtable
 
 import (
@@ -24,94 +25,80 @@ const (
 	MEMTABLE_TYPE = BTree
 )
 
+// MemTable is a concrete struct that wraps the implementation
 type MemTable struct {
-	mi.MemtableInterface
+	impl mi.MemtableInterface
+	mu   sync.RWMutex
 }
 
-func NewMemtable() (mi.MemtableInterface, error) {
-	var base mi.MemtableInterface
+// NewMemtable returns a concrete *MemTable, not an interface
+func NewMemtable() (*MemTable, error) {
+	var impl mi.MemtableInterface
 
 	switch MEMTABLE_TYPE {
 	case BTree:
-		base = btree.NewBTree(btree.DefaultOrder, CAPACITY)
+		impl = btree.NewBTree(btree.DefaultOrder, CAPACITY)
 	case SkipList:
-		base = skip_list.New(16, CAPACITY)
+		impl = skip_list.New(16, CAPACITY)
 	case HashMap:
-		base = hashmap.NewHashMap(CAPACITY)
+		impl = hashmap.NewHashMap(CAPACITY)
 	default:
 		return nil, fmt.Errorf("unknown memtable type: %s", MEMTABLE_TYPE)
 	}
 
-	return NewThreadSafeMemtable(base), nil
+	return &MemTable{
+		impl: impl,
+	}, nil
 }
 
-/*
-Thread-safe wrapper for MemtableInterface.
-Decorator pattern.
-*/
-type ThreadSafeMemtable struct {
-	memtable mi.MemtableInterface
-	mu       sync.RWMutex
+// All methods implement the interface with thread safety
+func (mt *MemTable) Put(record *model.Record) error {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	return mt.impl.Put(record)
 }
 
-func NewThreadSafeMemtable(memtable mi.MemtableInterface) *ThreadSafeMemtable {
-	return &ThreadSafeMemtable{
-		memtable: memtable,
-	}
+func (mt *MemTable) Delete(record *model.Record) bool {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	return mt.impl.Delete(record)
 }
 
-// Put implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Put(record *model.Record) error {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	return ts.memtable.Put(record)
+func (mt *MemTable) Get(key string) *model.Record {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.Get(key)
 }
 
-// Delete implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Delete(record *model.Record) bool {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	return ts.memtable.Delete(record)
+func (mt *MemTable) Size() int {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.Size()
 }
 
-// Get implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Get(key string) *model.Record {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.memtable.Get(key)
+func (mt *MemTable) Capacity() int {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.Capacity()
 }
 
-// Size implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Size() int {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.memtable.Size()
+func (mt *MemTable) TotalEntries() int {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.TotalEntries()
 }
 
-// Capacity implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Capacity() int {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.memtable.Capacity()
+func (mt *MemTable) IsFull() bool {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.IsFull()
 }
 
-// TotalEntries implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) TotalEntries() int {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.memtable.TotalEntries()
+func (mt *MemTable) Flush(index int) error {
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	return mt.impl.Flush(index)
 }
 
-// IsFull implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) IsFull() bool {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.memtable.IsFull()
-}
-
-// Flush implements MemtableInterface with thread safety
-func (ts *ThreadSafeMemtable) Flush(index int) error {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	return ts.memtable.Flush(index)
-}
+// Verify at compile time that MemTable implements MemtableInterface
+var _ mi.MemtableInterface = (*MemTable)(nil)
