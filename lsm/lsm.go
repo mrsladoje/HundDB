@@ -203,26 +203,35 @@ func (lsm *LSM) IsDataLost() bool {
 }
 
 // Get retrieves a record from the LSM by checking the memtables, cache, and SSTables in order.
-func (lsm *LSM) Get(key string) *model.Record {
+func (lsm *LSM) Get(key string) (*model.Record, bool) {
+
+	errorEncountered := false
 
 	// 1. Check memtables first
 	if record := lsm.checkMemtables(key); record != nil {
-		return record
+		return record, false
 	}
 
 	// 2. Check cache
 	record, err := lsm.cache.Get(key)
+	if err != nil {
+		errorEncountered = true
+	}
 	if err == nil {
-		return record
+		return record, false
 	}
 
 	// 3. Check SSTables
-	if record := lsm.checkSSTables(key); record != nil {
+	record, errorEncounteredInCheck := lsm.checkSSTables(key)
+	if errorEncounteredInCheck {
+		errorEncountered = true
+	}
+	if record != nil {
 		lsm.cache.Put(key, record)
-		return record
+		return record, false
 	}
 
-	return nil
+	return nil, errorEncountered
 }
 
 /*
@@ -241,18 +250,22 @@ func (lsm *LSM) checkMemtables(key string) *model.Record {
 /*
 checkSSTables checks the SSTables in reverse order (newest to oldest) for the given key.
 */
-func (lsm *LSM) checkSSTables(key string) *model.Record {
+func (lsm *LSM) checkSSTables(key string) (*model.Record, bool) {
+	errorEncountered := false
 	for i := 0; i < len(lsm.levels); i++ {
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
 			tableIndex := levelIndexes[index]
 			record, err := sstable.Get(key, tableIndex)
+			if err != nil {
+				errorEncountered = true
+			}
 			if err == nil && record != nil {
-				return record
+				return record, errorEncountered
 			}
 		}
 	}
-	return nil
+	return nil, errorEncountered
 }
 
 func (lsm *LSM) Put(key string, value []byte) error {

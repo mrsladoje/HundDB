@@ -51,9 +51,14 @@ func (a *App) recordToMap(record *model.Record) map[string]interface{} {
 
 // Get retrieves a record by key from the LSM
 func (a *App) Get(key string) (map[string]interface{}, error) {
-	record := a.lsm.Get(key)
+	record, errorEncountered := a.lsm.Get(key)
+	var err error
+	err = nil
+	if errorEncountered {
+		err = fmt.Errorf("error retrieving record")
+	}
 	if record == nil {
-		return nil, fmt.Errorf("key not found")
+		return nil, err
 	}
 
 	return a.recordToMap(record), nil

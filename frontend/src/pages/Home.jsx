@@ -58,6 +58,75 @@ const sleepyDogMessages = [
   "<b>*Yawns extensively...*</b> Sometimes I think Rodney needs to learn to <em>chill-huahua</em>... Life's not all about being the <em>top dog</em> in productivity, you know...",
 ];
 
+const dogErrorMessages = {
+  GET: [
+    "🐕 Woof! I sniffed everywhere but couldn't find that key. Maybe it's buried in someone else's yard?",
+    "🔍 I'm a good dog, but even my nose couldn't track down that record!",
+    "🦴 That key must be hidden better than my favorite bone!",
+    "🐾 I searched high and low, but that data is playing hide-and-seek!",
+    "🎾 Tried to fetch that record but it bounced right out of my paws!",
+  ],
+  PUT: [
+    "🐕 Ruff! Couldn't bury that record properly. Maybe the database yard is full?",
+    "💾 Something went wrong while trying to stash your treasure!",
+    "🦴 Failed to hide that bone... I mean data... in the database!",
+    "🐾 My paws slipped while trying to save that record!",
+    "🎾 The data bounced right back instead of staying put!",
+  ],
+  DELETE: [
+    "🗑️ Couldn't dig up that record to delete it. Maybe it's already gone?",
+    "🐕 Woof! That key is being stubborn and won't come out of its hiding spot!",
+    "🦴 Tried to unbury that record to delete it but my paws came up empty!",
+    "🎾 That data is playing hard to get and won't be deleted!",
+    "🐾 Scratched around but couldn't remove that pesky record!",
+  ],
+  SCAN: [
+    "📋 My scanning nose got confused halfway through the search!",
+    "🔍 The database trail went cold during the scan!",
+    "🐕 Woof! Got distracted by a squirrel mid-scan... I mean, encountered an error!",
+    "🦴 The scan bone broke before I could finish digging!",
+    "🎾 Tried to scan but the data kept bouncing around!",
+  ],
+  ITERATE: [
+    "🔄 My iterator got its leash tangled up!",
+    "🐾 Tried to create an iterator but my paws got tied up!",
+    "🎾 The iterator bounced away before I could catch it!",
+    "🦴 Something chewed through my iterator connection!",
+    "🐕 Woof! Iterator creation went to the dogs... literally!",
+  ],
+};
+
+const dogNotFoundMessages = {
+  GET: [
+    "🐕 After a thorough sniff investigation, I can confirm: that key definitely doesn't exist!",
+    "🔍 I've checked every corner of the database yard - that record is absolutely not there!",
+    "🦴 My nose is never wrong! That key is as missing as my buried bones from last winter!",
+    "🐾 I followed every data trail and I'm paw-sitive that record doesn't exist!",
+    "🎾 Searched high, low, and everywhere in between - that key is nowhere to be hound!",
+  ],
+  DELETE: [
+    "🗑️ Well, that's easy! Can't delete what was never there to begin with! Mission accomplished?",
+    "🐕 Woof! Tried to dig up that record but the hole was already empty!",
+    "🦴 That key was as gone as last week's buried bone - nothing to delete!",
+    "🎾 Can't fetch what was never thrown! That record didn't exist anyway!",
+    "🐾 Good news: that unwanted data was already not cluttering up the database!",
+  ],
+  SCAN: [
+    "📋 Scanned the entire database neighborhood - no records match that pattern!",
+    "🔍 My super-sniffer confirms: zero records found with that criteria!",
+    "🐕 Woof! Searched every database tree, but no matching records were hiding there!",
+    "🦴 Not even a single bone... I mean record... matches what you're looking for!",
+    "🎾 The scan came back squeaky clean - no matching data anywhere!",
+  ],
+  ITERATE: [
+    "🔄 Iterator created successfully, but it's got nothing to iterate over! Empty results!",
+    "🐾 Ready to walk through the data, but the path is completely empty!",
+    "🎾 Iterator is all set up, but there are no records to chase around!",
+    "🦴 Created your iterator, but there are no bones... er, records... to find!",
+    "🐕 Woof! Iterator is ready to go, but the search area is completely vacant!",
+  ],
+};
+
 export const Home = () => {
   const [selectedOperation, setSelectedOperation] = useState("GET");
   const [key, setKey] = useState("");
@@ -68,6 +137,7 @@ export const Home = () => {
   const [pageNumber, setPageNumber] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [result, setResult] = useState(null);
+  const [notFoundMessage, setNotFoundMessage] = useState(null);
   const [error, setError] = useState(null);
   const [validationError, setValidationError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -131,13 +201,14 @@ export const Home = () => {
     }
   };
 
-  const addOperation = (type, key, success, message) => {
+  const addOperation = (type, key, success, message, notFoundMessage = null) => {
     const operation = {
       id: Date.now(),
       type,
       key,
       success,
       message,
+      notFoundMessage,
       timestamp: new Date().toLocaleTimeString(),
     };
     setOperations((prev) => [operation, ...prev.slice(0, 4)]);
@@ -182,6 +253,7 @@ export const Home = () => {
   const handleGet = async () => {
     setError(null);
     setResult(null);
+    setNotFoundMessage(null);
     setIsLoading(true);
 
     try {
@@ -192,13 +264,14 @@ export const Home = () => {
         addOperation("GET", key, true, "Record found");
         setStats((prev) => ({ ...prev, gets: prev.gets + 1 }));
       } else {
-        setResult("Record not found - maybe it's buried in another database!");
-        addOperation("GET", key, false, "Record not found");
+        const notFoundMessage = getRandomDogNotFound('GET');
+        setNotFoundMessage(notFoundMessage);
+        addOperation("GET", key, false, null, notFoundMessage);
       }
     } catch (err) {
-      const errorMsg = `Error getting key: ${err}`;
-      setError(errorMsg);
-      addOperation("GET", key, false, err.toString());
+      const dogError = getRandomDogError("GET");
+      setError(dogError);
+      addOperation("GET", key, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -209,6 +282,7 @@ export const Home = () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
+    setNotFoundMessage(null);
 
     try {
       await Put(key, value);
@@ -220,9 +294,9 @@ export const Home = () => {
       setKey("");
       setValue("");
     } catch (err) {
-      const errorMsg = `Error storing record: ${err}`;
-      setError(errorMsg);
-      addOperation("PUT", key, false, err.toString());
+      const dogError = getRandomDogError("PUT");
+      setError(dogError);
+      addOperation("PUT", key, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -233,6 +307,7 @@ export const Home = () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
+    setNotFoundMessage(null);
 
     try {
       await Delete(key);
@@ -241,9 +316,9 @@ export const Home = () => {
       setStats((prev) => ({ ...prev, deletes: prev.deletes + 1 }));
       setKey("");
     } catch (err) {
-      const errorMsg = `Error deleting record: ${err}`;
-      setError(errorMsg);
-      addOperation("DELETE", key, false, err.toString());
+      const dogError = getRandomDogError("DELETE");
+      setError(dogError);
+      addOperation("DELETE", key, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -254,6 +329,7 @@ export const Home = () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
+    setNotFoundMessage(null);
 
     try {
       const records = await PrefixScan(prefix, pageNumber, pageSize);
@@ -271,9 +347,9 @@ export const Home = () => {
       );
       setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
     } catch (err) {
-      const errorMsg = `Error in prefix scan: ${err}`;
-      setError(errorMsg);
-      addOperation("PREFIX_SCAN", prefix, false, err.toString());
+      const dogError = getRandomDogError("SCAN");
+      setError(dogError);
+      addOperation("SCAN", prefix, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -284,6 +360,7 @@ export const Home = () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
+    setNotFoundMessage(null);
 
     try {
       const records = await RangeScan(minKey, maxKey, pageNumber, pageSize);
@@ -301,9 +378,9 @@ export const Home = () => {
       );
       setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
     } catch (err) {
-      const errorMsg = `Error in range scan: ${err}`;
-      setError(errorMsg);
-      addOperation("RANGE_SCAN", `${minKey}-${maxKey}`, false, err.toString());
+      const dogError = getRandomDogError("SCAN");
+      setError(dogError);
+      addOperation("SCAN", `${minKey}-${maxKey}`, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -314,6 +391,7 @@ export const Home = () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
+    setNotFoundMessage(null);
 
     try {
       const iterator = await PrefixIterate(prefix);
@@ -323,9 +401,9 @@ export const Home = () => {
       addOperation("PREFIX_ITERATE", prefix, true, "Iterator created");
       setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
     } catch (err) {
-      const errorMsg = `Error creating prefix iterator: ${err}`;
-      setError(errorMsg);
-      addOperation("PREFIX_ITERATE", prefix, false, err.toString());
+      const dogError = getRandomDogError("ITERATE");
+      setError(dogError);
+      addOperation("ITERATE", prefix, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -350,14 +428,9 @@ export const Home = () => {
       );
       setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
     } catch (err) {
-      const errorMsg = `Error creating range iterator: ${err}`;
-      setError(errorMsg);
-      addOperation(
-        "RANGE_ITERATE",
-        `${minKey}-${maxKey}`,
-        false,
-        err.toString()
-      );
+      const dogError = getRandomDogError("ITERATE");
+      setError(dogError);
+      addOperation("ITERATE", `${minKey}-${maxKey}`, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -438,6 +511,16 @@ export const Home = () => {
       default:
         return "Execute";
     }
+  };
+
+  const getRandomDogError = (operation) => {
+    const messages = dogErrorMessages[operation] || dogErrorMessages.GET;
+    return messages[Math.floor(Math.random() * messages.length)];
+  };
+
+  const getRandomDogNotFound = (operation) => {
+    const messages = dogNotFoundMessages[operation] || dogNotFoundMessages.GET;
+    return messages[Math.floor(Math.random() * messages.length)];
   };
 
   const renderInputFields = () => {
@@ -655,42 +738,46 @@ export const Home = () => {
             </div>
 
             {/* Results Section - Only show for execution errors, not validation errors */}
-            {(result || error) && !validationError && (
+            {(result || error || notFoundMessage) && !validationError && (
               <div
                 className={`rounded-xl p-6 border-4 font-mono text-sm relative overflow-hidden ${
                   error
-                    ? "bg-red-50 border-red-500 shadow-[6px_6px_0px_0px_rgba(239,68,68,1)]"
-                    : "bg-green-50 border-green-500 shadow-[6px_6px_0px_0px_rgba(34,197,94,1)]"
+                    ? "bg-red-50 border-red-700 shadow-[6px_6px_0px_0px_#f87171]"
+                  : notFoundMessage
+                    ? "bg-yellow-50 border-yellow-600 shadow-[6px_6px_0px_0px_#fde047]"
+                    : "bg-green-50 border-green-600 shadow-[6px_6px_0px_0px_#4ade80]"
                 }`}
               >
                 <div className="flex items-center gap-2 mb-4">
                   <FaDog
                     className={`text-xl ${
-                      error ? "text-red-600" : "text-green-600"
+                      error ? "text-red-600" : notFoundMessage ? "text-yellow-600" : "text-green-600"
                     }`}
                   />
                   <h3
                     className={`font-bold text-lg ${
-                      error ? "text-red-800" : "text-green-800"
+                      error ? "text-red-800" : notFoundMessage ? "text-yellow-800" : "text-green-800"
                     }`}
                   >
                     {error
                       ? "Woof! Something went wrong!"
-                      : "Good dog! Operation successful!"}
+                      : notFoundMessage
+                      ? "Woof! Record not found!"
+                      : "Woof-hoo! Operation successful!"}
                   </h3>
                 </div>
                 <pre
                   className={`whitespace-pre-wrap ${
-                    error ? "text-red-700" : "text-green-700"
+                    error ? "text-red-700" : notFoundMessage ? "text-yellow-700" : "text-green-700"
                   }`}
                 >
-                  {error || result}
+                  {error || result || notFoundMessage}
                 </pre>
 
                 {/* Result decoration */}
                 <FaBone
                   className={`absolute top-2 right-2 text-2xl opacity-20 ${
-                    error ? "text-red-400" : "text-green-400"
+                    error ? "text-red-400" : notFoundMessage ? "text-yellow-400" : "text-green-400"
                   }`}
                 />
               </div>
@@ -753,6 +840,8 @@ export const Home = () => {
                       className={`p-3 rounded-lg border-2 ${
                         op.success
                           ? "bg-green-50 border-green-300"
+                          : notFoundMessage
+                          ? "bg-yellow-50 border-yellow-300"
                           : "bg-red-50 border-red-300"
                       }`}
                     >
@@ -769,10 +858,10 @@ export const Home = () => {
                       </div>
                       <div
                         className={`text-xs mt-1 ${
-                          op.success ? "text-green-600" : "text-red-600"
+                          op.success ? "text-green-600" : notFoundMessage ? "text-yellow-600" : "text-red-600"
                         }`}
                       >
-                        {op.message}
+                        {op.message || op.notFoundMessage}
                       </div>
                     </div>
                   ))
