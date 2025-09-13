@@ -104,7 +104,7 @@ const customSelectStyles = {
 // The options array for your operations
 const operationOptions = [
   { value: 'GET', label: 'GET - Fetch Record' },
-  { value: 'PUT', label: 'PUT - Bury Record' },
+  { value: 'PUT', label: 'PUT - Save Record' },
   { value: 'DELETE', label: 'DELETE - Remove Record' },
   { value: 'PREFIX_SCAN', label: 'PREFIX SCAN - Find by Prefix' },
   { value: 'RANGE_SCAN', label: 'RANGE SCAN - Find by Range' },

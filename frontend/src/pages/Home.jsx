@@ -23,26 +23,39 @@ import {
   FaArrowRight,
 } from "react-icons/fa";
 import { FiActivity } from "react-icons/fi";
+import { Tooltip } from "react-tooltip";
 
-const HappyDogPic = "../../pics/rokica.png";
-const SleepyDogPic = "../../pics/rokica.png";
+const RokicaLeft = "../../pics/rokica_left.png";
+const HyperRokica = "../../pics/rokica_hyper.png";
+const SleepyCousin = "../../pics/rokica_sleepy.png";
+const SleepingCousin = "../../pics/rokica_sleeping.png";
 const RokicaRunning = "../../pics/rokica_running.png";
 const Bone = "../../pics/bone.png";
 
 const dogMessages = [
   "Woof! Time to fetch some data from the database! No need to <em>paws</em> - your queries are in good hands!",
-  "Good boy/girl! That's some <em>paw-some</em> database work! I'd give you a treat, but data persistence is reward enough!",
-  "Bark bark! Looking for records? I'm your <em>retriever</em>! No data will escape my nose!",
-  "Tail wagging intensifies! Your database skills are simply <em>im-paw-sible</em> to ignore!",
+  "Good human! That's some <em>paw-some</em> database work! I'd give you a treat, but data persistence is reward enough!",
+  "Bark bark! Looking for records? I'll <em>retriever</em>! No data will escape my long nose!",
+  "<b>*Tail wagging intensifies!*</b> Your database skills are simply <em>im-paw-sible</em> to ignore!",
   "Ruff day? Don't worry - I'll help you <em>dig</em> up those records! No bone left unturned!",
+  "WOOF WOOF! Can we run that query NOW? I'm practically <em>bouncing</em> off the database walls! Let's SELECT * FROM everything!",
+  "<b>*Spinning in circles with excitement!*</b> Come ON! Let's INSERT some records! I'm so hyper I could <em>lab-rador</em> all day long!",
+  "Bark! Bark! BARK! Why are we going so slow?! I want to <em>hound</em> that database until it gives us ALL the data! Speed is my <em>breed</em>!",
+  "<b>*Panting with excitement!*</b> Quick! Quick! Let me <em>fetch</em> those joins before my energy runs out! I'm more excited than a <em>bull-dog</em> with a new chew toy!",
+  "RUFF! Can't we just run ALL the queries at once?! I'm so eager I'm getting <em>mutts</em> just thinking about it! Let's make this database <em>pup-roductive</em>!",
 ];
 
 const sleepyDogMessages = [
-  "Yawn... Still working on that database? Well, I suppose someone has to keep the data <em>well-trained</em>...",
-  "Stretches lazily... Unlike my energetic friend, I prefer the <em>slow retrieval</em> approach to data...",
-  "Takes a long nap... Wake me when you need to <em>fetch</em> something important... zzz...",
-  "Blinks slowly... Your database operations are making me <em>dog-tired</em>... but keep going...",
-  "Yawns again... At least you're not <em>barking</em> up the wrong tree with your queries...",
+  "<b>*Yawn...*</b> Still working on that database? Well, I suppose someone has to keep the data <em>well-trained</em>...",
+  "<b>*Stretches lazily...*</b> Unlike my energetic cousin, I prefer the <em>slow retrieval</em> approach to data...",
+  "<b>*Takes a long nap...*</b> Wake me when you need to <em>fetch</em> something important... zzz...",
+  "<b>*Blinks slowly...*</b> Your database operations are making me <em>dog-tired</em>... but keep going...",
+  "<b>*Yawns again...*</b> At least you're not <em>barking</em> up the wrong tree with your queries...",
+  "<b>*Rolls eyes sleepily...*</b> Ugh, my cousin Rodney is at it again... 'WOOF WOOF LET'S OPTIMIZE EVERYTHING!' He's such a <em>work-a-holic</em> terrier...",
+  "<b>*Sighs heavily...*</b> Rodney thinks every query is a <em>golden</em> opportunity... Honestly, he's more <em>re-pup-etitive</em> than a broken record player...",
+  "<b>*Stretches and yawns...*</b> That hyperactive cousin of mine is so <em>bor-ing</em>... Get it? <em>Boring</em>? All work and no <em>paws</em> for rest...",
+  "<b>*Mumbles sleepily...*</b> Rodney's idea of fun is running <em>lab-oratory</em> tests on database performance... What a <em>hound-dog</em> workaholic...",
+  "<b>*Yawns extensively...*</b> Sometimes I think Rodney needs to learn to <em>chill-huahua</em>... Life's not all about being the <em>top dog</em> in productivity, you know...",
 ];
 
 export const Home = () => {
@@ -135,8 +148,8 @@ export const Home = () => {
       case "GET":
       case "DELETE":
         if (!key.trim()) {
-          return selectedOperation === "GET" 
-            ? "Please enter a key to fetch!" 
+          return selectedOperation === "GET"
+            ? "Please enter a key to fetch!"
             : "Please enter a key to delete!";
         }
         break;
@@ -148,8 +161,8 @@ export const Home = () => {
       case "PREFIX_SCAN":
       case "PREFIX_ITERATE":
         if (!prefix.trim()) {
-          return selectedOperation === "PREFIX_SCAN" 
-            ? "Please enter a prefix to scan!" 
+          return selectedOperation === "PREFIX_SCAN"
+            ? "Please enter a prefix to scan!"
             : "Please enter a prefix to iterate!";
         }
         break;
@@ -354,7 +367,7 @@ export const Home = () => {
   const handleExecute = () => {
     // Clear any previous validation errors
     setValidationError(null);
-    
+
     // Validate the operation
     const validation = validateOperation();
     if (validation) {
@@ -411,7 +424,7 @@ export const Home = () => {
       case "GET":
         return isLoading ? "Sniffing..." : "Fetch Record";
       case "PUT":
-        return isLoading ? "Burying..." : "Bury Record";
+        return isLoading ? "Saving..." : "Save Record";
       case "DELETE":
         return isLoading ? "Digging up..." : "Delete Record";
       case "PREFIX_SCAN":
@@ -467,7 +480,7 @@ export const Home = () => {
             </div>
             <div>
               <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                📝 Value (The treasure to bury!)
+                📝 Value (The treasure to stash!)
               </label>
               <textarea
                 placeholder="Enter the value... woof!"
@@ -699,7 +712,7 @@ export const Home = () => {
                   <span className="font-bold">{stats.gets}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>💾 Records Buried:</span>
+                  <span>💾 Records Saved:</span>
                   <span className="font-bold">{stats.puts}</span>
                 </div>
                 <div className="flex justify-between">
@@ -730,7 +743,7 @@ export const Home = () => {
 
               <div className="space-y-2">
                 {operations.length === 0 ? (
-                  <p className="text-sloth-brown italic text-center py-4">
+                  <p className="text-sloth-brown italic text-center py-1 -mt-1">
                     No operations yet... ready to fetch some data?
                   </p>
                 ) : (
@@ -770,73 +783,100 @@ export const Home = () => {
         </div>
 
         {/* Dog Tips */}
-        <div className="bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6 mt-8">
+        <div className="bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6 mt-8 max-w-full mx-auto md:max-w-[90%]">
           <div className="flex items-start gap-3">
             <FaDog className="text-2xl text-sloth-brown mt-1 flex-shrink-0" />
             <div>
               <h4 className="text-lg font-bold text-sloth-brown-dark mb-2">
                 🐕 Pro Puppy Tips
               </h4>
-              <p className="text-sloth-brown leading-relaxed">
-                <strong>Training your database:</strong> Use GET to retrieve
-                records (like fetching a stick!), PUT to store new data (like
-                burying a bone), DELETE to remove records, SCAN operations for
-                bulk retrievals with pagination, and ITERATE for creating
-                cursors over data ranges. The backend handles all the heavy
-                lifting automatically - no need to worry about <em>ruff</em>{" "}
-                details! Remember, every good database needs regular
-                maintenance, just like every good dog needs daily walks! 🦴
+              <p className="text-sloth-brown leading-relaxed mr-3">
+                <strong>Woof! From the pack:</strong> Rodney's always ready to{" "}
+                <em>fetch</em> your data lightning fast, while Del Boy prefers
+                the <em>paws-ed</em> approach to database operations. Whether
+                you're <em>retrieving</em> records or <em>lab-oring</em> over
+                complex scans, remember - every good query deserves a treat! 🦴
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Tooltips for dogs */}
-      {isDogHovered && (
-        <div className="fixed bottom-20 right-4 bg-white p-4 rounded-xl border-4 border-green-500 shadow-[4px_4px_0px_0px_rgba(34,197,94,1)] z-50 max-w-sm">
-          <div className="flex items-start">
-            <div>
-              <p className="font-bold text-green-600 mb-2 text-sm">
-                🐕 Database Dog says:
-              </p>
-              <p
-                className="text-gray-600 text-sm italic"
-                dangerouslySetInnerHTML={{ __html: dogMessage }}
-              />
-            </div>
+      <Tooltip
+        anchorSelect=".hyper-dog"
+        place="left-start"
+        delayShow={350}
+        offset={12}
+        opacity={1}
+        className="!bg-white !p-4 !rounded-xl !z-[9999] !max-w-sm border-2 border-sloth-brown shadow-[4px_4px_0px_0px_#6b5e4a]"
+        border="3px solid #4b4436"
+        globalCloseEvents={[
+          "scroll",
+          "mouseout",
+          "mouseleave",
+          "click",
+          "dblclick",
+          "mouseup",
+          "mouseenter",
+        ]}
+      >
+        <div className="flex items-start">
+          <div>
+            <p className="font-semibold text-sloth-brown mb-2 text-lg">
+              Rodney says:
+            </p>
+            <p
+              className="text-gray-600 italic"
+              dangerouslySetInnerHTML={{ __html: dogMessage }}
+            />
           </div>
         </div>
-      )}
+      </Tooltip>
 
-      {isSleepyDogHovered && (
-        <div className="fixed bottom-20 left-4 bg-white p-4 rounded-xl border-4 border-gray-500 shadow-[4px_4px_0px_0px_rgba(107,114,128,1)] z-50 max-w-sm">
-          <div className="flex items-start">
-            <div>
-              <p className="font-bold text-gray-600 mb-2 text-sm">
-                😴 Lazy Database Dog says:
-              </p>
-              <p
-                className="text-gray-600 text-sm italic"
-                dangerouslySetInnerHTML={{ __html: sleepyMessage }}
-              />
-            </div>
+      {/* Tooltip for Sleepy Database Dog */}
+      <Tooltip
+        anchorSelect=".sleepy-dog"
+        place="right-start"
+        delayShow={775}
+        offset={12}
+        opacity={1}
+        className="!bg-white !p-4 !rounded-xl !z-[9999] !max-w-sm border-2 border-sloth-brown shadow-[4px_4px_0px_0px_#6b5e4a]"
+        border="3px solid #4b4436"
+        globalCloseEvents={[
+          "scroll",
+          "mouseout",
+          "mouseleave",
+          "click",
+          "dblclick",
+          "mouseup",
+          "mouseenter",
+        ]}
+      >
+        <div className="flex items-start">
+          <div>
+            <p className="font-semibold text-sloth-brown mb-2 text-lg">
+              Rodney's lazy cousin Del Boy:
+            </p>
+            <p
+              className="text-gray-600 italic"
+              dangerouslySetInnerHTML={{ __html: sleepyMessage }}
+            />
           </div>
         </div>
-      )}
+      </Tooltip>
 
       {/* Peeking Dogs */}
       <img
-        src={HappyDogPic}
-        alt="Happy Database Dog"
-        className="absolute -bottom-2 -right-2 w-20 h-20 object-contain transform translate-x-1/4 translate-y-1/4 opacity-90 transition-all duration-500 hover:translate-x-0 hover:translate-y-0 hover:scale-110 hover:opacity-100 cursor-pointer"
+        src={isDogHovered ? HyperRokica : RokicaLeft}
+        alt="Rodney"
+        className="hyper-dog hidden sm:block absolute -bottom-2 -right-2 w-auto h-[7.5rem] hover:h-[9.25rem] -rotate-[8deg] hover:-rotate-3 object-contain transform translate-x-1/4 translate-y-1/4 opacity-95 transition-all duration-[465ms] hover:translate-x-0 hover:translate-y-0 hover:scale-110 hover:opacity-100 cursor-pointer"
         onMouseEnter={() => setIsDogHovered(true)}
         onMouseLeave={() => setIsDogHovered(false)}
       />
       <img
-        src={SleepyDogPic}
-        alt="Sleepy Database Dog"
-        className="absolute -bottom-2 -left-2 w-16 h-16 object-contain transform -translate-x-1/4 translate-y-1/4 opacity-80 transition-all duration-700 hover:translate-x-0 hover:translate-y-0 hover:scale-110 hover:opacity-100 cursor-pointer"
+        src={isSleepyDogHovered ? SleepyCousin : SleepingCousin}
+        alt="Rodney's Sleepy Cousin"
+        className="sleepy-dog hidden sm:block absolute -bottom-2 -left-2 w-auto h-[7.5rem] hover:h-[9.25rem] -rotate-[28deg] hover:rotate-1 object-contain transform ease-in -translate-x-1/4 translate-y-1/4 opacity-95 transition-all duration-[925ms] hover:translate-x-0 hover:translate-y-0 hover:scale-110 hover:opacity-100 cursor-pointer"
         onMouseEnter={() => setIsSleepyDogHovered(true)}
         onMouseLeave={() => setIsSleepyDogHovered(false)}
       />
