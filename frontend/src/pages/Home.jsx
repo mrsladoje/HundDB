@@ -1,36 +1,36 @@
+import { BgDecorations } from "@/components/home/BgDecorations";
+import DashboardSign from "@/components/home/DashboardSign";
+import RecentOperations from "@/components/home/RecentOperations";
+import Stats from "@/components/home/Stats";
 import StyledOperationSelect from "@/components/select/StyledOperationSelect";
 import { NavbarContext } from "@/context/NavbarContext";
 import {
-  Get,
-  Put,
   Delete,
-  PrefixScan,
-  RangeScan,
-  PrefixIterate,
-  RangeIterate,
+  Get,
   IsDataLost,
+  PrefixIterate,
+  PrefixScan,
+  Put,
+  RangeIterate,
+  RangeScan,
 } from "@wails/main/App.js";
 import React, { useContext, useEffect, useState } from "react";
 import {
+  FaArrowRight,
   FaBone,
   FaDatabase,
   FaDog,
-  FaHeart,
+  FaList,
   FaPlus,
   FaSearch,
   FaTrash,
-  FaList,
-  FaArrowRight,
 } from "react-icons/fa";
-import { FiActivity } from "react-icons/fi";
 import { Tooltip } from "react-tooltip";
 
 const RokicaLeft = "../../pics/rokica_left.png";
 const HyperRokica = "../../pics/rokica_hyper.png";
 const SleepyCousin = "../../pics/rokica_sleepy.png";
 const SleepingCousin = "../../pics/rokica_sleeping.png";
-const RokicaRunning = "../../pics/rokica_running.png";
-const Bone = "../../pics/bone.png";
 
 const dogMessages = [
   "Woof! Time to fetch some data from the database! No need to <em>paws</em> - your queries are in good hands!",
@@ -219,7 +219,7 @@ export const Home = () => {
       resultData,
       timestamp: new Date().toLocaleTimeString(),
     };
-    setOperations((prev) => [operation, ...prev.slice(0, 4)]);
+    setOperations((prev) => [operation, ...prev.slice(0, 14)]); // Keep only last 15 operations
   };
 
   const validateOperation = () => {
@@ -685,52 +685,11 @@ export const Home = () => {
       className="bg-sloth-yellow-lite/80 p-6 pt-[2.6rem] relative overflow-hidden select-none flex justify-center items-center"
     >
       {/* Background paw prints */}
-      <div className="absolute inset-0 opacity-10 overflow-hidden pointer-events-none">
-        <FaBone className="absolute top-20 left-10 text-sloth-brown rotate-12 text-6xl" />
-        <FaBone className="absolute top-40 right-20 text-sloth-brown -rotate-45 text-4xl" />
-        <FaBone className="absolute bottom-32 left-1/4 text-sloth-brown rotate-75 text-5xl" />
-        <FaBone className="absolute bottom-20 right-1/3 text-sloth-brown -rotate-12 text-3xl" />
-        <FaHeart className="absolute top-60 left-1/2 text-sloth-brown rotate-12 text-4xl" />
-      </div>
+      <BgDecorations />
 
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header */}
-        <div className="flex justify-center items-start space-x-5 md:space-x-8 relative">
-          <div className="flex-shrink-0">
-            <img
-              src={Bone}
-              alt="Bone"
-              className="hidden sm:block h-12 w-auto object-contain flex-shrink-0 rotate-[24deg] mt-2.5"
-            />
-          </div>
-          <div className="text-center mb-8">
-            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-sloth-brown-dark mb-4 tracking-wide">
-              <i>Dash</i>board
-            </h1>
-            <p className="text-lg text-sloth-brown font-medium">
-              Sit... Fetch... Query... Gooood database!
-            </p>
-
-            {dataLost && (
-              <div className="mt-4 bg-red-100 border-4 border-red-500 rounded-xl p-4 shadow-[4px_4px_0px_0px_rgba(239,68,68,1)]">
-                <div className="flex items-center justify-center gap-2 text-red-800">
-                  <FaDog className="text-4xl flex-shrink-0" />
-                  <span className="font-bold">
-                    Ruff news! Previous data was lost during loading. Starting
-                    fresh!
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="flex-shrink-0">
-            <img
-              src={RokicaRunning}
-              alt="Rokica the dog running"
-              className="hidden sm:block h-20 w-auto object-contain flex-shrink-0"
-            />
-          </div>
-        </div>
+        <DashboardSign dataLost={dataLost} />
 
         <div className="grid lg:grid-cols-3 gap-8 !mt-0 sm:!mt-3">
           {/* Main Operations Panel */}
@@ -852,92 +811,13 @@ export const Home = () => {
           {/* Side Panel */}
           <div className="space-y-6">
             {/* Stats Panel */}
-            <div className="bg-sloth-brown rounded-xl p-6 border-4 border-sloth-brown-dark shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] text-sloth-yellow">
-              <div className="flex items-center gap-2 mb-4">
-                <FiActivity className="text-xl" />
-                <h3 className="font-bold text-lg">Today's Pack Statistics</h3>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <span>🔍 Successful Fetches:</span>
-                  <span className="font-bold">{stats.gets}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>💾 Records Saved:</span>
-                  <span className="font-bold">{stats.puts}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>🗑️ Records Deleted:</span>
-                  <span className="font-bold">{stats.deletes}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>📋 Scans Performed:</span>
-                  <span className="font-bold">{stats.scans}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>🔄 Iterators Created:</span>
-                  <span className="font-bold">{stats.iterates}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>❌ Errors:</span>
-                  <span className="font-bold">{stats.errors}</span>
-                </div>
-              </div>
-            </div>
+            <Stats stats={stats} />
 
             {/* Recent Operations */}
-            <div className="bg-white rounded-xl p-6 border-4 border-sloth-brown shadow-[6px_6px_0px_0px_rgba(107,94,74,1)]">
-              <h3 className="font-bold text-lg text-sloth-brown-dark mb-4 flex items-center gap-2">
-                <FaDog />
-                Recent Tail Wags
-              </h3>
-
-              <div className="space-y-2">
-                {operations.length === 0 ? (
-                  <p className="text-sloth-brown italic text-center py-1 -mt-1">
-                    No operations yet... ready to fetch some data?
-                  </p>
-                ) : (
-                  operations.map((op) => (
-                    <div
-                      key={op.id}
-                      onClick={() => handleOperationClick(op)}
-                      className={`p-3 rounded-lg border-2 cursor-pointer transition-all duration-300 ${
-                        op.success
-                          ? "bg-green-50 active:bg-green-100/70 border-green-300 hover:border-green-500 "
-                          : op.notFoundMessage
-                          ? "bg-yellow-50 active:bg-yellow-100/70 border-yellow-300 hover:border-yellow-500"
-                          : "bg-red-50 active:bg-red-100/70 border-red-300 hover:border-red-500"
-                      }`}
-                    >
-                      <div className="flex justify-between items-start text-sm">
-                        <div className="flex items-start">
-                          <span className="font-bold">{op.type}</span>
-                          <span className="text-gray-600 ml-2 inline-block w-32 truncate text-left">
-                            {op.key}
-                          </span>
-                        </div>
-                        <span className="text-xs text-gray-500">
-                          {op.timestamp}
-                        </span>
-                      </div>
-                      <div
-                        className={`text-xs mt-1 ${
-                          op.success
-                            ? "text-green-600"
-                            : op.notFoundMessage
-                            ? "text-yellow-600"
-                            : "text-red-600"
-                        }`}
-                      >
-                        {op.message || op.notFoundMessage}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+            <RecentOperations
+              operations={operations}
+              onOperationClick={handleOperationClick}
+            />
           </div>
         </div>
 

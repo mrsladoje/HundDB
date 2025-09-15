@@ -29,3 +29,22 @@
   scrollbar-color: #6b5e4a #fcefd7; /* thumb color, track color */
   scroll-behavior: smooth;
 }
+
+.scroll-bare::-webkit-scrollbar-track {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.scroll-bare::-webkit-scrollbar-thumb {
+  background-color: #6b5e4a !important; /* Keep your original sloth-brown */
+  border: none !important; /* Remove the border to eliminate track appearance */
+}
+
+.scroll-bare::-webkit-scrollbar-thumb:hover {
+  background-color: #4b4436 !important; /* Keep your original sloth-brown-dark */
+}
+
+/* Firefox scrollbar override */
+.scroll-bare {
+  scrollbar-color: #6b5e4a transparent !important; /* brown thumb, transparent track */
+}

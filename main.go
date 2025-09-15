@@ -25,9 +25,11 @@ func main() {
 
 	// Run the Wails application
 	err := wails.Run(&options.App{
-		Title:  "HundDB",
-		Width:  800,
-		Height: 600,
+		Title:     "HundDB",
+		Width:     800,
+		Height:    600,
+		MinWidth:  300,
+		MinHeight: 400,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
