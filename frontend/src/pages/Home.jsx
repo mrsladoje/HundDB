@@ -201,7 +201,14 @@ export const Home = () => {
     }
   };
 
-  const addOperation = (type, key, success, message, notFoundMessage = null) => {
+  const addOperation = (
+    type,
+    key,
+    success,
+    message,
+    notFoundMessage = null,
+    resultData = null
+  ) => {
     const operation = {
       id: Date.now(),
       type,
@@ -209,6 +216,7 @@ export const Home = () => {
       success,
       message,
       notFoundMessage,
+      resultData,
       timestamp: new Date().toLocaleTimeString(),
     };
     setOperations((prev) => [operation, ...prev.slice(0, 4)]);
@@ -261,12 +269,12 @@ export const Home = () => {
       if (record) {
         const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
         setResult(resultText);
-        addOperation("GET", key, true, "Record found");
+        addOperation("GET", key, true, "Record found", null, resultText);
         setStats((prev) => ({ ...prev, gets: prev.gets + 1 }));
       } else {
-        const notFoundMessage = getRandomDogNotFound('GET');
+        const notFoundMessage = getRandomDogNotFound("GET");
         setNotFoundMessage(notFoundMessage);
-        addOperation("GET", key, false, null, notFoundMessage);
+        addOperation("GET", key, false, null, notFoundMessage, notFoundMessage);
       }
     } catch (err) {
       const dogError = getRandomDogError("GET");
@@ -286,17 +294,18 @@ export const Home = () => {
 
     try {
       await Put(key, value);
-      setResult(`Successfully stored record with key: ${key}`);
-      addOperation("PUT", key, true, "Record stored");
+      const resultText = `Successfully stored record with key: ${key}`;
+      setResult(resultText);
+      addOperation("PUT", key, true, "Record stored", null, resultText);
       setStats((prev) => ({ ...prev, puts: prev.puts + 1 }));
 
       // Clear inputs after successful put
       setKey("");
       setValue("");
     } catch (err) {
-      const dogError = getRandomDogError("PUT");
+      const dogError = getRandomDogError("PUT") + err.message;
       setError(dogError);
-      addOperation("PUT", key, false, dogError);
+      addOperation("PUT", key, false, dogError, null, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
@@ -470,6 +479,46 @@ export const Home = () => {
       case "RANGE_ITERATE":
         handleRangeIterate();
         break;
+    }
+  };
+
+  const handleOperationClick = (operation) => {
+    // Set the operation type and restore the input values
+    setSelectedOperation(operation.type);
+
+    // Clear any existing errors/validation
+    setError(null);
+    setValidationError(null);
+    setNotFoundMessage(null);
+    setResult(null);
+
+    // Set the result based on what type of result this operation had
+    if (operation.success && operation.resultData) {
+      setResult(operation.resultData);
+    } else if (operation.notFoundMessage) {
+      setNotFoundMessage(operation.notFoundMessage);
+    } else if (!operation.success && operation.message) {
+      setError(operation.message);
+    }
+
+    // Restore input field values based on operation type
+    if (operation.type === "GET" || operation.type === "DELETE") {
+      setKey(operation.key);
+    } else if (operation.type === "PUT") {
+      setKey(operation.key);
+      // Note: We don't have the original value stored, so we can't restore it
+    } else if (
+      operation.type === "PREFIX_SCAN" ||
+      operation.type === "PREFIX_ITERATE"
+    ) {
+      setPrefix(operation.key);
+    } else if (
+      operation.type === "RANGE_SCAN" ||
+      operation.type === "RANGE_ITERATE"
+    ) {
+      const [min, max] = operation.key.split("-");
+      setMinKey(min);
+      setMaxKey(max);
     }
   };
 
@@ -743,7 +792,7 @@ export const Home = () => {
                 className={`rounded-xl p-6 border-4 font-mono text-sm relative overflow-hidden ${
                   error
                     ? "bg-red-50 border-red-700 shadow-[6px_6px_0px_0px_#f87171]"
-                  : notFoundMessage
+                    : notFoundMessage
                     ? "bg-yellow-50 border-yellow-600 shadow-[6px_6px_0px_0px_#fde047]"
                     : "bg-green-50 border-green-600 shadow-[6px_6px_0px_0px_#4ade80]"
                 }`}
@@ -751,24 +800,36 @@ export const Home = () => {
                 <div className="flex items-center gap-2 mb-4">
                   <FaDog
                     className={`text-xl ${
-                      error ? "text-red-600" : notFoundMessage ? "text-yellow-600" : "text-green-600"
+                      error
+                        ? "text-red-600"
+                        : notFoundMessage
+                        ? "text-yellow-600"
+                        : "text-green-600"
                     }`}
                   />
                   <h3
                     className={`font-bold text-lg ${
-                      error ? "text-red-800" : notFoundMessage ? "text-yellow-800" : "text-green-800"
+                      error
+                        ? "text-red-800"
+                        : notFoundMessage
+                        ? "text-yellow-800"
+                        : "text-green-800"
                     }`}
                   >
                     {error
-                      ? "Woof! Something went wrong!"
+                      ? "Something went wrong!"
                       : notFoundMessage
-                      ? "Woof! Record not found!"
-                      : "Woof-hoo! Operation successful!"}
+                      ? "Record not found!"
+                      : "Operation successful! Woof-hoo!"}
                   </h3>
                 </div>
                 <pre
                   className={`whitespace-pre-wrap ${
-                    error ? "text-red-700" : notFoundMessage ? "text-yellow-700" : "text-green-700"
+                    error
+                      ? "text-red-700"
+                      : notFoundMessage
+                      ? "text-yellow-700"
+                      : "text-green-700"
                   }`}
                 >
                   {error || result || notFoundMessage}
@@ -777,7 +838,11 @@ export const Home = () => {
                 {/* Result decoration */}
                 <FaBone
                   className={`absolute top-2 right-2 text-2xl opacity-20 ${
-                    error ? "text-red-400" : notFoundMessage ? "text-yellow-400" : "text-green-400"
+                    error
+                      ? "text-red-400"
+                      : notFoundMessage
+                      ? "text-yellow-400"
+                      : "text-green-400"
                   }`}
                 />
               </div>
@@ -837,12 +902,13 @@ export const Home = () => {
                   operations.map((op) => (
                     <div
                       key={op.id}
-                      className={`p-3 rounded-lg border-2 ${
+                      onClick={() => handleOperationClick(op)}
+                      className={`p-3 rounded-lg border-2 cursor-pointer transition-all duration-300 ${
                         op.success
-                          ? "bg-green-50 border-green-300"
-                          : notFoundMessage
-                          ? "bg-yellow-50 border-yellow-300"
-                          : "bg-red-50 border-red-300"
+                          ? "bg-green-50 active:bg-green-100/70 border-green-300 hover:border-green-500 "
+                          : op.notFoundMessage
+                          ? "bg-yellow-50 active:bg-yellow-100/70 border-yellow-300 hover:border-yellow-500"
+                          : "bg-red-50 active:bg-red-100/70 border-red-300 hover:border-red-500"
                       }`}
                     >
                       <div className="flex justify-between items-start text-sm">
@@ -858,7 +924,11 @@ export const Home = () => {
                       </div>
                       <div
                         className={`text-xs mt-1 ${
-                          op.success ? "text-green-600" : notFoundMessage ? "text-yellow-600" : "text-red-600"
+                          op.success
+                            ? "text-green-600"
+                            : op.notFoundMessage
+                            ? "text-yellow-600"
+                            : "text-red-600"
                         }`}
                       >
                         {op.message || op.notFoundMessage}
