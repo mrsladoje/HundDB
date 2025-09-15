@@ -28,8 +28,8 @@ func main() {
 		Title:     "HundDB",
 		Width:     800,
 		Height:    600,
-		MinWidth:  300,
-		MinHeight: 400,
+		MinWidth:  400,
+		MinHeight: 300,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

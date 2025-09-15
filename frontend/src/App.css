@@ -48,3 +48,23 @@
 .scroll-bare {
   scrollbar-color: #6b5e4a transparent !important; /* brown thumb, transparent track */
 }
+
+/* Green scrollbar for textboxes */
+.scroll-bare-green::-webkit-scrollbar-track {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.scroll-bare-green::-webkit-scrollbar-thumb {
+  background-color: #16a34a !important; /* green-600 */
+  border: none !important; /* Remove the border to eliminate track appearance */
+}
+
+.scroll-bare-green::-webkit-scrollbar-thumb:hover {
+  background-color: #15803d !important; /* green-700 on hover */
+}
+
+/* Firefox scrollbar override for green */
+.scroll-bare-green {
+  scrollbar-color: #16a34a transparent !important; /* green thumb, transparent track */
+}

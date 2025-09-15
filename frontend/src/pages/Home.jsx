@@ -1,6 +1,7 @@
 import { BgDecorations } from "@/components/home/BgDecorations";
 import DashboardSign from "@/components/home/DashboardSign";
 import RecentOperations from "@/components/home/RecentOperations";
+import Result from "@/components/home/Result";
 import Stats from "@/components/home/Stats";
 import StyledOperationSelect from "@/components/select/StyledOperationSelect";
 import { NavbarContext } from "@/context/NavbarContext";
@@ -17,7 +18,6 @@ import {
 import React, { useContext, useEffect, useState } from "react";
 import {
   FaArrowRight,
-  FaBone,
   FaDatabase,
   FaDog,
   FaList,
@@ -747,64 +747,13 @@ export const Home = () => {
 
             {/* Results Section - Only show for execution errors, not validation errors */}
             {(result || error || notFoundMessage) && !validationError && (
-              <div
-                className={`rounded-xl p-6 border-4 font-mono text-sm relative overflow-hidden ${
-                  error
-                    ? "bg-red-50 border-red-700 shadow-[6px_6px_0px_0px_#f87171]"
-                    : notFoundMessage
-                    ? "bg-yellow-50 border-yellow-600 shadow-[6px_6px_0px_0px_#fde047]"
-                    : "bg-green-50 border-green-600 shadow-[6px_6px_0px_0px_#4ade80]"
-                }`}
-              >
-                <div className="flex items-center gap-2 mb-4">
-                  <FaDog
-                    className={`text-xl ${
-                      error
-                        ? "text-red-600"
-                        : notFoundMessage
-                        ? "text-yellow-600"
-                        : "text-green-600"
-                    }`}
-                  />
-                  <h3
-                    className={`font-bold text-lg ${
-                      error
-                        ? "text-red-800"
-                        : notFoundMessage
-                        ? "text-yellow-800"
-                        : "text-green-800"
-                    }`}
-                  >
-                    {error
-                      ? "Something went wrong!"
-                      : notFoundMessage
-                      ? "Record not found!"
-                      : "Operation successful! Woof-hoo!"}
-                  </h3>
-                </div>
-                <pre
-                  className={`whitespace-pre-wrap ${
-                    error
-                      ? "text-red-700"
-                      : notFoundMessage
-                      ? "text-yellow-700"
-                      : "text-green-700"
-                  }`}
-                >
-                  {error || result || notFoundMessage}
-                </pre>
-
-                {/* Result decoration */}
-                <FaBone
-                  className={`absolute top-2 right-2 text-2xl opacity-20 ${
-                    error
-                      ? "text-red-400"
-                      : notFoundMessage
-                      ? "text-yellow-400"
-                      : "text-green-400"
-                  }`}
-                />
-              </div>
+              <Result
+                operation={selectedOperation}
+                result={result}
+                error={error}
+                notFoundMessage={notFoundMessage}
+                isSuccess={!error && !notFoundMessage && !!result}
+              />
             )}
           </div>
 
