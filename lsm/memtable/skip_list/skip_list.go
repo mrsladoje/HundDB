@@ -180,7 +180,7 @@ func (s *SkipList) Delete(record *model.Record) bool {
 // Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
 func (s *SkipList) Get(key string) *model.Record {
 	n := s.search(key, nil)
-	if n == nil || n.rec == nil || n.rec.Tombstone {
+	if n == nil || n.rec == nil || n.rec.IsDeleted() {
 		return nil
 	}
 	return n.rec

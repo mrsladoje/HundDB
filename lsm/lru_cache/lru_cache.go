@@ -56,7 +56,7 @@ func (lru *LRUCache[K, V]) Get(key K) (V, error) {
 	node, exists := lru.cache_map[key]
 	if !exists {
 		var emptyVal V
-		return emptyVal, ErrKeyNotFound
+		return emptyVal, nil
 	}
 	lru.cache_list.MoveToFront(node)
 	return node.Value.(*listItem[K, V]).value, nil
@@ -143,7 +143,7 @@ func (lru *LRUCache[K, V]) Peek(key K) (V, error) {
 	element, exists := lru.cache_map[key]
 	if !exists {
 		var emptyValue V
-		return emptyValue, ErrKeyNotFound
+		return emptyValue, nil
 	}
 
 	item := element.Value.(*listItem[K, V])

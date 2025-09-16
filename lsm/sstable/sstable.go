@@ -879,6 +879,9 @@ func Get(key string, index int) (record *record.Record, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to retrieve record from data component (final): %v", err)
 		}
+		if record.IsDeleted() {
+			return nil, nil
+		}
 		return record, nil
 	}
 }

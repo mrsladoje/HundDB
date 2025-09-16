@@ -1,0 +1,70 @@
+#root {
+  max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+}
+
+/* WebKit (Chrome, Safari) scrollbar styles */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: #fcefd7; /* sloth-yellow-lite */
+  border-radius: 0px;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: #6b5e4a; /* sloth-brown */
+  border-radius: 0px;
+  border: 2px solid #fcefd7; /* sloth-yellow-lite border */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #4b4436; /* sloth-brown-dark on hover */
+}
+
+/* Firefox and other browsers scrollbar styles */
+* {
+  scrollbar-color: #6b5e4a #fcefd7; /* thumb color, track color */
+  scroll-behavior: smooth;
+}
+
+.scroll-bare::-webkit-scrollbar-track {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.scroll-bare::-webkit-scrollbar-thumb {
+  background-color: #6b5e4a !important; /* Keep your original sloth-brown */
+  border: none !important; /* Remove the border to eliminate track appearance */
+}
+
+.scroll-bare::-webkit-scrollbar-thumb:hover {
+  background-color: #4b4436 !important; /* Keep your original sloth-brown-dark */
+}
+
+/* Firefox scrollbar override */
+.scroll-bare {
+  scrollbar-color: #6b5e4a transparent !important; /* brown thumb, transparent track */
+}
+
+/* Green scrollbar for textboxes */
+.scroll-bare-green::-webkit-scrollbar-track {
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.scroll-bare-green::-webkit-scrollbar-thumb {
+  background-color: #16a34a !important; /* green-600 */
+  border: none !important; /* Remove the border to eliminate track appearance */
+}
+
+.scroll-bare-green::-webkit-scrollbar-thumb:hover {
+  background-color: #15803d !important; /* green-700 on hover */
+}
+
+/* Firefox scrollbar override for green */
+.scroll-bare-green {
+  scrollbar-color: #16a34a transparent !important; /* green thumb, transparent track */
+}

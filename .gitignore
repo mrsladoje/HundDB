@@ -29,3 +29,7 @@ go.work.sum
 
 # .mods in structures
 structures/**/*.mod
+
+# wails build
+build/
+wailsjs/
