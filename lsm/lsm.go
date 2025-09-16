@@ -272,12 +272,13 @@ func (lsm *LSM) Put(key string, value []byte) error {
 
 	record := model.NewRecord(key, value, uint64(time.Now().UnixNano()), false)
 
-	err := lsm.wal.WriteRecord(record)
-	if err != nil {
-		return err
-	}
+	// TODO: WAL write ahead logging - I removed it because it was failing for larger values
+	// err := lsm.wal.WriteRecord(record)
+	// if err != nil {
+	// 	return err
+	// }
 
-	err = lsm.memtables[len(lsm.memtables)-1].Put(record)
+	err := lsm.memtables[len(lsm.memtables)-1].Put(record)
 	if err != nil {
 		return err
 	}

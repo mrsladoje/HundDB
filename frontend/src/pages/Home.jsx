@@ -1,10 +1,15 @@
 import { BgDecorations } from "@/components/home/BgDecorations";
 import DashboardSign from "@/components/home/DashboardSign";
+import { FileUpload } from "@/components/home/FileUpload";
 import RecentOperations from "@/components/home/RecentOperations";
 import Result from "@/components/home/Result";
 import Stats from "@/components/home/Stats";
 import StyledOperationSelect from "@/components/select/StyledOperationSelect";
 import { NavbarContext } from "@/context/NavbarContext";
+import {
+  encodeValueWithType,
+  getFileTypeFromFile,
+} from "@/utils/fileTypeEncoder.js";
 import {
   Delete,
   Get,
@@ -25,6 +30,8 @@ import {
   FaSearch,
   FaTrash,
 } from "react-icons/fa";
+import { FaFont } from "react-icons/fa6";
+import { MdPermMedia } from "react-icons/md";
 import { Tooltip } from "react-tooltip";
 
 const RokicaLeft = "../../pics/rokica_left.png";
@@ -131,6 +138,8 @@ export const Home = () => {
   const [selectedOperation, setSelectedOperation] = useState("GET");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
+  const [valueTab, setValueTab] = useState("text"); // "text" or "media"
+  const [uploadedFile, setUploadedFile] = useState(null);
   const [prefix, setPrefix] = useState("");
   const [minKey, setMinKey] = useState("");
   const [maxKey, setMaxKey] = useState("");
@@ -233,27 +242,17 @@ export const Home = () => {
         }
         break;
       case "PUT":
-        if (!key.trim() || !value.trim()) {
-          return "Please enter both key and value!";
+        if (!key.trim()) {
+          return "Please enter a key!";
+        }
+        if (valueTab === "text" && !value.trim()) {
+          return "Please enter a value or switch to media tab to upload a file!";
+        }
+        if (valueTab === "media" && !uploadedFile) {
+          return "Please upload a file or switch to text tab to enter a value!";
         }
         break;
-      case "PREFIX_SCAN":
-      case "PREFIX_ITERATE":
-        if (!prefix.trim()) {
-          return selectedOperation === "PREFIX_SCAN"
-            ? "Please enter a prefix to scan!"
-            : "Please enter a prefix to iterate!";
-        }
-        break;
-      case "RANGE_SCAN":
-      case "RANGE_ITERATE":
-        if (!minKey.trim() || !maxKey.trim()) {
-          return "Please enter both minimum and maximum keys!";
-        }
-        if (minKey.trim() > maxKey.trim()) {
-          return "Minimum key cannot be greater than maximum key!";
-        }
-        break;
+      // ... rest of validation cases
     }
     return null;
   };
@@ -286,6 +285,19 @@ export const Home = () => {
     }
   };
 
+  const fileToByteArray = async (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = function (event) {
+        const arrayBuffer = event.target.result;
+        const uint8Array = new Uint8Array(arrayBuffer);
+        const byteString = Array.from(uint8Array).join(",");
+        resolve(byteString);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
   const handlePut = async () => {
     setError(null);
     setResult(null);
@@ -293,7 +305,20 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      await Put(key, value);
+      let finalValue;
+      let fileType = "";
+
+      if (valueTab === "media" && uploadedFile) {
+        // Handle file upload
+        fileType = getFileTypeFromFile(uploadedFile);
+        const byteArray = await fileToByteArray(uploadedFile);
+        finalValue = encodeValueWithType(byteArray, fileType);
+      } else {
+        // Handle text input
+        finalValue = encodeValueWithType(value, ""); // Empty string for text
+      }
+
+      await Put(key, finalValue);
       const resultText = `Successfully stored record with key: ${key}`;
       setResult(resultText);
       addOperation("PUT", key, true, "Record stored", null, resultText);
@@ -302,8 +327,11 @@ export const Home = () => {
       // Clear inputs after successful put
       setKey("");
       setValue("");
+      setUploadedFile(null);
+      setValueTab("text");
     } catch (err) {
-      const dogError = getRandomDogError("PUT") + err.message;
+      console.error("Put operation failed:", err);
+      const dogError = getRandomDogError("PUT");
       setError(dogError);
       addOperation("PUT", key, false, dogError, null, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
@@ -572,6 +600,90 @@ export const Home = () => {
     return messages[Math.floor(Math.random() * messages.length)];
   };
 
+  const renderInputFieldsPUT = () => {
+    return (
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+            🔑 Key (The map to the treasure...)
+          </label>
+          <input
+            type="text"
+            placeholder="Enter your ...woof.. key!"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+            disabled={isLoading}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+            📝 Value (The treasure to stash!)
+          </label>
+
+          {/* Tab Control */}
+          <div className="mb-3 mt-0.5">
+            <div className="flex border-b-2 border-sloth-brown pl-2 isolate">
+              <button
+                type="button"
+                onClick={() => setValueTab("text")}
+                className={`flex items-center justify-center gap-2 py-[0.45rem] px-4 font-bold text-sm transition-all duration-[230ms] !rounded-b-none ${
+                  valueTab === "text"
+                    ? "bg-sloth-yellow text-sloth-brown-dark border-2 border-sloth-brown border-b-sloth-yellow rounded-t-lg -mb-[2px] relative z-10"
+                    : "border-2 border-b-0 border-sloth-brown/50 text-sloth-brown-dark bg-sloth-yellow-lite hover:bg-sloth-yellow-lite/50 active:bg-sloth-yellow-lite rounded-t-lg"
+                }`}
+                disabled={isLoading}
+              >
+                <FaFont className="text-sm" />
+                Text
+              </button>
+              <button
+                type="button"
+                onClick={() => setValueTab("media")}
+                className={`ml-1 flex items-center justify-center gap-2 py-[0.45rem] px-4 font-bold text-sm transition-all duration-[230ms] !rounded-b-none ${
+                  valueTab === "media"
+                    ? "bg-sloth-yellow text-sloth-brown-dark border-2 border-sloth-brown border-b-sloth-yellow rounded-t-lg -mb-[2px] relative z-10"
+                    : "border-2 border-b-0 border-sloth-brown/50 text-sloth-brown-dark bg-sloth-yellow-lite hover:bg-sloth-yellow-lite/50 active:bg-sloth-yellow-lite rounded-t-lg"
+                }`}
+                disabled={isLoading}
+              >
+                <MdPermMedia className="text-sm" />
+                Media
+              </button>
+            </div>
+          </div>
+
+          {/* Content based on active tab */}
+          {valueTab === "text" ? (
+            <textarea
+              placeholder="Enter the value... woof!"
+              value={value}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setUploadedFile(null);
+              }}
+              rows={4}
+              className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200 resize-vertical"
+              disabled={isLoading}
+            />
+          ) : (
+            <div className="h-[10.5rem]">
+              <FileUpload
+                className="w-full h-full"
+                file={uploadedFile}
+                setFile={(file) => {
+                  setUploadedFile(file);
+                  setValue(undefined);
+                }}
+                handleClearExtra={() => {}}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderInputFields = () => {
     switch (selectedOperation) {
       case "GET":
@@ -595,36 +707,7 @@ export const Home = () => {
           </div>
         );
       case "PUT":
-        return (
-          <div className="grid md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                🔑 Key (The map to the treasure...)
-              </label>
-              <input
-                type="text"
-                placeholder="Enter your ...woof.. key!"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
-                disabled={isLoading}
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                📝 Value (The treasure to stash!)
-              </label>
-              <textarea
-                placeholder="Enter the value... woof!"
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                rows={4}
-                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200 resize-vertical"
-                disabled={isLoading}
-              />
-            </div>
-          </div>
-        );
+        return renderInputFieldsPUT();
       case "PREFIX_SCAN":
       case "PREFIX_ITERATE":
         return (

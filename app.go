@@ -67,7 +67,13 @@ func (a *App) Get(key string) (map[string]interface{}, error) {
 // Put stores a key-value pair in the LSM
 func (a *App) Put(key string, value string) error {
 	valueBytes := []byte(value)
-	return a.lsm.Put(key, valueBytes)
+
+	err := a.lsm.Put(key, valueBytes)
+	if err != nil {
+		return fmt.Errorf("error storing record: %v", err)
+	}
+
+	return nil
 }
 
 // IsDataLost checks if data was lost during LSM loading

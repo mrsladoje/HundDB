@@ -94,7 +94,7 @@ export const Navbar = () => {
   return (
     <nav 
       ref={navbarRef}
-      className="bg-sloth-yellow border-b-2 border-sloth-brown shadow-[0_4px_0px_0px_#6b5e4a] sticky top-0 left-0 w-full z-50 select-none"
+      className="bg-sloth-yellow border-y-2 border-sloth-brown shadow-[0_4px_0px_0px_#6b5e4a] sticky top-0 left-0 w-full z-50 select-none"
     >
       <div className="max-w-[90rem] mx-auto px-4 sm:px-6 lg:px-8 relative overflow-hidden">
         <FaPaw className="absolute top-2.5 left-[50%] md:left-[22%] opacity-30 text-sloth-brown -rotate-12 text-4xl" />

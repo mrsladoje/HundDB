@@ -1,5 +1,6 @@
 import React from "react";
 import { FaBone, FaDog } from "react-icons/fa";
+import Record from "@/components/home/Record";
 
 const Result = ({
   operation,
@@ -19,39 +20,12 @@ const Result = ({
 
     return (
       <span
-        className={`${className} ${shouldTruncate ? "cursor-help" : ""}`}
+        className={`${className} ${shouldTruncate ? "cursor-help" : ""} !select-text text-left`}
         title={shouldTruncate ? text : undefined}
       >
         {displayText}
       </span>
     );
-  };
-
-  // Scrollable text component for values
-  const ScrollableText = ({ text, className = "", maxHeight = "6.25rem" }) => {
-    if (!text) return null;
-
-    return (
-      <div
-        className={`${className} scroll-bare-green`}
-        style={{
-          maxHeight,
-          overflowY: "auto",
-          overflowX: "auto",
-        }}
-      >
-        <span className="font-mono whitespace-pre-wrap break-all">{text}</span>
-      </div>
-    );
-  };
-
-  // Helper function to format timestamp
-  const formatTimestamp = (timestamp) => {
-    if (!timestamp) return "Unknown";
-
-    // Convert nanoseconds to milliseconds for JavaScript Date
-    const date = new Date(timestamp / 1000000);
-    return date.toLocaleString();
   };
 
   // Parse record data for GET operations
@@ -111,47 +85,8 @@ const Result = ({
         if (isSuccess && result) {
           const record = parseRecord(result);
           if (record) {
-            return (
-              <div className="space-y-4">
-                <div className="bg-white/50 rounded-lg p-4 px-5 sm:px-6 border-2 border-green-300">
-                  <div className="grid gap-3 align-baseline">
-                    {/* Key */}
-                    <div className="flex items-start gap-2">
-                      <span className="font-semibold text-green-800 min-w-[80px]">
-                        Key:
-                      </span>
-                      <TruncatedText
-                        text={record.key}
-                        className="font-mono text-green-700 bg-green-100 px-2 py-1 rounded"
-                        maxLength={40}
-                      />
-                    </div>
-
-                    {/* Value - Now Scrollable */}
-                    <div className="flex items-start gap-2">
-                      <span className="font-semibold text-green-800 min-w-[80px]">
-                        Value:
-                      </span>
-                      <ScrollableText
-                        text={record.value}
-                        className="text-green-700 bg-green-100 px-3 py-2 rounded border"
-                        maxHeight="6.25rem"
-                      />
-                    </div>
-
-                    {/* Timestamp */}
-                    <div className="flex items-start gap-2">
-                      <span className="font-semibold text-green-800 min-w-[80px]">
-                        Created:
-                      </span>
-                      <span className="text-green-700 text-sm">
-                        {formatTimestamp(record.timestamp)}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
+            // Use the new Record component for GET operations
+            return <Record record={record} />;
           }
         }
         // Fallback to original text display for GET
