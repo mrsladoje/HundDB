@@ -1,16 +1,76 @@
 import {
-    decodeValueWithType,
-    isPreviewableType,
+  decodeValueWithType,
+  isPreviewableType,
 } from "@/utils/fileTypeEncoder.js";
 import React, { useEffect, useRef, useState } from "react";
 import { FaMusic, FaPause, FaPlay } from "react-icons/fa";
 import ReactMarkdown from "react-markdown";
+import { useFileProcessingCache } from "@/hooks/useFileProcessingCache"; // Import the hook
 
 export const Record = ({ record }) => {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [audioUrl, setAudioUrl] = useState(null);
   const [isAudioLoading, setIsAudioLoading] = useState(false);
+
+  // Use the cache hook - limit to 5 processed files in memory
+  const { processFile, cleanupCache } = useFileProcessingCache(5);
+
+  // Decode the value to check if it has a file type
+  const { type: fileType, value: actualValue } = decodeValueWithType(
+    record.value
+  );
+
+  // Process the file with caching (only runs when fileType/actualValue changes)
+  const processedFile = React.useMemo(() => {
+    if (!fileType || !isPreviewableType(fileType)) {
+      return null;
+    }
+
+    // Use record.key + timestamp as unique identifier for caching
+    const recordId = `${record.key}-${record.timestamp}`;
+    return processFile(fileType, actualValue, recordId);
+  }, [fileType, actualValue, record.key, record.timestamp, processFile]);
+
+  // Clean up cache when component unmounts
+  useEffect(() => {
+    return () => {
+      cleanupCache();
+    };
+  }, [cleanupCache]);
+
+  // Clean up audio when component unmounts or audio URL changes
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+    };
+  }, [processedFile?.objectUrl]);
+
+  const toggleAudio = async () => {
+    if (!audioRef.current || !processedFile?.objectUrl) return;
+
+    try {
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        if (audioRef.current.ended) {
+          audioRef.current.currentTime = 0;
+        }
+
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          await playPromise;
+        }
+      }
+    } catch (error) {
+      console.error("Error toggling audio:", error);
+      setIsPlaying(false);
+      setIsAudioLoading(false);
+    }
+  };
 
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
@@ -60,79 +120,7 @@ export const Record = ({ record }) => {
     return date.toLocaleString();
   };
 
-  // Decode the value to check if it has a file type
-  const { type: fileType, value: actualValue } = decodeValueWithType(
-    record.value
-  );
-
-  // FIXED: Moved audio URL creation to proper useEffect
-  useEffect(() => {
-    let newAudioUrl = null;
-
-    // Only create audio URL if we have audio file type
-    if (fileType && ["mp3", "wav", "ogg"].includes(fileType)) {
-      try {
-        const byteArray = actualValue.split(",").map((x) => {
-          const num = parseInt(x.trim());
-          return isNaN(num) ? 0 : num;
-        });
-        const fileBlob = new Blob([new Uint8Array(byteArray)]);
-        newAudioUrl = URL.createObjectURL(fileBlob);
-        setAudioUrl(newAudioUrl);
-      } catch (error) {
-        console.error("Error creating audio blob:", error);
-        setIsAudioLoading(false);
-      }
-    }
-
-    // Cleanup function
-    return () => {
-      if (newAudioUrl) {
-        URL.revokeObjectURL(newAudioUrl);
-      }
-    };
-  }, [fileType, actualValue]);
-
-  // Clean up audio and URLs when component unmounts
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-      }
-    };
-  }, [audioUrl]);
-
-  const toggleAudio = async () => {
-    if (!audioRef.current) return;
-
-    try {
-      if (isPlaying) {
-        audioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        // Reset audio to beginning if it ended
-        if (audioRef.current.ended) {
-          audioRef.current.currentTime = 0;
-        }
-
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-          await playPromise;
-          // Don't set isPlaying here - let the onPlay event handler do it
-        }
-      }
-    } catch (error) {
-      console.error("Error toggling audio:", error);
-      setIsPlaying(false);
-      setIsAudioLoading(false); // FIXED: Reset loading state on error
-    }
-  };
-
-  // Animated Music Bars Component (blue version)
+  // Animated Music Bars Component
   const AnimatedMusicBars = () => (
     <>
       <style>
@@ -185,42 +173,18 @@ export const Record = ({ record }) => {
       );
     }
 
-    // Handle file previews
-    let fileBlob;
-    let fileUrl;
-
-    try {
-      const byteArray = actualValue.split(",").map((x) => {
-        const num = parseInt(x.trim());
-        return isNaN(num) ? 0 : num;
-      });
-
-      // Set correct MIME type based on file type
-      const mimeType =
-        {
-          pdf: "application/pdf",
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          gif: "image/gif",
-          mp3: "audio/mpeg",
-          wav: "audio/wav",
-          ogg: "audio/ogg",
-          txt: "text/plain",
-          md: "text/markdown",
-        }[fileType] || "application/octet-stream";
-
-      fileBlob = new Blob([new Uint8Array(byteArray)], { type: mimeType });
-      fileUrl = URL.createObjectURL(fileBlob);
-    } catch (error) {
-      console.error("Error creating blob:", error);
+    // Use cached processed file data
+    if (!processedFile) {
       return (
         <div className="text-red-700 bg-red-100 px-3 py-2 rounded">
-          <span className="text-sm">❌ Error loading file</span>
+          <span className="text-sm">❌ Error processing file</span>
         </div>
       );
     }
 
+    const { objectUrl, uint8Array } = processedFile;
+
+    // Handle different file types using cached data
     if (
       ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"].includes(fileType)
     ) {
@@ -229,16 +193,15 @@ export const Record = ({ record }) => {
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-sm font-semibold">🖼️ Image Preview:</span>
             <DownloadButton
-              fileUrl={fileUrl}
+              fileUrl={objectUrl}
               fileName={`image.${fileType}`}
               fileType={fileType}
             />
           </div>
           <img
-            src={fileUrl}
+            src={objectUrl}
             alt="Preview"
             className="max-w-full max-h-80 object-contain rounded border-2 border-green-200"
-            onLoad={() => URL.revokeObjectURL(fileUrl)}
           />
         </div>
       );
@@ -255,15 +218,15 @@ export const Record = ({ record }) => {
             <button
               type="button"
               onClick={toggleAudio}
-              disabled={isAudioLoading || !audioUrl}
+              disabled={isAudioLoading || !objectUrl}
               className={`flex items-center gap-2 px-3 py-1 ${
                 isPlaying
                   ? "bg-sky-500 hover:bg-sky-600 border-sky-700 shadow-[2px_2px_0px_0px_rgba(3,105,161,1)] hover:shadow-[3px_3px_0px_0px_rgba(3,105,161,1)]"
-                  : isAudioLoading || !audioUrl
+                  : isAudioLoading || !objectUrl
                   ? "bg-gray-400 border-gray-600 shadow-[2px_2px_0px_0px_rgba(75,85,99,1)] cursor-not-allowed"
                   : "bg-blue-500 hover:bg-blue-600 border-blue-700 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)]"
               } text-white rounded-lg transition-all duration-200 border-2 ${
-                !isAudioLoading && audioUrl
+                !isAudioLoading && objectUrl
                   ? "active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
                   : ""
               } text-sm font-bold`}
@@ -273,7 +236,7 @@ export const Record = ({ record }) => {
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   <span className="text-xs font-bold">Loading...</span>
                 </>
-              ) : !audioUrl ? (
+              ) : !objectUrl ? (
                 <>
                   <span className="text-xs font-bold">❌ Error</span>
                 </>
@@ -291,10 +254,10 @@ export const Record = ({ record }) => {
               )}
             </button>
           </div>
-          {audioUrl && (
+          {objectUrl && (
             <audio
               ref={audioRef}
-              src={audioUrl}
+              src={objectUrl}
               onLoadStart={() => setIsAudioLoading(true)}
               onCanPlay={() => setIsAudioLoading(false)}
               onEnded={() => {
@@ -324,19 +287,16 @@ export const Record = ({ record }) => {
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-sm font-semibold">📄 PDF Document:</span>
             <DownloadButton
-              fileUrl={fileUrl}
+              fileUrl={objectUrl}
               fileName="document.pdf"
               fileType={fileType}
             />
           </div>
           <iframe
-            src={fileUrl}
+            src={objectUrl}
             className="w-full h-[20.25rem] border-2 border-green-200 rounded"
             title="PDF Preview"
             type="application/pdf"
-            onLoad={() => {
-              setTimeout(() => URL.revokeObjectURL(fileUrl), 5000);
-            }}
           />
         </div>
       );
@@ -344,13 +304,7 @@ export const Record = ({ record }) => {
 
     if (fileType === "md") {
       try {
-        const byteArray = actualValue.split(",").map((x) => {
-          const num = parseInt(x.trim());
-          return isNaN(num) ? 0 : num;
-        });
-        const markdownContent = new TextDecoder().decode(
-          new Uint8Array(byteArray)
-        );
+        const markdownContent = new TextDecoder().decode(uint8Array);
 
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
@@ -359,7 +313,7 @@ export const Record = ({ record }) => {
                 📝 Markdown Content:
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.md"
                 fileType={fileType}
               />
@@ -373,7 +327,6 @@ export const Record = ({ record }) => {
           </div>
         );
       } catch (e) {
-        URL.revokeObjectURL(fileUrl);
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
             <div className="flex items-center justify-between gap-2">
@@ -381,7 +334,7 @@ export const Record = ({ record }) => {
                 📝 Markdown file (preview unavailable)
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.md"
                 fileType={fileType}
               />
@@ -393,11 +346,7 @@ export const Record = ({ record }) => {
 
     if (fileType === "txt") {
       try {
-        const byteArray = actualValue.split(",").map((x) => {
-          const num = parseInt(x.trim());
-          return isNaN(num) ? 0 : num;
-        });
-        const textContent = new TextDecoder().decode(new Uint8Array(byteArray));
+        const textContent = new TextDecoder().decode(uint8Array);
 
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
@@ -406,7 +355,7 @@ export const Record = ({ record }) => {
                 📝 Text File Content:
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.txt"
                 fileType={fileType}
               />
@@ -419,7 +368,6 @@ export const Record = ({ record }) => {
           </div>
         );
       } catch (e) {
-        URL.revokeObjectURL(fileUrl);
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
             <div className="flex items-center justify-between gap-2">
@@ -427,7 +375,7 @@ export const Record = ({ record }) => {
                 📝 Text file (preview unavailable)
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.txt"
                 fileType={fileType}
               />
@@ -438,7 +386,6 @@ export const Record = ({ record }) => {
     }
 
     // Fallback for other file types
-    URL.revokeObjectURL(fileUrl); // Clean up
     return (
       <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
         <span className="text-sm">📎 {fileType.toUpperCase()} file</span>
@@ -462,7 +409,7 @@ export const Record = ({ record }) => {
             />
           </div>
 
-          {/* Value - Now with file preview support */}
+          {/* Value - Now with cached file preview support */}
           <div className="flex items-start gap-2">
             <span className="font-semibold text-green-800 min-w-[80px]">
               Value:
@@ -490,7 +437,6 @@ const DownloadButton = ({ fileUrl, fileName, fileType }) => (
     href={fileUrl}
     download={fileName || `file.${fileType}`}
     className="px-2 py-1 border-2 border-gray-800 bg-gray-500 hover:bg-gray-600 active:bg-gray-500 text-white rounded text-xs font-bold flex-shrink-0"
-    onClick={() => setTimeout(() => URL.revokeObjectURL(fileUrl), 1000)}
   >
     ⬇️ Download
   </a>
