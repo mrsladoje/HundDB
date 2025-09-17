@@ -1,3 +1,4 @@
+import { useFileProcessingCache } from "@/hooks/useFileProcessingCache"; // Import the hook
 import {
   decodeValueWithType,
   isPreviewableType,
@@ -5,12 +6,13 @@ import {
 import React, { useEffect, useRef, useState } from "react";
 import { FaMusic, FaPause, FaPlay } from "react-icons/fa";
 import ReactMarkdown from "react-markdown";
-import { useFileProcessingCache } from "@/hooks/useFileProcessingCache"; // Import the hook
 
 export const Record = ({ record }) => {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isAudioLoading, setIsAudioLoading] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
 
   // Use the cache hook - limit to 5 processed files in memory
   const { processFile, cleanupCache } = useFileProcessingCache(5);
@@ -120,6 +122,24 @@ export const Record = ({ record }) => {
     return date.toLocaleString();
   };
 
+  const formatTime = (time) => {
+    if (!time || isNaN(time)) return "0:00";
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const handleProgressClick = (e) => {
+    if (!audioRef.current || !duration) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const newTime = (clickX / rect.width) * duration;
+
+    audioRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
   // Animated Music Bars Component
   const AnimatedMusicBars = () => (
     <>
@@ -209,60 +229,119 @@ export const Record = ({ record }) => {
 
     if (["mp3", "wav", "ogg"].includes(fileType)) {
       return (
-        <div className="text-green-700 bg-green-100 px-3 py-2 rounded flex items-center justify-between">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex items-center justify-center">
-              <FaMusic className="w-4 h-4 text-green-600 mr-2" />
-              <span className="text-sm font-semibold">Audio File:</span>
+        <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center">
+                <FaMusic className="w-4 h-4 text-green-600 mr-2" />
+                <span className="text-sm font-semibold">Audio File:</span>
+              </div>
+              <button
+                type="button"
+                onClick={toggleAudio}
+                disabled={isAudioLoading || !objectUrl}
+                className={`flex items-center gap-2 px-3 py-1 ${
+                  isPlaying
+                    ? "bg-sky-500 hover:bg-sky-600 border-sky-700 shadow-[2px_2px_0px_0px_rgba(3,105,161,1)] hover:shadow-[3px_3px_0px_0px_rgba(3,105,161,1)]"
+                    : isAudioLoading || !objectUrl
+                    ? "bg-gray-400 border-gray-600 shadow-[2px_2px_0px_0px_rgba(75,85,99,1)] cursor-not-allowed"
+                    : "bg-blue-500 hover:bg-blue-600 border-blue-700 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)]"
+                } text-white rounded-lg transition-all duration-200 border-2 ${
+                  !isAudioLoading && objectUrl
+                    ? "active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+                    : ""
+                } text-sm font-bold`}
+              >
+                {isAudioLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-xs font-bold">Loading...</span>
+                  </>
+                ) : !objectUrl ? (
+                  <>
+                    <span className="text-xs font-bold">❌ Error</span>
+                  </>
+                ) : isPlaying ? (
+                  <>
+                    <AnimatedMusicBars />
+                    <span className="text-xs font-bold">Playing...</span>
+                    <FaPause className="w-3 h-3 flex-shrink-0" />
+                  </>
+                ) : (
+                  <>
+                    <FaPlay className="w-3 h-3 flex-shrink-0" />
+                    <span className="text-xs font-bold">Play Audio</span>
+                  </>
+                )}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={toggleAudio}
-              disabled={isAudioLoading || !objectUrl}
-              className={`flex items-center gap-2 px-3 py-1 ${
-                isPlaying
-                  ? "bg-sky-500 hover:bg-sky-600 border-sky-700 shadow-[2px_2px_0px_0px_rgba(3,105,161,1)] hover:shadow-[3px_3px_0px_0px_rgba(3,105,161,1)]"
-                  : isAudioLoading || !objectUrl
-                  ? "bg-gray-400 border-gray-600 shadow-[2px_2px_0px_0px_rgba(75,85,99,1)] cursor-not-allowed"
-                  : "bg-blue-500 hover:bg-blue-600 border-blue-700 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)]"
-              } text-white rounded-lg transition-all duration-200 border-2 ${
-                !isAudioLoading && objectUrl
-                  ? "active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
-                  : ""
-              } text-sm font-bold`}
-            >
-              {isAudioLoading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-xs font-bold">Loading...</span>
-                </>
-              ) : !objectUrl ? (
-                <>
-                  <span className="text-xs font-bold">❌ Error</span>
-                </>
-              ) : isPlaying ? (
-                <>
-                  <AnimatedMusicBars />
-                  <span className="text-xs font-bold">Playing...</span>
-                  <FaPause className="w-3 h-3 flex-shrink-0" />
-                </>
-              ) : (
-                <>
-                  <FaPlay className="w-3 h-3 flex-shrink-0" />
-                  <span className="text-xs font-bold">Play Audio</span>
-                </>
-              )}
-            </button>
+            <DownloadButton
+              fileUrl={objectUrl}
+              fileName={`audio.${fileType}`}
+              fileType={fileType}
+            />
           </div>
+
+          {/* Audio Progress Bar */}
+          <div className="bg-white px-[0.825rem] py-2 rounded-full border-2 border-green-200">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-mono text-green-700 min-w-[2.5rem]">
+                {formatTime(currentTime)}
+              </span>
+
+              <div className="flex-1 relative">
+                <div
+                  className="w-full h-2 bg-green-200 rounded-full cursor-pointer border-2 border-green-300 shadow-[1px_1px_0px_0px_rgba(34,197,94,0.3)]"
+                  onClick={handleProgressClick}
+                >
+                  <div
+                    className="h-full bg-green-500 rounded-full transition-all duration-100 shadow-[1px_1px_0px_0px_rgba(34,197,94,0.6)]"
+                    style={{
+                      width:
+                        duration > 0
+                          ? `${(currentTime / duration) * 100}%`
+                          : "0%",
+                    }}
+                  />
+                  {/* Progress handle */}
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-green-600 border-2 border-white rounded-full shadow-[2px_2px_0px_0px_rgba(34,197,94,0.4)] transition-all duration-100"
+                    style={{
+                      left:
+                        duration > 0
+                          ? `calc(${(currentTime / duration) * 100}% - 8px)`
+                          : "-8px",
+                    }}
+                  />
+                </div>
+              </div>
+
+              <span className="text-xs font-mono text-green-700 min-w-[2.5rem]">
+                {formatTime(duration)}
+              </span>
+            </div>
+          </div>
+
           {objectUrl && (
             <audio
               ref={audioRef}
               src={objectUrl}
               onLoadStart={() => setIsAudioLoading(true)}
               onCanPlay={() => setIsAudioLoading(false)}
+              onLoadedMetadata={() => {
+                if (audioRef.current) {
+                  setDuration(audioRef.current.duration);
+                }
+              }}
+              onTimeUpdate={() => {
+                if (audioRef.current) {
+                  setCurrentTime(audioRef.current.currentTime);
+                }
+              }}
               onEnded={() => {
                 setIsPlaying(false);
                 setIsAudioLoading(false);
+                setCurrentTime(0);
               }}
               onPlay={() => {
                 setIsPlaying(true);
