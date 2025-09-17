@@ -1,6 +1,7 @@
+import { useFileProcessingCache } from "@/hooks/useFileProcessingCache"; // Import the hook
 import {
-    decodeValueWithType,
-    isPreviewableType,
+  decodeValueWithType,
+  isPreviewableType,
 } from "@/utils/fileTypeEncoder.js";
 import React, { useEffect, useRef, useState } from "react";
 import { FaMusic, FaPause, FaPlay } from "react-icons/fa";
@@ -9,8 +10,69 @@ import ReactMarkdown from "react-markdown";
 export const Record = ({ record }) => {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [audioUrl, setAudioUrl] = useState(null);
   const [isAudioLoading, setIsAudioLoading] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  // Use the cache hook - limit to 5 processed files in memory
+  const { processFile, cleanupCache } = useFileProcessingCache(5);
+
+  // Decode the value to check if it has a file type
+  const { type: fileType, value: actualValue } = decodeValueWithType(
+    record.value
+  );
+
+  // Process the file with caching (only runs when fileType/actualValue changes)
+  const processedFile = React.useMemo(() => {
+    if (!fileType || !isPreviewableType(fileType)) {
+      return null;
+    }
+
+    // Use record.key + timestamp as unique identifier for caching
+    const recordId = `${record.key}-${record.timestamp}`;
+    return processFile(fileType, actualValue, recordId);
+  }, [fileType, actualValue, record.key, record.timestamp, processFile]);
+
+  // Clean up cache when component unmounts
+  useEffect(() => {
+    return () => {
+      cleanupCache();
+    };
+  }, [cleanupCache]);
+
+  // Clean up audio when component unmounts or audio URL changes
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+    };
+  }, [processedFile?.objectUrl]);
+
+  const toggleAudio = async () => {
+    if (!audioRef.current || !processedFile?.objectUrl) return;
+
+    try {
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        if (audioRef.current.ended) {
+          audioRef.current.currentTime = 0;
+        }
+
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          await playPromise;
+        }
+      }
+    } catch (error) {
+      console.error("Error toggling audio:", error);
+      setIsPlaying(false);
+      setIsAudioLoading(false);
+    }
+  };
 
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
@@ -60,79 +122,25 @@ export const Record = ({ record }) => {
     return date.toLocaleString();
   };
 
-  // Decode the value to check if it has a file type
-  const { type: fileType, value: actualValue } = decodeValueWithType(
-    record.value
-  );
-
-  // FIXED: Moved audio URL creation to proper useEffect
-  useEffect(() => {
-    let newAudioUrl = null;
-
-    // Only create audio URL if we have audio file type
-    if (fileType && ["mp3", "wav", "ogg"].includes(fileType)) {
-      try {
-        const byteArray = actualValue.split(",").map((x) => {
-          const num = parseInt(x.trim());
-          return isNaN(num) ? 0 : num;
-        });
-        const fileBlob = new Blob([new Uint8Array(byteArray)]);
-        newAudioUrl = URL.createObjectURL(fileBlob);
-        setAudioUrl(newAudioUrl);
-      } catch (error) {
-        console.error("Error creating audio blob:", error);
-        setIsAudioLoading(false);
-      }
-    }
-
-    // Cleanup function
-    return () => {
-      if (newAudioUrl) {
-        URL.revokeObjectURL(newAudioUrl);
-      }
-    };
-  }, [fileType, actualValue]);
-
-  // Clean up audio and URLs when component unmounts
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-      }
-    };
-  }, [audioUrl]);
-
-  const toggleAudio = async () => {
-    if (!audioRef.current) return;
-
-    try {
-      if (isPlaying) {
-        audioRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        // Reset audio to beginning if it ended
-        if (audioRef.current.ended) {
-          audioRef.current.currentTime = 0;
-        }
-
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-          await playPromise;
-          // Don't set isPlaying here - let the onPlay event handler do it
-        }
-      }
-    } catch (error) {
-      console.error("Error toggling audio:", error);
-      setIsPlaying(false);
-      setIsAudioLoading(false); // FIXED: Reset loading state on error
-    }
+  const formatTime = (time) => {
+    if (!time || isNaN(time)) return "0:00";
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   };
 
-  // Animated Music Bars Component (blue version)
+  const handleProgressClick = (e) => {
+    if (!audioRef.current || !duration) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const newTime = (clickX / rect.width) * duration;
+
+    audioRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  // Animated Music Bars Component
   const AnimatedMusicBars = () => (
     <>
       <style>
@@ -185,42 +193,18 @@ export const Record = ({ record }) => {
       );
     }
 
-    // Handle file previews
-    let fileBlob;
-    let fileUrl;
-
-    try {
-      const byteArray = actualValue.split(",").map((x) => {
-        const num = parseInt(x.trim());
-        return isNaN(num) ? 0 : num;
-      });
-
-      // Set correct MIME type based on file type
-      const mimeType =
-        {
-          pdf: "application/pdf",
-          png: "image/png",
-          jpg: "image/jpeg",
-          jpeg: "image/jpeg",
-          gif: "image/gif",
-          mp3: "audio/mpeg",
-          wav: "audio/wav",
-          ogg: "audio/ogg",
-          txt: "text/plain",
-          md: "text/markdown",
-        }[fileType] || "application/octet-stream";
-
-      fileBlob = new Blob([new Uint8Array(byteArray)], { type: mimeType });
-      fileUrl = URL.createObjectURL(fileBlob);
-    } catch (error) {
-      console.error("Error creating blob:", error);
+    // Use cached processed file data
+    if (!processedFile) {
       return (
         <div className="text-red-700 bg-red-100 px-3 py-2 rounded">
-          <span className="text-sm">❌ Error loading file</span>
+          <span className="text-sm">❌ Error processing file</span>
         </div>
       );
     }
 
+    const { objectUrl, uint8Array } = processedFile;
+
+    // Handle different file types using cached data
     if (
       ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"].includes(fileType)
     ) {
@@ -229,16 +213,15 @@ export const Record = ({ record }) => {
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-sm font-semibold">🖼️ Image Preview:</span>
             <DownloadButton
-              fileUrl={fileUrl}
+              fileUrl={objectUrl}
               fileName={`image.${fileType}`}
               fileType={fileType}
             />
           </div>
           <img
-            src={fileUrl}
+            src={objectUrl}
             alt="Preview"
             className="max-w-full max-h-80 object-contain rounded border-2 border-green-200"
-            onLoad={() => URL.revokeObjectURL(fileUrl)}
           />
         </div>
       );
@@ -246,60 +229,119 @@ export const Record = ({ record }) => {
 
     if (["mp3", "wav", "ogg"].includes(fileType)) {
       return (
-        <div className="text-green-700 bg-green-100 px-3 py-2 rounded flex items-center justify-between">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex items-center justify-center">
-              <FaMusic className="w-4 h-4 text-green-600 mr-2" />
-              <span className="text-sm font-semibold">Audio File:</span>
+        <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center justify-center">
+                <FaMusic className="w-4 h-4 text-green-600 mr-2" />
+                <span className="text-sm font-semibold">Audio File:</span>
+              </div>
+              <button
+                type="button"
+                onClick={toggleAudio}
+                disabled={isAudioLoading || !objectUrl}
+                className={`flex items-center gap-2 px-3 py-1 ${
+                  isPlaying
+                    ? "bg-sky-500 hover:bg-sky-600 border-sky-700 shadow-[2px_2px_0px_0px_rgba(3,105,161,1)] hover:shadow-[3px_3px_0px_0px_rgba(3,105,161,1)]"
+                    : isAudioLoading || !objectUrl
+                    ? "bg-gray-400 border-gray-600 shadow-[2px_2px_0px_0px_rgba(75,85,99,1)] cursor-not-allowed"
+                    : "bg-blue-500 hover:bg-blue-600 border-blue-700 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)]"
+                } text-white rounded-lg transition-all duration-200 border-2 ${
+                  !isAudioLoading && objectUrl
+                    ? "active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+                    : ""
+                } text-sm font-bold`}
+              >
+                {isAudioLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span className="text-xs font-bold">Loading...</span>
+                  </>
+                ) : !objectUrl ? (
+                  <>
+                    <span className="text-xs font-bold">❌ Error</span>
+                  </>
+                ) : isPlaying ? (
+                  <>
+                    <AnimatedMusicBars />
+                    <span className="text-xs font-bold">Playing...</span>
+                    <FaPause className="w-3 h-3 flex-shrink-0" />
+                  </>
+                ) : (
+                  <>
+                    <FaPlay className="w-3 h-3 flex-shrink-0" />
+                    <span className="text-xs font-bold">Play Audio</span>
+                  </>
+                )}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={toggleAudio}
-              disabled={isAudioLoading || !audioUrl}
-              className={`flex items-center gap-2 px-3 py-1 ${
-                isPlaying
-                  ? "bg-sky-500 hover:bg-sky-600 border-sky-700 shadow-[2px_2px_0px_0px_rgba(3,105,161,1)] hover:shadow-[3px_3px_0px_0px_rgba(3,105,161,1)]"
-                  : isAudioLoading || !audioUrl
-                  ? "bg-gray-400 border-gray-600 shadow-[2px_2px_0px_0px_rgba(75,85,99,1)] cursor-not-allowed"
-                  : "bg-blue-500 hover:bg-blue-600 border-blue-700 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)]"
-              } text-white rounded-lg transition-all duration-200 border-2 ${
-                !isAudioLoading && audioUrl
-                  ? "active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
-                  : ""
-              } text-sm font-bold`}
-            >
-              {isAudioLoading ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span className="text-xs font-bold">Loading...</span>
-                </>
-              ) : !audioUrl ? (
-                <>
-                  <span className="text-xs font-bold">❌ Error</span>
-                </>
-              ) : isPlaying ? (
-                <>
-                  <AnimatedMusicBars />
-                  <span className="text-xs font-bold">Playing...</span>
-                  <FaPause className="w-3 h-3 flex-shrink-0" />
-                </>
-              ) : (
-                <>
-                  <FaPlay className="w-3 h-3 flex-shrink-0" />
-                  <span className="text-xs font-bold">Play Audio</span>
-                </>
-              )}
-            </button>
+            <DownloadButton
+              fileUrl={objectUrl}
+              fileName={`audio.${fileType}`}
+              fileType={fileType}
+            />
           </div>
-          {audioUrl && (
+
+          {/* Audio Progress Bar */}
+          <div className="bg-white px-[0.825rem] py-2 rounded-full border-2 border-green-200">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-mono text-green-700 min-w-[2.5rem]">
+                {formatTime(currentTime)}
+              </span>
+
+              <div className="flex-1 relative">
+                <div
+                  className="w-full h-2 bg-green-200 rounded-full cursor-pointer border-2 border-green-300 shadow-[1px_1px_0px_0px_rgba(34,197,94,0.3)]"
+                  onClick={handleProgressClick}
+                >
+                  <div
+                    className="h-full bg-green-500 rounded-full transition-all duration-100 shadow-[1px_1px_0px_0px_rgba(34,197,94,0.6)]"
+                    style={{
+                      width:
+                        duration > 0
+                          ? `${(currentTime / duration) * 100}%`
+                          : "0%",
+                    }}
+                  />
+                  {/* Progress handle */}
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-green-600 border-2 border-white rounded-full shadow-[2px_2px_0px_0px_rgba(34,197,94,0.4)] transition-all duration-100"
+                    style={{
+                      left:
+                        duration > 0
+                          ? `calc(${(currentTime / duration) * 100}% - 8px)`
+                          : "-8px",
+                    }}
+                  />
+                </div>
+              </div>
+
+              <span className="text-xs font-mono text-green-700 min-w-[2.5rem]">
+                {formatTime(duration)}
+              </span>
+            </div>
+          </div>
+
+          {objectUrl && (
             <audio
               ref={audioRef}
-              src={audioUrl}
+              src={objectUrl}
               onLoadStart={() => setIsAudioLoading(true)}
               onCanPlay={() => setIsAudioLoading(false)}
+              onLoadedMetadata={() => {
+                if (audioRef.current) {
+                  setDuration(audioRef.current.duration);
+                }
+              }}
+              onTimeUpdate={() => {
+                if (audioRef.current) {
+                  setCurrentTime(audioRef.current.currentTime);
+                }
+              }}
               onEnded={() => {
                 setIsPlaying(false);
                 setIsAudioLoading(false);
+                setCurrentTime(0);
               }}
               onPlay={() => {
                 setIsPlaying(true);
@@ -324,19 +366,16 @@ export const Record = ({ record }) => {
           <div className="flex items-center justify-between gap-2 mb-2">
             <span className="text-sm font-semibold">📄 PDF Document:</span>
             <DownloadButton
-              fileUrl={fileUrl}
+              fileUrl={objectUrl}
               fileName="document.pdf"
               fileType={fileType}
             />
           </div>
           <iframe
-            src={fileUrl}
+            src={objectUrl}
             className="w-full h-[20.25rem] border-2 border-green-200 rounded"
             title="PDF Preview"
             type="application/pdf"
-            onLoad={() => {
-              setTimeout(() => URL.revokeObjectURL(fileUrl), 5000);
-            }}
           />
         </div>
       );
@@ -344,13 +383,7 @@ export const Record = ({ record }) => {
 
     if (fileType === "md") {
       try {
-        const byteArray = actualValue.split(",").map((x) => {
-          const num = parseInt(x.trim());
-          return isNaN(num) ? 0 : num;
-        });
-        const markdownContent = new TextDecoder().decode(
-          new Uint8Array(byteArray)
-        );
+        const markdownContent = new TextDecoder().decode(uint8Array);
 
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
@@ -359,7 +392,7 @@ export const Record = ({ record }) => {
                 📝 Markdown Content:
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.md"
                 fileType={fileType}
               />
@@ -373,7 +406,6 @@ export const Record = ({ record }) => {
           </div>
         );
       } catch (e) {
-        URL.revokeObjectURL(fileUrl);
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
             <div className="flex items-center justify-between gap-2">
@@ -381,7 +413,7 @@ export const Record = ({ record }) => {
                 📝 Markdown file (preview unavailable)
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.md"
                 fileType={fileType}
               />
@@ -393,11 +425,7 @@ export const Record = ({ record }) => {
 
     if (fileType === "txt") {
       try {
-        const byteArray = actualValue.split(",").map((x) => {
-          const num = parseInt(x.trim());
-          return isNaN(num) ? 0 : num;
-        });
-        const textContent = new TextDecoder().decode(new Uint8Array(byteArray));
+        const textContent = new TextDecoder().decode(uint8Array);
 
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
@@ -406,7 +434,7 @@ export const Record = ({ record }) => {
                 📝 Text File Content:
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.txt"
                 fileType={fileType}
               />
@@ -419,7 +447,6 @@ export const Record = ({ record }) => {
           </div>
         );
       } catch (e) {
-        URL.revokeObjectURL(fileUrl);
         return (
           <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
             <div className="flex items-center justify-between gap-2">
@@ -427,7 +454,7 @@ export const Record = ({ record }) => {
                 📝 Text file (preview unavailable)
               </span>
               <DownloadButton
-                fileUrl={fileUrl}
+                fileUrl={objectUrl}
                 fileName="document.txt"
                 fileType={fileType}
               />
@@ -438,7 +465,6 @@ export const Record = ({ record }) => {
     }
 
     // Fallback for other file types
-    URL.revokeObjectURL(fileUrl); // Clean up
     return (
       <div className="text-green-700 bg-green-100 px-3 py-2 rounded">
         <span className="text-sm">📎 {fileType.toUpperCase()} file</span>
@@ -462,7 +488,7 @@ export const Record = ({ record }) => {
             />
           </div>
 
-          {/* Value - Now with file preview support */}
+          {/* Value - Now with cached file preview support */}
           <div className="flex items-start gap-2">
             <span className="font-semibold text-green-800 min-w-[80px]">
               Value:
@@ -490,7 +516,6 @@ const DownloadButton = ({ fileUrl, fileName, fileType }) => (
     href={fileUrl}
     download={fileName || `file.${fileType}`}
     className="px-2 py-1 border-2 border-gray-800 bg-gray-500 hover:bg-gray-600 active:bg-gray-500 text-white rounded text-xs font-bold flex-shrink-0"
-    onClick={() => setTimeout(() => URL.revokeObjectURL(fileUrl), 1000)}
   >
     ⬇️ Download
   </a>
