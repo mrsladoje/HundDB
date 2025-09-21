@@ -151,7 +151,7 @@ func (bt *BTree) IsFull() bool {
 // Delete marks the key as tombstoned.
 // Behavior:
 //   - If key exists: replace the record with a tombstone and update stats; return true.
-//   - If key does not exist: insert a tombstone via Add() (capacity-checked); return false.
+//   - If key does not exist: insert a tombstone via Put() (capacity-checked); return false.
 func (bt *BTree) Delete(record *model.Record) bool {
 	if record == nil || record.Key == "" {
 		return false

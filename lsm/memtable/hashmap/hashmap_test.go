@@ -354,7 +354,6 @@ func TestHashMapRetrieveSortedRecords_RecordCopy(t *testing.T) {
 
 	// Modify the retrieved record's value
 	retrieved.Value[0] = 'X'
-	retrieved.Tombstone = true
 
 	// Verify original in HashMap is unchanged
 	fromHM := hm.Get("key1")

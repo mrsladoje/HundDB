@@ -76,6 +76,14 @@ func (a *App) Put(key string, value string) error {
 	return nil
 }
 
+func (a *App) Delete(key string) (bool, error) {
+	keyExists, err := a.lsm.Delete(key)
+	if err != nil {
+		return keyExists, fmt.Errorf("error deleting record: %v", err)
+	}
+	return keyExists, nil
+}
+
 // IsDataLost checks if data was lost during LSM loading
 func (a *App) IsDataLost() bool {
 	return a.lsm.IsDataLost()
@@ -86,9 +94,6 @@ func (a *App) PersistLSM() error {
 	return a.lsm.PersistLSM()
 }
 
-func (a *App) Delete() string {
-	return "Not implemented yet"
-}
 func (a *App) PrefixScan() string {
 	return "Not implemented yet"
 }

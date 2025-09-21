@@ -293,6 +293,28 @@ func (lsm *LSM) Put(key string, value []byte) error {
 	return nil
 }
 
+func (lsm *LSM) Delete(key string) (bool, error) {
+
+	record := model.NewRecord(key, nil, uint64(time.Now().UnixNano()), true)
+
+	// TODO: WAL write ahead logging - I removed it because it was failing for larger values
+	// err := lsm.wal.WriteRecord(record)
+	// if err != nil {
+	// 	return err
+	// }
+
+	keyExists := lsm.memtables[len(lsm.memtables)-1].Delete(record)
+
+	err := lsm.checkIfToFlush(key)
+	if err != nil {
+		return keyExists, err
+	}
+
+	lsm.cache.Invalidate(key)
+
+	return keyExists, nil
+}
+
 func (lsm *LSM) checkIfToFlush(key string) error {
 	n := lsm.memtables[len(lsm.memtables)-1]
 	if len(lsm.memtables) == MAX_MEMTABLES && n.IsFull() {
