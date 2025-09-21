@@ -27,8 +27,9 @@ import {
   FaDog,
   FaList,
   FaPlus,
+  FaRegSave,
+  FaRegTrashAlt,
   FaSearch,
-  FaTrash,
 } from "react-icons/fa";
 import { FaFont } from "react-icons/fa6";
 import { MdPermMedia } from "react-icons/md";
@@ -347,12 +348,30 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      await Delete(key);
-      setResult(`Successfully deleted record with key: ${key}`);
-      addOperation("DELETE", key, true, "Record deleted");
-      setStats((prev) => ({ ...prev, deletes: prev.deletes + 1 }));
-      setKey("");
+      const result = await Delete(key);
+
+      // The Go function returns a boolean indicating if the key existed
+      if (result === true) {
+        const resultText = `Successfully deleted record with key: ${key}`;
+        setResult(resultText);
+        addOperation("DELETE", key, true, "Record deleted", null, resultText);
+        setStats((prev) => ({ ...prev, deletes: prev.deletes + 1 }));
+      } else {
+        const notFoundMessage = getRandomDogNotFound("DELETE");
+        setNotFoundMessage(notFoundMessage);
+        addOperation(
+          "DELETE",
+          key,
+          false,
+          null,
+          notFoundMessage,
+          notFoundMessage
+        );
+      }
+
+      setKey(""); // Clear the key input after operation
     } catch (err) {
+      console.error("Delete operation failed:", err);
       const dogError = getRandomDogError("DELETE");
       setError(dogError);
       addOperation("DELETE", key, false, dogError);
@@ -555,9 +574,9 @@ export const Home = () => {
       case "GET":
         return <FaSearch />;
       case "PUT":
-        return <FaPlus />;
+        return <FaRegSave />;
       case "DELETE":
-        return <FaTrash />;
+        return <FaRegTrashAlt />;
       case "PREFIX_SCAN":
       case "RANGE_SCAN":
         return <FaList />;

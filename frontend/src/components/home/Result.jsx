@@ -1,5 +1,5 @@
 import React from "react";
-import { FaBone, FaDog } from "react-icons/fa";
+import { FaBone, FaDog, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
 import Record from "@/components/home/Record";
 
 const Result = ({
@@ -20,7 +20,9 @@ const Result = ({
 
     return (
       <span
-        className={`${className} ${shouldTruncate ? "cursor-help" : ""} !select-text text-left`}
+        className={`${className} ${
+          shouldTruncate ? "cursor-help" : ""
+        } !select-text text-left`}
         title={shouldTruncate ? text : undefined}
       >
         {displayText}
@@ -106,7 +108,7 @@ const Result = ({
             <div className="space-y-4">
               <div className="bg-white/50 rounded-lg p-4 border-2 border-green-300">
                 <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                  <FaRegSave className="w-[1.05rem] h-[1.05rem] text-green-500" />
                   <span className="font-semibold text-green-800">
                     Record Successfully Stored
                   </span>
@@ -127,6 +129,40 @@ const Result = ({
         return (
           <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
             {result || error}
+          </pre>
+        );
+
+      case "DELETE":
+        if (isSuccess && result) {
+          // Extract key from success message
+          const keyMatch = result.match(/key: (.+)$/);
+          const extractedKey = keyMatch ? keyMatch[1] : "Unknown";
+
+          return (
+            <div className="space-y-4">
+              <div className="bg-white/50 rounded-lg p-4 border-2 border-green-300">
+                <div className="flex items-center gap-3">
+                  <FaRegTrashAlt className="w-[1.05rem] h-[1.05rem] text-green-500 rounded-full" />
+                  <span className="font-semibold text-green-800">
+                    Record Successfully Deleted
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-green-700 text-sm">Deleted Key:</span>
+                  <TruncatedText
+                    text={extractedKey}
+                    className="font-mono text-green-700 bg-green-100 px-2 py-1 rounded text-sm"
+                    maxLength={50}
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        }
+        // Fallback to original text display for DELETE
+        return (
+          <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
+            {result || notFoundMessage || error}
           </pre>
         );
 

@@ -77,9 +77,13 @@ func (a *App) Put(key string, value string) error {
 }
 
 func (a *App) Delete(key string) (bool, error) {
+	record, err := a.Get(key)
+	if (err == nil && record == nil) || record["deleted"] == true {
+		return false, nil
+	}
 	keyExists, err := a.lsm.Delete(key)
 	if err != nil {
-		return keyExists, fmt.Errorf("error deleting record: %v", err)
+		return false, fmt.Errorf("error deleting record: %v", err)
 	}
 	return keyExists, nil
 }
