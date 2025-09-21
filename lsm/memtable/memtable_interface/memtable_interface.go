@@ -14,6 +14,10 @@ type MemtableInterface interface {
 	// Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
 	Get(key string) *model.Record
 
+	// GetNextForPrefix returns the next record in lexicographical order for the given prefix, or nil if none exists.
+	// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+	GetNextForPrefix(prefix string, tombstonedKeys *[]string) *model.Record
+
 	// Size returns the number of active (non-tombstoned) keys currently stored.
 	Size() int
 

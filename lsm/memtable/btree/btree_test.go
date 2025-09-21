@@ -486,3 +486,234 @@ func BenchmarkBTree_Delete(b *testing.B) {
 		_ = btree.Delete(createTombstoneRecord(keys[i%numRecords]))
 	}
 }
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_EmptySlice(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+	_ = btree.Put(createTestRecord("prefix456", "value2"))
+
+	tombstoned := []string{}
+	result := btree.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find match")
+	}
+	if result.Key != "prefix123" {
+		t.Errorf("Expected key 'prefix123', got '%s'", result.Key)
+	}
+	if len(tombstoned) != 0 {
+		t.Errorf("Tombstoned slice should remain empty, got %v", tombstoned)
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_PreexistingTombstones(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+	_ = btree.Put(createTestRecord("prefix456", "value2"))
+	_ = btree.Put(createTestRecord("prefix789", "value3"))
+
+	// Simulate that prefix123 was tombstoned in a more recent memtable
+	tombstoned := []string{"prefix123"}
+	result := btree.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find next non-tombstoned match")
+	}
+	if result.Key != "prefix456" {
+		t.Errorf("Expected key 'prefix456', got '%s'", result.Key)
+	}
+	// Tombstoned slice should still only contain prefix123
+	if len(tombstoned) != 1 || tombstoned[0] != "prefix123" {
+		t.Errorf("Tombstoned slice should contain only 'prefix123', got %v", tombstoned)
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_LocalTombstone(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+	_ = btree.Put(createTestRecord("prefix456", "value2"))
+
+	// Mark first record as tombstoned locally
+	_ = btree.Put(createTombstoneRecord("prefix123"))
+
+	tombstoned := []string{}
+	result := btree.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find next non-tombstoned match")
+	}
+	if result.Key != "prefix456" {
+		t.Errorf("Expected key 'prefix456', got '%s'", result.Key)
+	}
+	// Tombstoned slice should now contain prefix123
+	if len(tombstoned) != 1 || tombstoned[0] != "prefix123" {
+		t.Errorf("Expected tombstoned slice to contain 'prefix123', got %v", tombstoned)
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_MixedTombstones(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+	_ = btree.Put(createTestRecord("prefix456", "value2"))
+	_ = btree.Put(createTestRecord("prefix789", "value3"))
+	_ = btree.Put(createTestRecord("prefix999", "value4"))
+
+	// Mark prefix456 as tombstoned locally
+	_ = btree.Put(createTombstoneRecord("prefix456"))
+
+	// Simulate that prefix123 was tombstoned in a more recent memtable
+	tombstoned := []string{"prefix123"}
+	result := btree.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find next non-tombstoned match")
+	}
+	if result.Key != "prefix789" {
+		t.Errorf("Expected key 'prefix789', got '%s'", result.Key)
+	}
+	// Tombstoned slice should now contain both keys
+	expectedTombstoned := []string{"prefix123", "prefix456"}
+	if len(tombstoned) != 2 {
+		t.Fatalf("Expected 2 tombstoned keys, got %d: %v", len(tombstoned), tombstoned)
+	}
+	for _, expected := range expectedTombstoned {
+		found := false
+		for _, actual := range tombstoned {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected tombstoned key '%s' not found in %v", expected, tombstoned)
+		}
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_AllTombstoned(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+	_ = btree.Put(createTestRecord("prefix456", "value2"))
+
+	// Mark both as tombstoned locally
+	_ = btree.Put(createTombstoneRecord("prefix123"))
+	_ = btree.Put(createTombstoneRecord("prefix456"))
+
+	tombstoned := []string{}
+	result := btree.GetNextForPrefix("prefix", &tombstoned)
+
+	if result != nil {
+		t.Errorf("GetNextForPrefix should return nil when all matches are tombstoned, got %v", result)
+	}
+	// Both keys should be added to tombstoned slice
+	if len(tombstoned) != 2 {
+		t.Errorf("Expected 2 tombstoned keys, got %d: %v", len(tombstoned), tombstoned)
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_NilSlice(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+
+	// Test with nil tombstoned slice
+	result := btree.GetNextForPrefix("prefix", nil)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should work with nil tombstoned slice")
+	}
+	if result.Key != "prefix123" {
+		t.Errorf("Expected key 'prefix123', got '%s'", result.Key)
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_NoDuplicates(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("prefix123", "value1"))
+
+	// Mark as tombstoned locally
+	_ = btree.Put(createTombstoneRecord("prefix123"))
+
+	// Pre-populate tombstoned slice with the same key
+	tombstoned := []string{"prefix123"}
+	result := btree.GetNextForPrefix("prefix", &tombstoned)
+
+	if result != nil {
+		t.Errorf("GetNextForPrefix should return nil, got %v", result)
+	}
+	// Should not add duplicate
+	if len(tombstoned) != 1 || tombstoned[0] != "prefix123" {
+		t.Errorf("Tombstoned slice should contain only one 'prefix123', got %v", tombstoned)
+	}
+}
+
+func TestBTree_GetNextForPrefix_WithTombstonedKeys_LargeTree(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(5, 1000)
+
+	// Insert records with prefix "user"
+	for i := 0; i < 50; i++ {
+		key := fmt.Sprintf("user%03d", i)
+		_ = btree.Put(createTestRecord(key, "value"))
+	}
+
+	// Tombstone some keys locally
+	_ = btree.Put(createTombstoneRecord("user000"))
+	_ = btree.Put(createTombstoneRecord("user005"))
+	_ = btree.Put(createTombstoneRecord("user010"))
+
+	// Simulate some keys tombstoned in more recent structures
+	tombstoned := []string{"user001", "user002", "user003"}
+	result := btree.GetNextForPrefix("user", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find a non-tombstoned match")
+	}
+	if result.Key != "user004" {
+		t.Errorf("Expected key 'user004', got '%s'", result.Key)
+	}
+
+	// Check that locally tombstoned keys were added
+	expectedTombstoned := []string{"user001", "user002", "user003", "user000"}
+	if len(tombstoned) != len(expectedTombstoned) {
+		t.Errorf("Expected %d tombstoned keys, got %d: %v", len(expectedTombstoned), len(tombstoned), tombstoned)
+	}
+}
+
+func BenchmarkBTree_GetNextForPrefix_WithTombstones(b *testing.B) {
+	numRecords := 100_000
+	btree := NewBTree(64, numRecords)
+
+	// Insert records with various prefixes
+	for i := 0; i < numRecords; i++ {
+		prefix := fmt.Sprintf("prefix%02d", i%100)
+		key := fmt.Sprintf("%s_%06d", prefix, i)
+		_ = btree.Put(createTestRecord(key, "value"))
+	}
+
+	// Create some tombstoned keys
+	tombstoned := make([]string, 0, 1000)
+	for i := 0; i < 1000; i++ {
+		prefix := fmt.Sprintf("prefix%02d", i%100)
+		key := fmt.Sprintf("%s_%06d", prefix, i)
+		tombstoned = append(tombstoned, key)
+	}
+
+	searchPrefixes := make([]string, 100)
+	for i := 0; i < 100; i++ {
+		searchPrefixes[i] = fmt.Sprintf("prefix%02d", i)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedCopy := make([]string, len(tombstoned))
+		copy(tombstonedCopy, tombstoned)
+		_ = btree.GetNextForPrefix(searchPrefixes[i%100], &tombstonedCopy)
+	}
+}

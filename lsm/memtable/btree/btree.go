@@ -87,6 +87,18 @@ func (bt *BTree) Get(key string) *model.Record {
 	return nil
 }
 
+// GetNextForPrefix returns the next record in lexicographical order for the given prefix.
+// tombstonedKeys is a slice of keys that have been tombstoned in more recent memtables/SSTables.
+// If a matching record is found but is tombstoned (either locally or in tombstonedKeys),
+// the tombstone key is added to tombstonedKeys and the search continues.
+func (bt *BTree) GetNextForPrefix(prefix string, tombstonedKeys *[]string) *model.Record {
+	if bt.root == nil || prefix == "" {
+		return nil
+	}
+
+	return bt.findNextPrefixMatch(prefix, bt.root, "", tombstonedKeys)
+}
+
 // Put inserts or updates a record in the B-tree.
 //
 // Parameters:
@@ -214,6 +226,134 @@ func (bt *BTree) search(key string, node *Node) (*Node, int) {
 	}
 
 	return nil, -1
+}
+
+// isKeyTombstoned checks if a key is in the tombstoned keys slice
+func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
+	if tombstonedKeys == nil {
+		return false
+	}
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// addToTombstoned adds a key to the tombstoned keys slice if it's not already there
+func addToTombstoned(key string, tombstonedKeys *[]string) {
+	if tombstonedKeys == nil {
+		return
+	}
+	// Check if already exists to avoid duplicates
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return
+		}
+	}
+	*tombstonedKeys = append(*tombstonedKeys, key)
+}
+
+// findNextPrefixMatch recursively searches for the first non-tombstoned record with the given prefix.
+// currentKey tracks the current position in the search to ensure we only move forward.
+// tombstonedKeys tracks keys that should be considered deleted.
+func (bt *BTree) findNextPrefixMatch(prefix string, node *Node, currentKey string, tombstonedKeys *[]string) *model.Record {
+	if node == nil {
+		return nil
+	}
+
+	if node.isLeaf {
+		// In a leaf, find the first record >= our current position that matches the prefix
+		startIndex := 0
+		if currentKey != "" {
+			// Find where to start searching in this leaf
+			startIndex = sort.Search(len(node.records), func(i int) bool {
+				return node.records[i].Key > currentKey
+			})
+		} else {
+			// Find first record >= prefix
+			startIndex = sort.Search(len(node.records), func(i int) bool {
+				return node.records[i].Key >= prefix
+			})
+		}
+
+		// Check each record from startIndex onwards
+		for i := startIndex; i < len(node.records); i++ {
+			record := node.records[i]
+			// If key doesn't start with prefix, we've gone too far
+			if len(record.Key) < len(prefix) || record.Key[:len(prefix)] != prefix {
+				return nil
+			}
+
+			// Check if this record is tombstoned locally or in the provided list
+			if record.IsDeleted() {
+				// Add to tombstoned list and continue searching
+				addToTombstoned(record.Key, tombstonedKeys)
+				continue
+			}
+
+			// Check if key is tombstoned in more recent structures
+			if isKeyTombstoned(record.Key, tombstonedKeys) {
+				continue
+			}
+
+			// Found a valid, non-tombstoned record
+			return record
+		}
+		return nil
+	}
+
+	// For internal nodes, we need to search children appropriately
+	startChildIndex := 0
+	if currentKey != "" {
+		// Find which child should contain records > currentKey
+		startChildIndex = sort.Search(len(node.records), func(i int) bool {
+			return node.records[i].Key > currentKey
+		})
+	} else {
+		// Find which child should contain records >= prefix
+		startChildIndex = sort.Search(len(node.records), func(i int) bool {
+			return node.records[i].Key >= prefix
+		})
+	}
+
+	// Search the appropriate child subtree first
+	if startChildIndex < len(node.children) {
+		if result := bt.findNextPrefixMatch(prefix, node.children[startChildIndex], currentKey, tombstonedKeys); result != nil {
+			return result
+		}
+	}
+
+	// Check records in this internal node and their right subtrees
+	for i := startChildIndex; i < len(node.records); i++ {
+		record := node.records[i]
+
+		// If this record matches our criteria, check if it's not tombstoned
+		if len(record.Key) >= len(prefix) && record.Key[:len(prefix)] == prefix {
+			// Check if this record is tombstoned locally
+			if record.IsDeleted() {
+				addToTombstoned(record.Key, tombstonedKeys)
+			} else if !isKeyTombstoned(record.Key, tombstonedKeys) {
+				// Found a valid, non-tombstoned record
+				return record
+			}
+		}
+
+		// If record key doesn't start with prefix and is > prefix, we've gone too far
+		if record.Key > prefix && (len(record.Key) < len(prefix) || record.Key[:len(prefix)] != prefix) {
+			return nil
+		}
+
+		// Search right subtree of this record
+		if i+1 < len(node.children) {
+			if result := bt.findNextPrefixMatch(prefix, node.children[i+1], record.Key, tombstonedKeys); result != nil {
+				return result
+			}
+		}
+	}
+
+	return nil
 }
 
 // findKeyIndex finds the appropriate index for a key in a node using binary search.

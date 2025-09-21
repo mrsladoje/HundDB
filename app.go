@@ -101,12 +101,15 @@ func (a *App) PersistLSM() error {
 func (a *App) PrefixScan() string {
 	return "Not implemented yet"
 }
+
 func (a *App) RangeScan() string {
 	return "Not implemented yet"
 }
+
 func (a *App) PrefixIterate() string {
 	return "Not implemented yet"
 }
+
 func (a *App) RangeIterate() string {
 	return "Not implemented yet"
 }

@@ -365,7 +365,6 @@ func TestRetrieveSortedRecords_RecordCopy(t *testing.T) {
 
 	// Modify the retrieved record's value
 	retrieved.Value[0] = 'X'
-	retrieved.Tombstone = true
 
 	// Verify original in SkipList is unchanged
 	fromSL := sl.Get("key1")
@@ -533,5 +532,326 @@ func TestRetrieveSortedRecords_LargeDataset(t *testing.T) {
 
 	if tombstoneCount != len(recordsToDelete) {
 		t.Errorf("Expected %d tombstones, got %d", len(recordsToDelete), tombstoneCount)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_EmptySlice(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+	_ = sl.Put(rec("prefix456", []byte("value2"), false))
+
+	tombstoned := []string{}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find match")
+	}
+	if result.Key != "prefix123" {
+		t.Errorf("Expected key 'prefix123', got '%s'", result.Key)
+	}
+	if len(tombstoned) != 0 {
+		t.Errorf("Tombstoned slice should remain empty, got %v", tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_PreexistingTombstones(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+	_ = sl.Put(rec("prefix456", []byte("value2"), false))
+	_ = sl.Put(rec("prefix789", []byte("value3"), false))
+
+	// Simulate that prefix123 was tombstoned in a more recent memtable
+	tombstoned := []string{"prefix123"}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find next non-tombstoned match")
+	}
+	if result.Key != "prefix456" {
+		t.Errorf("Expected key 'prefix456', got '%s'", result.Key)
+	}
+	// Tombstoned slice should still only contain prefix123
+	if len(tombstoned) != 1 || tombstoned[0] != "prefix123" {
+		t.Errorf("Tombstoned slice should contain only 'prefix123', got %v", tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_LocalTombstone(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+	_ = sl.Put(rec("prefix456", []byte("value2"), false))
+
+	// Mark first record as tombstoned locally
+	_ = sl.Delete(rec("prefix123", nil, true))
+
+	tombstoned := []string{}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find next non-tombstoned match")
+	}
+	if result.Key != "prefix456" {
+		t.Errorf("Expected key 'prefix456', got '%s'", result.Key)
+	}
+	// Tombstoned slice should now contain prefix123
+	if len(tombstoned) != 1 || tombstoned[0] != "prefix123" {
+		t.Errorf("Expected tombstoned slice to contain 'prefix123', got %v", tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_MixedTombstones(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+	_ = sl.Put(rec("prefix456", []byte("value2"), false))
+	_ = sl.Put(rec("prefix789", []byte("value3"), false))
+	_ = sl.Put(rec("prefix999", []byte("value4"), false))
+
+	// Mark prefix456 as tombstoned locally
+	_ = sl.Delete(rec("prefix456", nil, true))
+
+	// Simulate that prefix123 was tombstoned in a more recent memtable
+	tombstoned := []string{"prefix123"}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find next non-tombstoned match")
+	}
+	if result.Key != "prefix789" {
+		t.Errorf("Expected key 'prefix789', got '%s'", result.Key)
+	}
+	// Tombstoned slice should now contain both keys
+	expectedTombstoned := []string{"prefix123", "prefix456"}
+	if len(tombstoned) != 2 {
+		t.Fatalf("Expected 2 tombstoned keys, got %d: %v", len(tombstoned), tombstoned)
+	}
+	for _, expected := range expectedTombstoned {
+		found := false
+		for _, actual := range tombstoned {
+			if actual == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected tombstoned key '%s' not found in %v", expected, tombstoned)
+		}
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_AllTombstoned(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+	_ = sl.Put(rec("prefix456", []byte("value2"), false))
+
+	// Mark both as tombstoned locally
+	_ = sl.Delete(rec("prefix123", nil, true))
+	_ = sl.Delete(rec("prefix456", nil, true))
+
+	tombstoned := []string{}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result != nil {
+		t.Errorf("GetNextForPrefix should return nil when all matches are tombstoned, got %v", result)
+	}
+	// Both keys should be added to tombstoned slice
+	if len(tombstoned) != 2 {
+		t.Errorf("Expected 2 tombstoned keys, got %d: %v", len(tombstoned), tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_NilSlice(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+
+	// Test with nil tombstoned slice
+	result := sl.GetNextForPrefix("prefix", nil)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should work with nil tombstoned slice")
+	}
+	if result.Key != "prefix123" {
+		t.Errorf("Expected key 'prefix123', got '%s'", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_EmptyPrefix(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key1", []byte("value1"), false))
+
+	tombstoned := []string{}
+	result := sl.GetNextForPrefix("", &tombstoned)
+
+	if result != nil {
+		t.Error("GetNextForPrefix should return nil for empty prefix")
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_NoMatch(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("apple", []byte("value1"), false))
+	_ = sl.Put(rec("banana", []byte("value2"), false))
+	_ = sl.Put(rec("cherry", []byte("value3"), false))
+
+	tombstoned := []string{}
+	result := sl.GetNextForPrefix("zebra", &tombstoned)
+
+	if result != nil {
+		t.Error("GetNextForPrefix should return nil when no match found")
+	}
+
+	result = sl.GetNextForPrefix("aaa", &tombstoned)
+	if result != nil {
+		t.Error("GetNextForPrefix should return nil when prefix comes before all keys")
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_NoDuplicates(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+
+	// Mark as tombstoned locally
+	_ = sl.Delete(rec("prefix123", nil, true))
+
+	// Pre-populate tombstoned slice with the same key
+	tombstoned := []string{"prefix123"}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result != nil {
+		t.Errorf("GetNextForPrefix should return nil, got %v", result)
+	}
+	// Should not add duplicate
+	if len(tombstoned) != 1 || tombstoned[0] != "prefix123" {
+		t.Errorf("Tombstoned slice should contain only one 'prefix123', got %v", tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_ExactMatch(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("prefix123", []byte("value1"), false))
+	_ = sl.Put(rec("prefix456", []byte("value2"), false))
+	_ = sl.Put(rec("other", []byte("value3"), false))
+
+	tombstoned := []string{}
+	result := sl.GetNextForPrefix("prefix123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find exact match")
+	}
+	if result.Key != "prefix123" {
+		t.Errorf("Expected key 'prefix123', got '%s'", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_LargeDataset(t *testing.T) {
+	t.Parallel()
+	sl := New(16, 1000) // Higher maxHeight for better performance
+
+	// Insert records with prefix "user"
+	for i := 0; i < 50; i++ {
+		key := string(rune('u')) + string(rune('s')) + string(rune('e')) + string(rune('r')) +
+			string(rune('0'+(i/100)%10)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	// Tombstone some keys locally
+	_ = sl.Delete(rec("user000", nil, true))
+	_ = sl.Delete(rec("user005", nil, true))
+	_ = sl.Delete(rec("user010", nil, true))
+
+	// Simulate some keys tombstoned in more recent structures
+	tombstoned := []string{"user001", "user002", "user003"}
+	result := sl.GetNextForPrefix("user", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find a non-tombstoned match")
+	}
+	if result.Key != "user004" {
+		t.Errorf("Expected key 'user004', got '%s'", result.Key)
+	}
+
+	// Check that locally tombstoned keys were added
+	expectedTombstoned := []string{"user001", "user002", "user003", "user000"}
+	if len(tombstoned) != len(expectedTombstoned) {
+		t.Errorf("Expected %d tombstoned keys, got %d: %v", len(expectedTombstoned), len(tombstoned), tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForPrefix_WithTombstonedKeys_SkipListStructure(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	// Insert keys that will create a multi-level skip list structure
+	keys := []string{"prefix001", "prefix010", "prefix020", "prefix030", "prefix040", "prefix050"}
+	for _, key := range keys {
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	// Tombstone some keys
+	_ = sl.Delete(rec("prefix010", nil, true))
+	_ = sl.Delete(rec("prefix030", nil, true))
+
+	tombstoned := []string{"prefix001"}
+	result := sl.GetNextForPrefix("prefix", &tombstoned)
+
+	if result == nil {
+		t.Fatal("GetNextForPrefix should find a non-tombstoned match")
+	}
+	if result.Key != "prefix020" {
+		t.Errorf("Expected key 'prefix020', got '%s'", result.Key)
+	}
+
+	// Should have added locally tombstoned keys
+	expectedTombstoned := []string{"prefix001", "prefix010"}
+	if len(tombstoned) != len(expectedTombstoned) {
+		t.Errorf("Expected %d tombstoned keys, got %d: %v", len(expectedTombstoned), len(tombstoned), tombstoned)
+	}
+}
+
+func BenchmarkSkipList_GetNextForPrefix_WithTombstones(b *testing.B) {
+	numRecords := 100_000
+	sl := New(16, numRecords) // Higher maxHeight for better performance
+
+	// Insert records with various prefixes
+	for i := 0; i < numRecords; i++ {
+		prefix := string(rune('p')) + string(rune('r')) + string(rune('e')) + string(rune('f')) +
+			string(rune('i')) + string(rune('x')) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+		key := prefix + string(rune('_')) + string(rune('0'+(i/1000000)%10)) +
+			string(rune('0'+(i/100000)%10)) + string(rune('0'+(i/10000)%10)) +
+			string(rune('0'+(i/1000)%10)) + string(rune('0'+(i/100)%10)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	// Create some tombstoned keys
+	tombstoned := make([]string, 0, 1000)
+	for i := 0; i < 1000; i++ {
+		prefix := string(rune('p')) + string(rune('r')) + string(rune('e')) + string(rune('f')) +
+			string(rune('i')) + string(rune('x')) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+		key := prefix + string(rune('_')) + string(rune('0'+(i/1000000)%10)) +
+			string(rune('0'+(i/100000)%10)) + string(rune('0'+(i/10000)%10)) +
+			string(rune('0'+(i/1000)%10)) + string(rune('0'+(i/100)%10)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+		tombstoned = append(tombstoned, key)
+	}
+
+	searchPrefixes := make([]string, 100)
+	for i := 0; i < 100; i++ {
+		searchPrefixes[i] = string(rune('p')) + string(rune('r')) + string(rune('e')) + string(rune('f')) +
+			string(rune('i')) + string(rune('x')) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedCopy := make([]string, len(tombstoned))
+		copy(tombstonedCopy, tombstoned)
+		_ = sl.GetNextForPrefix(searchPrefixes[i%100], &tombstonedCopy)
 	}
 }

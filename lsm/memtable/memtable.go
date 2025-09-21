@@ -70,6 +70,12 @@ func (mt *MemTable) Get(key string) *model.Record {
 	return mt.impl.Get(key)
 }
 
+func (mt *MemTable) GetNextForPrefix(prefix string, tombstonedKeys *[]string) *model.Record {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.GetNextForPrefix(prefix, tombstonedKeys)
+}
+
 func (mt *MemTable) Size() int {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
