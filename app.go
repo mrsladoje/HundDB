@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hunddb/lsm"
 	model "hunddb/model/record"
+	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+var (
+	ErrKeyNotFound = errors.New("key not found")
 )
 
 // App struct - application layer wrapper for LSM
@@ -51,11 +57,16 @@ func (a *App) recordToMap(record *model.Record) map[string]interface{} {
 
 // Get retrieves a record by key from the LSM
 func (a *App) Get(key string) (map[string]interface{}, error) {
-	record, errorEncountered := a.lsm.Get(key)
+	record, errorEncounteredInCheck, isErrorEncountered := a.lsm.Get(key)
 	var err error
 	err = nil
-	if errorEncountered {
-		err = fmt.Errorf("error retrieving record")
+	if isErrorEncountered {
+		if isKeyNotFoundError(errorEncounteredInCheck) {
+			// Key not found is not considered an error in this context
+			return nil, nil
+		}
+
+		err = errorEncounteredInCheck
 	}
 	if record == nil {
 		return nil, err
@@ -112,4 +123,20 @@ func (a *App) PrefixIterate() string {
 
 func (a *App) RangeIterate() string {
 	return "Not implemented yet"
+}
+
+// Helper function to check if an error is or contains ErrKeyNotFound
+func isKeyNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Direct comparison
+	if errors.Is(err, ErrKeyNotFound) {
+		return true
+	}
+
+	// Check if the error message contains the ErrKeyNotFound message
+	// This handles cases like "some context: key not found"
+	return strings.Contains(err.Error(), ErrKeyNotFound.Error())
 }

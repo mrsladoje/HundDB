@@ -277,7 +277,7 @@ export const Home = () => {
         addOperation("GET", key, false, null, notFoundMessage, notFoundMessage);
       }
     } catch (err) {
-      const dogError = getRandomDogError("GET");
+      const dogError = getRandomDogError("GET") + err;
       setError(dogError);
       addOperation("GET", key, false, dogError);
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));

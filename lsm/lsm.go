@@ -203,13 +203,13 @@ func (lsm *LSM) IsDataLost() bool {
 }
 
 // Get retrieves a record from the LSM by checking the memtables, cache, and SSTables in order.
-func (lsm *LSM) Get(key string) (*model.Record, bool) {
+func (lsm *LSM) Get(key string) (*model.Record, error, bool) {
 
 	errorEncountered := false
 
 	// 1. Check memtables first
 	if record := lsm.checkMemtables(key); record != nil {
-		return record, false
+		return record, nil, false
 	}
 
 	// 2. Check cache
@@ -218,20 +218,20 @@ func (lsm *LSM) Get(key string) (*model.Record, bool) {
 		errorEncountered = true
 	}
 	if err == nil {
-		return record, false
+		return record, nil, false
 	}
 
 	// 3. Check SSTables
-	record, errorEncounteredInCheck := lsm.checkSSTables(key)
-	if errorEncounteredInCheck {
+	record, errorEncounteredInCheck, errorEncounteredInSSTable := lsm.checkSSTables(key)
+	if errorEncounteredInSSTable {
 		errorEncountered = true
 	}
 	if record != nil {
 		lsm.cache.Put(key, record)
-		return record, false
+		return record, nil, false
 	}
 
-	return nil, errorEncountered
+	return nil, errorEncounteredInCheck, errorEncountered
 }
 
 /*
@@ -250,8 +250,9 @@ func (lsm *LSM) checkMemtables(key string) *model.Record {
 /*
 checkSSTables checks the SSTables in reverse order (newest to oldest) for the given key.
 */
-func (lsm *LSM) checkSSTables(key string) (*model.Record, bool) {
+func (lsm *LSM) checkSSTables(key string) (*model.Record, error, bool) {
 	errorEncountered := false
+	var errorEncounteredInCheck error
 	for i := 0; i < len(lsm.levels); i++ {
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
@@ -259,13 +260,14 @@ func (lsm *LSM) checkSSTables(key string) (*model.Record, bool) {
 			record, err := sstable.Get(key, tableIndex)
 			if err != nil {
 				errorEncountered = true
+				errorEncounteredInCheck = err
 			}
 			if err == nil && record != nil {
-				return record, errorEncountered
+				return record, nil, errorEncountered
 			}
 		}
 	}
-	return nil, errorEncountered
+	return nil, errorEncounteredInCheck, errorEncountered
 }
 
 func (lsm *LSM) Put(key string, value []byte) error {
