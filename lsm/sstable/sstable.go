@@ -885,6 +885,9 @@ func Get(key string, index int) (record *record.Record, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to retrieve record from data component (one of bounds): %v", err)
 		}
+		if record.IsDeleted() {
+			return nil, nil
+		}
 		return record, nil
 	}
 	if !config.UseSeparateFiles {
@@ -1166,6 +1169,10 @@ When we reach recursion base case, we do binary search of the index component.
 func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
 	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
+	if indexFirst > indexLast {
+		return 0, false, nil // Key not found, terminate gracefully
+	}
+
 	if indexFirst+1 >= indexLast {
 		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
 		if useSeperateFiles {
@@ -1217,6 +1224,10 @@ func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexF
 Binary search the index entries for the given key, between the specified indexes.
 */
 func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
+
+	if indexFirst > indexLast {
+		return 0, false, nil // Key not found, terminate gracefully
+	}
 
 	if indexFirst == indexLast {
 		finalKey, finalOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(indexFirst)*INDEX_ENTRY_METADATA_SIZE)
