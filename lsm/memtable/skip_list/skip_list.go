@@ -186,11 +186,10 @@ func (s *SkipList) Get(key string) *model.Record {
 	return n.rec
 }
 
-// GetNextForPrefix returns the next record in lexicographical order for the given prefix.
-// tombstonedKeys is a slice of keys that have been tombstoned in more recent memtables/SSTables.
-// If a matching record is found but is tombstoned (either locally or in tombstonedKeys),
-// the tombstone key is added to tombstonedKeys and the search continues.
-func (s *SkipList) GetNextForPrefix(prefix string, tombstonedKeys *[]string) *model.Record {
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (s *SkipList) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
 	if prefix == "" {
 		return nil
 	}
@@ -198,8 +197,8 @@ func (s *SkipList) GetNextForPrefix(prefix string, tombstonedKeys *[]string) *mo
 	// Start from head and traverse level 0 (bottom level) which has all nodes in sorted order
 	current := s.head.nextNodes[0]
 
-	// Find the first node with key >= prefix
-	for current != nil && current.key < prefix {
+	// Find the first node with key > afterKey
+	for current != nil && current.key <= key {
 		current = current.nextNodes[0]
 	}
 

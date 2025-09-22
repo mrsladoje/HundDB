@@ -87,16 +87,15 @@ func (bt *BTree) Get(key string) *model.Record {
 	return nil
 }
 
-// GetNextForPrefix returns the next record in lexicographical order for the given prefix.
-// tombstonedKeys is a slice of keys that have been tombstoned in more recent memtables/SSTables.
-// If a matching record is found but is tombstoned (either locally or in tombstonedKeys),
-// the tombstone key is added to tombstonedKeys and the search continues.
-func (bt *BTree) GetNextForPrefix(prefix string, tombstonedKeys *[]string) *model.Record {
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (bt *BTree) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
 	if bt.root == nil || prefix == "" {
 		return nil
 	}
 
-	return bt.findNextPrefixMatch(prefix, bt.root, "", tombstonedKeys)
+	return bt.findNextPrefixMatchAfterKey(prefix, key, bt.root, tombstonedKeys)
 }
 
 // Put inserts or updates a record in the B-tree.
@@ -255,28 +254,18 @@ func addToTombstoned(key string, tombstonedKeys *[]string) {
 	*tombstonedKeys = append(*tombstonedKeys, key)
 }
 
-// findNextPrefixMatch recursively searches for the first non-tombstoned record with the given prefix.
-// currentKey tracks the current position in the search to ensure we only move forward.
-// tombstonedKeys tracks keys that should be considered deleted.
-func (bt *BTree) findNextPrefixMatch(prefix string, node *Node, currentKey string, tombstonedKeys *[]string) *model.Record {
+// findNextPrefixMatchAfterKey finds the first non-tombstoned record with the given prefix
+// that comes lexicographically after the given key.
+func (bt *BTree) findNextPrefixMatchAfterKey(prefix string, afterKey string, node *Node, tombstonedKeys *[]string) *model.Record {
 	if node == nil {
 		return nil
 	}
 
 	if node.isLeaf {
-		// In a leaf, find the first record >= our current position that matches the prefix
-		startIndex := 0
-		if currentKey != "" {
-			// Find where to start searching in this leaf
-			startIndex = sort.Search(len(node.records), func(i int) bool {
-				return node.records[i].Key > currentKey
-			})
-		} else {
-			// Find first record >= prefix
-			startIndex = sort.Search(len(node.records), func(i int) bool {
-				return node.records[i].Key >= prefix
-			})
-		}
+		// Find the first record > afterKey that matches prefix
+		startIndex := sort.Search(len(node.records), func(i int) bool {
+			return node.records[i].Key > afterKey
+		})
 
 		// Check each record from startIndex onwards
 		for i := startIndex; i < len(node.records); i++ {
@@ -286,9 +275,8 @@ func (bt *BTree) findNextPrefixMatch(prefix string, node *Node, currentKey strin
 				return nil
 			}
 
-			// Check if this record is tombstoned locally or in the provided list
+			// Check if this record is tombstoned locally
 			if record.IsDeleted() {
-				// Add to tombstoned list and continue searching
 				addToTombstoned(record.Key, tombstonedKeys)
 				continue
 			}
@@ -304,23 +292,14 @@ func (bt *BTree) findNextPrefixMatch(prefix string, node *Node, currentKey strin
 		return nil
 	}
 
-	// For internal nodes, we need to search children appropriately
-	startChildIndex := 0
-	if currentKey != "" {
-		// Find which child should contain records > currentKey
-		startChildIndex = sort.Search(len(node.records), func(i int) bool {
-			return node.records[i].Key > currentKey
-		})
-	} else {
-		// Find which child should contain records >= prefix
-		startChildIndex = sort.Search(len(node.records), func(i int) bool {
-			return node.records[i].Key >= prefix
-		})
-	}
+	// For internal nodes, find the appropriate child to start searching from
+	startChildIndex := sort.Search(len(node.records), func(i int) bool {
+		return node.records[i].Key > afterKey
+	})
 
 	// Search the appropriate child subtree first
 	if startChildIndex < len(node.children) {
-		if result := bt.findNextPrefixMatch(prefix, node.children[startChildIndex], currentKey, tombstonedKeys); result != nil {
+		if result := bt.findNextPrefixMatchAfterKey(prefix, afterKey, node.children[startChildIndex], tombstonedKeys); result != nil {
 			return result
 		}
 	}
@@ -329,8 +308,8 @@ func (bt *BTree) findNextPrefixMatch(prefix string, node *Node, currentKey strin
 	for i := startChildIndex; i < len(node.records); i++ {
 		record := node.records[i]
 
-		// If this record matches our criteria, check if it's not tombstoned
-		if len(record.Key) >= len(prefix) && record.Key[:len(prefix)] == prefix {
+		// Only consider records that come after afterKey and match prefix
+		if record.Key > afterKey && len(record.Key) >= len(prefix) && record.Key[:len(prefix)] == prefix {
 			// Check if this record is tombstoned locally
 			if record.IsDeleted() {
 				addToTombstoned(record.Key, tombstonedKeys)
@@ -347,7 +326,7 @@ func (bt *BTree) findNextPrefixMatch(prefix string, node *Node, currentKey strin
 
 		// Search right subtree of this record
 		if i+1 < len(node.children) {
-			if result := bt.findNextPrefixMatch(prefix, node.children[i+1], record.Key, tombstonedKeys); result != nil {
+			if result := bt.findNextPrefixMatchAfterKey(prefix, afterKey, node.children[i+1], tombstonedKeys); result != nil {
 				return result
 			}
 		}

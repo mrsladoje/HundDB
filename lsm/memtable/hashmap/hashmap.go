@@ -84,46 +84,50 @@ func (hm *HashMap) Get(key string) *model.Record {
 	return rec
 }
 
-// GetNextForPrefix returns the next record in lexicographical order for the given prefix.
-// tombstonedKeys is a slice of keys that have been tombstoned in more recent memtables/SSTables.
-// If a matching record is found but is tombstoned (either locally or in tombstonedKeys),
-// the tombstone key is added to tombstonedKeys and the search continues.
-func (hm *HashMap) GetNextForPrefix(prefix string, tombstonedKeys *[]string) *model.Record {
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (hm *HashMap) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
 	if prefix == "" {
 		return nil
 	}
 
 	// Get all keys and sort them
 	keys := make([]string, 0, len(hm.data))
-	for key := range hm.data {
-		keys = append(keys, key)
+	for k := range hm.data {
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
-	// Find the first key >= prefix that matches the prefix
-	for _, key := range keys {
+	// Find the first key > afterKey that matches the prefix
+	for _, k := range keys {
+		// Skip keys that are <= afterKey
+		if k <= key {
+			continue
+		}
+
 		// Skip keys that don't match the prefix
-		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
+		if len(k) < len(prefix) || k[:len(prefix)] != prefix {
 			// If key > prefix and doesn't match prefix, we've gone too far
-			if key > prefix {
+			if k > prefix {
 				break
 			}
 			continue
 		}
 
-		record := hm.data[key]
+		record := hm.data[k]
 		if record == nil {
 			continue
 		}
 
 		// Check if record is tombstoned locally
 		if record.IsDeleted() {
-			addToTombstoned(key, tombstonedKeys)
+			addToTombstoned(k, tombstonedKeys)
 			continue
 		}
 
 		// Check if key is tombstoned in more recent structures
-		if isKeyTombstoned(key, tombstonedKeys) {
+		if isKeyTombstoned(k, tombstonedKeys) {
 			continue
 		}
 
