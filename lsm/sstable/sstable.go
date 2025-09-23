@@ -946,8 +946,16 @@ func GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string, index
 		if err != nil {
 			return nil, fmt.Errorf("failed to deserialize filter (single file): %v", err)
 		}
-		if !filter.Contains([]byte(prependPrefixPrefix(prefix))) {
-			return nil, nil
+
+		maxPrefixLen := len(prefix)
+		if maxPrefixLen > 10 {
+			maxPrefixLen = 10
+		}
+		for prefixLen := 1; prefixLen <= maxPrefixLen; prefixLen++ {
+			checkPrefix := prefix[:prefixLen]
+			if !filter.Contains([]byte(prependPrefixPrefix(checkPrefix))) {
+				return nil, nil
+			}
 		}
 	}
 
@@ -970,47 +978,30 @@ func GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string, index
 	}
 
 	// 2. Index Bounds Check
-	inIndexBounds, oneOfBounds, offsetOfMatchingBound, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBounds(indexPath, indexFileOffset, prefix, config.SparseStepIndex)
+	inIndexBounds, _, _, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForPrefix(indexPath, indexFileOffset, key, config.SparseStepIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check index bounds: %v", err)
 	}
 	if !inIndexBounds {
 		return nil, nil
 	}
-	if oneOfBounds {
-		record, err := retrieveFromDataComponent(dataPath, offsetOfMatchingBound, config.CompressionEnabled)
-		if err != nil {
-			return nil, fmt.Errorf("failed to retrieve record from data component (one of bounds): %v", err)
-		}
-		return record, nil
-	}
 	if !config.UseSeparateFiles {
 		indexFileOffset += STANDARD_FLAG_SIZE
 	}
 
 	// 3. Find starting position - use binary search to get close, then iterate sequentially
-	var searchKey string = prefix
-	if key != "" && key >= prefix {
-		searchKey = key
-	}
+	var searchKey string = key
 
 	// Use existing binary search to find the starting position (approximate)
-	offset, found, err := binarySearchForPrefix(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, prefix, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	offset, _, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform binary search on summary: %v", err)
 	}
 
-	var startingDataOffset uint64
-	if found {
-		startingDataOffset = offset
-	} else {
-		// If not found, binary search gives us a good starting point
-		// We'll need to find the first record >= searchKey sequentially
-		startingDataOffset = offset
-	}
+	var startingDataOffset uint64 = offset
 
 	// 4. Sequential iteration from the starting position
-	return iterateSequentiallyForPrefix(dataPath, startingDataOffset, prefix, key, tombstonedKeys, config.CompressionEnabled)
+	return iterateSequentiallyForPrefix(dataPath, startingDataOffset, prefix, tombstonedKeys, config.CompressionEnabled)
 
 }
 
@@ -1117,11 +1108,60 @@ func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int
 	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
 
 	lastEntryKey, lastEntryDataOffset, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+
 	if err != nil {
 		return false, false, 0, 0, 0, err
 	}
 	if lastEntryKey == key {
 		return true, true, lastEntryDataOffset, 0, 0, nil
+	}
+
+	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
+	crcsFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsFirst*CRC_SIZE
+	physicalOffsetLast := lastEntryOffset
+	crcsLast := (physicalOffsetLast / BLOCK_SIZE) + 1
+	logicalOffsetLast := physicalOffsetLast - crcsLast*CRC_SIZE
+
+	indexOfLastIndexEntry := (logicalOffsetLast - logicalOffsetFirst) / INDEX_ENTRY_METADATA_SIZE
+	indexOfLastSummaryEntry := indexOfLastIndexEntry / uint64(sparseStep)
+
+	return lastEntryKey > key, false, 0, indexOfLastSummaryEntry, indexOfLastIndexEntry, nil
+}
+
+/*
+Returns if the key is within the bounds of the Index Component, (doesn't have to exactly be there due to prefix constraints).
+
+If the key is in the bounds, the function returns true along with the index (ex. 645. or 7328.) of the last entry.
+
+If the key happens to be one of the bounds, we return the offset in Data component of that bound's key.
+
+If the key is not in the bounds, there is no point in searching further.
+*/
+func checkIndexBoundsForPrefix(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
+
+	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+
+	if err != nil {
+		return false, false, 0, 0, 0, err
+	}
+	if key < firstEntryKey {
+		if !strings.HasPrefix(firstEntryKey, key) {
+			return false, false, 0, 0, 0, nil
+		}
+	}
+
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, false, 0, 0, 0, err
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+
+	lastEntryKey, _, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+
+	if err != nil {
+		return false, false, 0, 0, 0, err
 	}
 
 	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
@@ -1263,96 +1303,112 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 }
 
 /*
-Helper function to search for prefix-aware binary search
+lowerBoundSearchSummaryForPrefix performs a lower-bound search in the summary component for the first key >= startingKey.
+If found, it then performs a more precise lower-bound search in the index component to find the exact offset.
 */
-func binarySearchForPrefix(summaryPath string, offsetFirst uint64, indexFirst uint64, indexLast uint64, startingKey string, prefix string, sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
+func lowerBoundSearchSummary(summaryPath string, offsetFirst uint64, indexFirst uint64,
+	indexLast uint64, startingKey string, sparseIndex int, indexFileOffset uint64,
+	useSeparateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
-	if indexFirst+1 >= indexLast {
-		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
-		if useSeperateFiles {
-			indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
-			indexFileOffset += STANDARD_FLAG_SIZE
-		}
+	low := indexFirst
+	high := indexLast
 
-		lastIndex := (indexLast + 1) * uint64(sparseIndex)
-		if lastIndex > originalIndexLast {
-			lastIndex = originalIndexLast - 1
-		}
-		startIndex := uint64(1)
-		if indexFirst > 0 {
-			startIndex = (indexFirst - 1) * uint64(sparseIndex)
-		}
+	for low < high {
+		mid := low + (high-low)/2
 
-		return binarySearchIndexesForPrefix(indexFilePath, startingKey, prefix, indexFileOffset, startIndex, lastIndex)
-	}
+		physicalOffsetFirst := offsetFirst
+		crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+		logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
+		logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
+		crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
+		physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
 
-	physicalOffsetFirst := offsetFirst
-	crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
-	logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
-	mid := indexFirst + (indexLast-indexFirst)/2
-	logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
-	crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
-	physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
-
-	midKey, midOffset, err := readIndexMetadataEntry(summaryPath, physicalOffsetMid)
-	if err != nil {
-		return 0, false, err
-	}
-
-	if midKey == startingKey {
-		return midOffset, true, nil
-	} else if midKey < startingKey {
-		return binarySearchForPrefix(summaryPath, offsetFirst, mid+1, indexLast, startingKey, prefix, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
-	} else {
-		return binarySearchForPrefix(summaryPath, offsetFirst, indexFirst, mid-1, startingKey, prefix, sparseIndex, indexFileOffset, useSeperateFiles, index, originalIndexLast)
-	}
-}
-
-/*
-Binary search index entries for prefix iteration
-*/
-func binarySearchIndexesForPrefix(filepath string, startingKey string, prefix string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
-	if indexFirst == indexLast {
-		finalKey, finalOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(indexFirst)*INDEX_ENTRY_METADATA_SIZE)
+		midKey, _, err := readIndexMetadataEntry(summaryPath, physicalOffsetMid)
 		if err != nil {
 			return 0, false, err
 		}
-		if finalKey == startingKey {
-			return finalOffset, true, nil
+
+		if midKey >= startingKey {
+			if mid == 0 {
+				high = 0
+
+			} else {
+				high = mid - 1
+			}
+		} else {
+			low = mid + 1
 		}
-		// Return the offset even if not exact match - we'll iterate from here
-		if strings.HasPrefix(finalKey, prefix) && finalKey > startingKey {
-			return finalOffset, false, nil
+	}
+
+	indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if useSeparateFiles {
+		indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// Find the index range to search in the IndexComp
+	if low > 0 {
+		low -= 1
+	}
+	startIndex := low * uint64(sparseIndex)
+	endIndex := (high + 2) * uint64(sparseIndex)
+	if endIndex > originalIndexLast {
+		endIndex = originalIndexLast
+	}
+	if endIndex > originalIndexLast {
+		endIndex = originalIndexLast
+	}
+
+	return lowerBoundSearchIndexes(indexFilePath, startingKey, indexFileOffset, startIndex, endIndex)
+}
+
+/*
+lowerBoundSearchIndexes performs a lower-bound search in the index entries to find the first key >= startingKey.
+*/
+func lowerBoundSearchIndexes(filepath string, startingKey string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
+	low := indexFirst
+	high := indexLast
+	var bestOffset uint64 = 0
+
+	for low <= high {
+		mid := low + (high-low)/2
+
+		// Calculate the physical offset of the mid-entry in the index file
+		physicalOffsetFirst := offsetFirst
+		crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+		logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
+		logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
+		crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
+		physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
+
+		midKey, midOffset, err := readIndexMetadataEntry(filepath, physicalOffsetMid)
+		if err != nil {
+			return 0, false, err
 		}
-		return 0, false, nil
+
+		if midKey > startingKey {
+			// This is a potential answer. Store it and try to find an even
+			// better (smaller) key in the left half.
+			bestOffset = midOffset
+			if mid == 0 {
+				high = 0
+				break
+			} else {
+				high = mid - 1
+			}
+		} else { // midKey < startingKey
+			// The answer must be in the right half.
+			low = mid + 1
+		}
 	}
 
-	physicalOffsetFirst := offsetFirst
-	crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
-	logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
-	mid := indexFirst + (indexLast-indexFirst)/2
-	logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
-	crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
-	physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
-
-	midKey, midOffset, err := readIndexMetadataEntry(filepath, physicalOffsetMid)
-	if err != nil {
-		return 0, false, err
-	}
-
-	if midKey == startingKey {
-		return midOffset, true, nil
-	} else if midKey < startingKey {
-		return binarySearchIndexesForPrefix(filepath, startingKey, prefix, offsetFirst, mid+1, indexLast)
-	} else {
-		return binarySearchIndexesForPrefix(filepath, startingKey, prefix, offsetFirst, indexFirst, mid-1)
-	}
+	return bestOffset, bestOffset != 0, nil
 }
 
 /*
 Helper function for sequential iteration.
 */
-func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix string, startKey string, tombstonedKeys *[]string, compressionEnabled bool) (*record.Record, error) {
+func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix string, tombstonedKeys *[]string, compressionEnabled bool) (*record.Record, error) {
 	blockManager := block_manager.GetBlockManager()
 	currentOffset := startOffset
 
@@ -1390,13 +1446,20 @@ func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix st
 			return nil, nil
 		}
 
-		// Skip if this key <= startKey (we want next key after startKey)
-		if startKey != "" && rec.Key <= startKey {
-			continue
-		}
-
 		// Handle tombstones
 		if rec.IsDeleted() {
+
+			isTomstonedAlready := false
+			for _, tombstonedKey := range *tombstonedKeys {
+				if tombstonedKey == rec.Key {
+					isTomstonedAlready = true
+					break
+				}
+			}
+			if isTomstonedAlready {
+				continue
+			}
+
 			// Add to tombstoned list and continue
 			*tombstonedKeys = append(*tombstonedKeys, rec.Key)
 			continue

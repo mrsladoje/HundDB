@@ -2,6 +2,7 @@ package lsm
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hunddb/lsm/block_manager"
 	cache "hunddb/lsm/cache"
@@ -10,6 +11,7 @@ import (
 	wal "hunddb/lsm/wal"
 	model "hunddb/model/record"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -225,13 +227,14 @@ func (lsm *LSM) Get(key string) (*model.Record, error, bool) {
 	record, errorEncounteredInCheck, errorEncounteredInSSTable := lsm.checkSSTables(key)
 	if errorEncounteredInSSTable {
 		errorEncountered = true
+		err = errorEncounteredInCheck
 	}
 	if record != nil {
 		lsm.cache.Put(key, record)
 		return record, nil, false
 	}
 
-	return nil, errorEncounteredInCheck, errorEncountered
+	return nil, err, errorEncountered
 }
 
 /*
@@ -315,6 +318,66 @@ func (lsm *LSM) Delete(key string) (bool, error) {
 	lsm.cache.Invalidate(key)
 
 	return keyExists, nil
+}
+
+/*
+GetNextForPrefix retrieves the next record for a given prefix and start key.
+*/
+func (lsm *LSM) GetNextForPrefix(prefix string, key string) (*model.Record, error) {
+	if !strings.HasPrefix(key, prefix) {
+		return nil, errors.New("key does not match prefix")
+	}
+	tomstonedKeys := make([]string, 0)
+	nextRecord := lsm.checkMemtablesForPrefixIterate(prefix, key, &tomstonedKeys)
+	nextRecordFromSSTable, err := lsm.checkSSTableForPrefixIterate(prefix, key, &tomstonedKeys)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if nextRecordFromSSTable != nil && (nextRecord == nil || nextRecordFromSSTable.Key < nextRecord.Key) {
+		nextRecord = nextRecordFromSSTable
+	}
+
+	return nextRecord, nil
+}
+
+/*
+checkMemtables checks the memtables in reverse order (newest to oldest) for the given key.
+*/
+func (lsm *LSM) checkMemtablesForPrefixIterate(prefix string, key string, tomstonedKeys *[]string) *model.Record {
+	var smallestRecord *model.Record = nil
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		if record := mt.GetNextForPrefix(prefix, key, tomstonedKeys); record != nil {
+			if smallestRecord == nil || record.Key < smallestRecord.Key {
+				smallestRecord = record
+			}
+		}
+	}
+	return smallestRecord
+}
+
+/*
+checkSSTableForPrefixIterate checks the SSTables in reverse order (newest to oldest) for the given key.
+*/
+func (lsm *LSM) checkSSTableForPrefixIterate(prefix string, key string, tomstonedKeys *[]string) (*model.Record, error) {
+	var err error
+	var nextRecord *model.Record = nil
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			record, err := sstable.GetNextForPrefix(prefix, key, tomstonedKeys, tableIndex)
+			if err != nil {
+				return nil, err
+			}
+			if record != nil && (nextRecord == nil || record.Key < nextRecord.Key) {
+				nextRecord = record
+			}
+		}
+	}
+	return nextRecord, err
 }
 
 func (lsm *LSM) checkIfToFlush(key string) error {

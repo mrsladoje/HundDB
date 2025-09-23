@@ -87,6 +87,7 @@ func (a *App) Put(key string, value string) error {
 	return nil
 }
 
+// Delete deletes a key in the LSM
 func (a *App) Delete(key string) (bool, error) {
 	record, err := a.Get(key)
 	if (err == nil && record == nil) || record["deleted"] == true {
@@ -117,8 +118,12 @@ func (a *App) RangeScan() string {
 	return "Not implemented yet"
 }
 
-func (a *App) PrefixIterate() string {
-	return "Not implemented yet"
+func (a *App) PrefixIterate(prefix string, key string) (map[string]interface{}, error) {
+	record, err := a.lsm.GetNextForPrefix(prefix, key)
+	if err != nil {
+		return nil, err
+	}
+	return a.recordToMap(record), nil
 }
 
 func (a *App) RangeIterate() string {
