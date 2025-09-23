@@ -217,8 +217,32 @@ const Result = ({
             </div>
           )}
 
-        {/* Next Button */}
-        <div className="flex justify-end pt-[0.4rem]">
+        {/* Footer */}
+        <div className="flex justify-between pt-[0.4rem]">
+          <div className="mt-2 flex items-center gap-2">
+            <span
+              className={`${
+                operation.notFoundMessage
+                  ? "text-yellow-700"
+                  : !operation.success
+                  ? "text-red-700"
+                  : "text-green-700"
+              } text-md font-medium`}
+            >
+              Prefix:
+            </span>
+            <TruncatedText
+              text={operation.prefix}
+              className={`font-mono ${
+                operation.notFoundMessage
+                  ? "text-yellow-700 bg-yellow-100"
+                  : !operation.success
+                  ? "text-red-700 bg-red-100"
+                  : "text-green-700 bg-green-100"
+              }  px-2 py-1 rounded text-md`}
+              maxLength={50}
+            />
+          </div>
           <button
             onClick={() => onIteratorNext(operation)}
             disabled={operation.ended}

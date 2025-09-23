@@ -138,6 +138,7 @@ const dogNotFoundMessages = {
 // This will be fixed when we add concurrency. Then we won't rely on useStates for
 // result/error/notFoundMessage/etc. but rather on the operations array only.
 // We will just track the current operation.
+// We should also add a unique ID to each operation, so we can track them better.
 
 export const Home = () => {
   const [selectedOperation, setSelectedOperation] = useState("GET");
@@ -238,6 +239,7 @@ export const Home = () => {
       currentKey,
       ended,
       currentRecord,
+      prefix,
       timestamp: new Date().toLocaleTimeString(),
     };
     setOperations((prev) => [operation, ...prev.slice(0, 14)]); // Keep only last 15 operations
@@ -514,9 +516,6 @@ export const Home = () => {
     setIsLoading(true);
     setNotFoundMessage(null);
 
-    console.log(prefix);
-    console.log(`Finding lexicographically smaller for prefix: ${prefix}`);
-
     try {
       const record = await PrefixIterate(
         prefix,
@@ -550,7 +549,8 @@ export const Home = () => {
           notFoundMessage,
           prefix,
           true,
-          null
+          null,
+          prefix
         );
       }
       setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
@@ -566,7 +566,8 @@ export const Home = () => {
         dogError,
         prefix,
         true,
-        null
+        null,
+        prefix
       );
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
@@ -737,7 +738,7 @@ export const Home = () => {
     } else if (operation.type === "PREFIX_SCAN") {
       setPrefix(operation.key);
     } else if (operation.type === "PREFIX_ITERATE") {
-      setPrefix(key);
+      setPrefix(operation.key);
       // For iterators, we want to show the current state and provide next functionality
       if (operation.success && operation.resultData) {
         setResult(operation.resultData);
