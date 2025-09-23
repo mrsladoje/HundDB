@@ -351,6 +351,137 @@ func (bt *BTree) insertRecord(node *Node, record *model.Record) {
 	}
 }
 
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (bt *BTree) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if bt.root == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Collect all matching keys from this memtable
+	bt.scanForPrefixRecursive(bt.root, prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+}
+
+// scanForPrefixRecursive performs the actual recursive scan of the B-tree
+func (bt *BTree) scanForPrefixRecursive(
+	node *Node,
+	prefix string,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	if node == nil {
+		return
+	}
+
+	if node.isLeaf {
+		// Scan all records in this leaf node
+		for _, record := range node.records {
+			bt.processRecordForScan(record, prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+		}
+		return
+	}
+
+	// For internal nodes, we need to traverse both records and children
+	for i := 0; i < len(node.records); i++ {
+		// Visit left child first
+		if i < len(node.children) {
+			bt.scanForPrefixRecursive(node.children[i], prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+		}
+
+		// Process the record at this position
+		bt.processRecordForScan(node.records[i], prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+	}
+
+	// Visit the rightmost child if it exists
+	if len(node.children) > len(node.records) {
+		bt.scanForPrefixRecursive(node.children[len(node.records)], prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+	}
+}
+
+// processRecordForScan processes a single record during the scan operation
+func (bt *BTree) processRecordForScan(
+	record *model.Record,
+	prefix string,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	// Check if key matches prefix
+	if len(record.Key) < len(prefix) || record.Key[:len(prefix)] != prefix {
+		return
+	}
+
+	// Skip if already tombstoned in newer structures
+	if tombstonedSet[record.Key] {
+		return
+	}
+
+	// Skip if already found in newer memtables
+	if bestKeysSet[record.Key] {
+		return
+	}
+
+	// If this record is a tombstone, add to tombstoned set
+	if record.IsDeleted() {
+		if tombstonedKeys != nil {
+			*tombstonedKeys = append(*tombstonedKeys, record.Key)
+			tombstonedSet[record.Key] = true
+		}
+		return
+	}
+
+	// Add to best keys (maintaining sorted order)
+	if bestKeys != nil {
+		*bestKeys = insertKeySorted(*bestKeys, record.Key)
+		bestKeysSet[record.Key] = true
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
+}
+
 // insertIntoLeaf inserts a record into a leaf node.
 func (bt *BTree) insertIntoLeaf(node *Node, record *model.Record) {
 	index := bt.findKeyIndex(node, record.Key)

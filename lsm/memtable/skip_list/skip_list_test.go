@@ -744,3 +744,370 @@ func TestSkipList_GetNextForPrefix_WithKey_MixedTombstones(t *testing.T) {
 		}
 	}
 }
+
+func TestSkipList_ScanForPrefix_EmptySkipList(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("prefix", &tombstoned, &bestKeys, 10, 0)
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected no keys from empty skiplist, got %d keys", len(bestKeys))
+	}
+}
+
+func TestSkipList_ScanForPrefix_BasicScan(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	// Add records with matching prefix
+	_ = sl.Put(rec("user123", []byte("value1"), false))
+	_ = sl.Put(rec("user456", []byte("value2"), false))
+	_ = sl.Put(rec("user789", []byte("value3"), false))
+	// Add records with different prefix
+	_ = sl.Put(rec("admin001", []byte("value4"), false))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys := []string{"user123", "user456", "user789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestSkipList_ScanForPrefix_SkipLocalTombstones(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("user123", []byte("value1"), false))
+	_ = sl.Put(rec("user456", []byte("value2"), false))
+	_ = sl.Put(rec("user789", []byte("value3"), false))
+
+	// Mark user456 as tombstoned locally
+	_ = sl.Delete(rec("user456", nil, true))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	// Should only get non-tombstoned keys
+	expectedKeys := []string{"user123", "user789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	// Should have added tombstoned key to the slice
+	if len(tombstoned) != 1 || tombstoned[0] != "user456" {
+		t.Errorf("Expected tombstoned slice to contain 'user456', got %v", tombstoned)
+	}
+}
+
+func TestSkipList_ScanForPrefix_SkipExternalTombstones(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("user123", []byte("value1"), false))
+	_ = sl.Put(rec("user456", []byte("value2"), false))
+	_ = sl.Put(rec("user789", []byte("value3"), false))
+
+	// Simulate external tombstones
+	tombstoned := []string{"user456"}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	// Should skip externally tombstoned keys
+	expectedKeys := []string{"user123", "user789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+}
+
+func TestSkipList_ScanForPrefix_AvoidDuplicates(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("user123", []byte("value1"), false))
+	_ = sl.Put(rec("user456", []byte("value2"), false))
+	_ = sl.Put(rec("user789", []byte("value3"), false))
+
+	// Simulate existing best keys from previous memtables
+	tombstoned := []string{}
+	bestKeys := []string{"user123", "user999"}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	// Should maintain sorted order and avoid duplicates
+	expectedKeys := []string{"user123", "user456", "user789", "user999"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestSkipList_ScanForPrefix_MaintainsSortedOrder(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	// Insert keys in random order to SkipList
+	keys := []string{"user789", "user123", "user456", "user001", "user999"}
+	for _, key := range keys {
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	// Should be returned in sorted order (SkipList maintains sorted order automatically)
+	expectedKeys := []string{"user001", "user123", "user456", "user789", "user999"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestSkipList_ScanForPrefix_WithMultipleLevels(t *testing.T) {
+	t.Parallel()
+	sl := New(8, 200) // Higher max height to create multi-level structure
+
+	// Insert many keys to potentially create higher-level nodes
+	keys := []string{}
+	for i := 0; i < 50; i++ {
+		key := "user" + string(rune('A'+i%26)) + string(rune('A'+(i/26)%26))
+		keys = append(keys, key)
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 100, 0)
+
+	// Should find all keys regardless of their level in the skiplist
+	if len(bestKeys) != len(keys) {
+		t.Fatalf("Expected %d keys, got %d", len(keys), len(bestKeys))
+	}
+
+	// Verify all keys are present and in sorted order
+	for i := 1; i < len(bestKeys); i++ {
+		if bestKeys[i-1] >= bestKeys[i] {
+			t.Errorf("Keys not in sorted order: %s >= %s at indices %d, %d",
+				bestKeys[i-1], bestKeys[i], i-1, i)
+		}
+	}
+}
+
+func TestSkipList_ScanForPrefix_NoMatches(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("admin123", []byte("value1"), false))
+	_ = sl.Put(rec("admin456", []byte("value2"), false))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected no keys for non-matching prefix, got %d keys: %v", len(bestKeys), bestKeys)
+	}
+}
+
+func TestSkipList_ScanForPrefix_NilParameters(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("user123", []byte("value1"), false))
+	_ = sl.Put(rec("user456", []byte("value2"), false))
+
+	// Test with nil parameters (should not panic)
+	sl.ScanForPrefix("user", nil, nil, 10, 0)
+
+	// Test with nil tombstoned only
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", nil, &bestKeys, 10, 0)
+
+	expectedKeys := []string{"user123", "user456"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+}
+
+func TestSkipList_ScanForPrefix_MixedOperations(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	// Mixed operations: inserts, updates, deletes
+	_ = sl.Put(rec("user003", []byte("value3"), false))
+	_ = sl.Put(rec("user001", []byte("value1"), false))
+	_ = sl.Put(rec("user002", []byte("value2"), false))
+	_ = sl.Put(rec("user001", []byte("updated1"), false)) // update existing
+	_ = sl.Delete(rec("user002", nil, true))              // delete existing
+	_ = sl.Put(rec("user004", []byte("value4"), false))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	// Should only get non-tombstoned keys in sorted order
+	expectedKeys := []string{"user001", "user003", "user004"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+
+	// Should have added tombstoned key to the slice
+	if len(tombstoned) != 1 || tombstoned[0] != "user002" {
+		t.Errorf("Expected tombstoned slice to contain 'user002', got %v", tombstoned)
+	}
+}
+
+func TestSkipList_ScanForPrefix_CombinedWithPreviousResults(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("user003", []byte("value3"), false))
+	_ = sl.Put(rec("user007", []byte("value7"), false))
+	_ = sl.Put(rec("user009", []byte("value9"), false))
+
+	// Simulate previous results from newer memtables
+	tombstoned := []string{"user005"}                     // tombstoned in newer memtable
+	bestKeys := []string{"user001", "user005", "user011"} // from newer memtables
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 10, 0)
+
+	// Should merge and maintain sorted order
+	expectedKeys := []string{"user001", "user003", "user005", "user007", "user009", "user011"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestSkipList_ScanForPrefix_EdgeCasePrefixes(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	_ = sl.Put(rec("a", []byte("value"), false))
+	_ = sl.Put(rec("ab", []byte("value"), false))
+	_ = sl.Put(rec("abc", []byte("value"), false))
+	_ = sl.Put(rec("abcd", []byte("value"), false))
+	_ = sl.Put(rec("abd", []byte("value"), false))
+	_ = sl.Put(rec("b", []byte("value"), false))
+
+	// Test empty prefix (should match all)
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys := []string{"a", "ab", "abc", "abcd", "abd", "b"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys for empty prefix, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	// Test single character prefix
+	tombstoned = []string{}
+	bestKeys = []string{}
+	sl.ScanForPrefix("a", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys = []string{"a", "ab", "abc", "abcd", "abd"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys for prefix 'a', got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	// Test longer prefix
+	tombstoned = []string{}
+	bestKeys = []string{}
+	sl.ScanForPrefix("abc", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys = []string{"abc", "abcd"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys for prefix 'abc', got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+}
+
+func TestSkipList_ScanForPrefix_LargeDataset(t *testing.T) {
+	t.Parallel()
+	sl := New(16, 2000) // Higher max height for better performance with large dataset
+
+	// Insert many records
+	numRecords := 500
+	for i := 0; i < numRecords; i++ {
+		key := "user" + string(rune('A'+i%26)) + string(rune('A'+(i/26)%26)) + string(rune('0'+i%10))
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	// Add some non-matching records
+	for i := 0; i < 50; i++ {
+		key := "admin" + string(rune('A'+i%26)) + string(rune('0'+i%10))
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	sl.ScanForPrefix("user", &tombstoned, &bestKeys, 1000, 0)
+
+	// Should find all user records
+	if len(bestKeys) != numRecords {
+		t.Fatalf("Expected %d user keys, got %d", numRecords, len(bestKeys))
+	}
+
+	// Verify sorted order
+	for i := 1; i < len(bestKeys); i++ {
+		if bestKeys[i-1] >= bestKeys[i] {
+			t.Errorf("Keys not in sorted order: %s >= %s at indices %d, %d",
+				bestKeys[i-1], bestKeys[i], i-1, i)
+		}
+	}
+}
+
+func BenchmarkSkipList_ScanForPrefix(b *testing.B) {
+	sl := New(16, 100000)
+
+	// Setup data
+	numRecords := 10000
+	for i := 0; i < numRecords; i++ {
+		key := "user" + string(rune('A'+i%26)) + string(rune('A'+(i/26)%26)) + string(rune('0'+i%10))
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	// Add some non-matching records
+	for i := 0; i < 1000; i++ {
+		key := "admin" + string(rune('A'+i%26)) + string(rune('0'+i%10))
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstoned := []string{}
+		bestKeys := []string{}
+		sl.ScanForPrefix("user", &tombstoned, &bestKeys, 50, 0)
+	}
+}

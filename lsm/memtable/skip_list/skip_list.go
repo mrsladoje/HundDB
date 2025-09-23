@@ -237,6 +237,103 @@ func (s *SkipList) GetNextForPrefix(prefix string, key string, tombstonedKeys *[
 	return nil
 }
 
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (s *SkipList) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if s.head == nil || s.head.nextNodes[0] == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		// Check if key matches prefix
+		if len(current.key) >= len(prefix) && current.key[:len(prefix)] == prefix {
+			if current.rec != nil {
+				s.processRecordForScan(current.rec, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+			}
+		}
+		current = current.nextNodes[0]
+	}
+}
+
+// processRecordForScan processes a single record during the scan operation
+func (s *SkipList) processRecordForScan(
+	record *model.Record,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	// Skip if already tombstoned in newer structures
+	if tombstonedSet[record.Key] {
+		return
+	}
+
+	// Skip if already found in newer memtables
+	if bestKeysSet[record.Key] {
+		return
+	}
+
+	// If this record is a tombstone, add to tombstoned set
+	if record.IsDeleted() {
+		if tombstonedKeys != nil {
+			*tombstonedKeys = append(*tombstonedKeys, record.Key)
+			tombstonedSet[record.Key] = true
+		}
+		return
+	}
+
+	// Add to best keys (maintaining sorted order)
+	if bestKeys != nil {
+		*bestKeys = insertKeySorted(*bestKeys, record.Key)
+		bestKeysSet[record.Key] = true
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
+}
+
 // isKeyTombstoned checks if a key is in the tombstoned keys slice
 func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
 	if tombstonedKeys == nil {

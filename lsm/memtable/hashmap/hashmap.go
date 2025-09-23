@@ -135,6 +135,99 @@ func (hm *HashMap) GetNextForPrefix(prefix string, key string, tombstonedKeys *[
 	return nil
 }
 
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (hm *HashMap) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if len(hm.data) == 0 {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Get all keys with matching prefix and sort them
+	var matchingKeys []string
+	for key := range hm.data {
+		// Check if key matches prefix
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			matchingKeys = append(matchingKeys, key)
+		}
+	}
+	sort.Strings(matchingKeys)
+
+	// Process each matching key
+	for _, key := range matchingKeys {
+		record := hm.data[key]
+		if record == nil {
+			continue
+		}
+
+		// Skip if already tombstoned in newer structures
+		if tombstonedSet[key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[key] {
+			continue
+		}
+
+		// If this record is a tombstone, add to tombstoned set
+		if record.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, key)
+				tombstonedSet[key] = true
+			}
+			continue
+		}
+
+		// Add to best keys (maintaining sorted order)
+		if bestKeys != nil {
+			*bestKeys = insertKeySorted(*bestKeys, key)
+			bestKeysSet[key] = true
+		}
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
+}
+
 // isKeyTombstoned checks if a key is in the tombstoned keys slice
 func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
 	if tombstonedKeys == nil {

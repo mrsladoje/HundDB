@@ -76,6 +76,17 @@ func (mt *MemTable) GetNextForPrefix(prefix string, key string, tombstonedKeys *
 	return mt.impl.GetNextForPrefix(prefix, key, tombstonedKeys)
 }
 
+func (mt *MemTable) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int) {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	mt.impl.ScanForPrefix(prefix, tombstonedKeys, bestKeys, pageSize, pageNumber)
+}
+
 func (mt *MemTable) Size() int {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
