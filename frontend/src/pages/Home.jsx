@@ -217,7 +217,10 @@ export const Home = () => {
     success,
     message,
     notFoundMessage = null,
-    resultData = null
+    resultData = null,
+    currentKey = null,
+    ended = false,
+    currentRecord = null
   ) => {
     const operation = {
       id: Date.now(),
@@ -227,6 +230,9 @@ export const Home = () => {
       message,
       notFoundMessage,
       resultData,
+      currentKey,
+      ended,
+      currentRecord,
       timestamp: new Date().toLocaleTimeString(),
     };
     setOperations((prev) => [operation, ...prev.slice(0, 14)]); // Keep only last 15 operations
@@ -450,19 +456,126 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      const iterator = await PrefixIterate(prefix);
-      setResult(
-        `Created prefix iterator for: ${prefix}\nUse next() and stop() methods to control iteration.`
-      );
-      addOperation("PREFIX_ITERATE", prefix, true, "Iterator created");
+      const record = await PrefixIterate(prefix, prefix); // Use prefix as both prefix and starting key
+      if (record) {
+        const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
+        setResult(resultText);
+        addOperation(
+          "PREFIX_ITERATE",
+          prefix,
+          true,
+          "Iterator created",
+          null,
+          resultText,
+          record.key,
+          false,
+          record
+        );
+      } else {
+        const notFoundMessage = getRandomDogNotFound("ITERATE");
+        setNotFoundMessage(notFoundMessage);
+        addOperation(
+          "PREFIX_ITERATE",
+          prefix,
+          false,
+          null,
+          notFoundMessage,
+          notFoundMessage,
+          prefix,
+          true,
+          null
+        );
+      }
       setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
     } catch (err) {
       const dogError = getRandomDogError("ITERATE");
       setError(dogError);
-      addOperation("ITERATE", prefix, false, dogError);
+      addOperation(
+        "PREFIX_ITERATE",
+        prefix,
+        false,
+        dogError,
+        null,
+        dogError,
+        prefix,
+        true,
+        null
+      );
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handlePrefixIteratorNext = async (operation) => {
+    if (operation.ended) return;
+
+    try {
+      const record = await PrefixIterate(operation.key, operation.currentKey);
+
+      // Update the operation in the operations array
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === operation.id) {
+            if (record) {
+              const resultText = `Found record: ${JSON.stringify(
+                record,
+                null,
+                2
+              )}`;
+              return {
+                ...op,
+                resultData: resultText,
+                currentKey: record.key,
+                currentRecord: record,
+                success: true,
+                notFoundMessage: null,
+                message: "Next record found",
+              };
+            } else {
+              return {
+                ...op,
+                ended: true,
+                success: false,
+                notFoundMessage: "🐾Iterator has reached the end",
+                message: null,
+                currentRecord: null,
+              };
+            }
+          }
+          return op;
+        })
+      );
+
+      // Update the current result display
+      if (record) {
+        const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
+        setResult(resultText);
+        setError(null);
+        setNotFoundMessage(null);
+      } else {
+        setResult(null);
+        setError(null);
+        setNotFoundMessage("🐾Iterator has reached the end");
+      }
+    } catch (err) {
+      const dogError = getRandomDogError("ITERATE");
+      setError(dogError);
+
+      // Mark operation as ended due to error
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === operation.id) {
+            return {
+              ...op,
+              ended: true,
+              success: false,
+              message: dogError,
+            };
+          }
+          return op;
+        })
+      );
     }
   };
 
@@ -554,11 +667,17 @@ export const Home = () => {
     } else if (operation.type === "PUT") {
       setKey(operation.key);
       // Note: We don't have the original value stored, so we can't restore it
-    } else if (
-      operation.type === "PREFIX_SCAN" ||
-      operation.type === "PREFIX_ITERATE"
-    ) {
+    } else if (operation.type === "PREFIX_SCAN") {
       setPrefix(operation.key);
+    } else if (operation.type === "PREFIX_ITERATE") {
+      // For iterators, we want to show the current state and provide next functionality
+      if (operation.success && operation.resultData) {
+        setResult(operation.resultData);
+      } else if (operation.notFoundMessage) {
+        setNotFoundMessage(operation.notFoundMessage);
+      } else if (!operation.success && operation.message) {
+        setError(operation.message);
+      }
     } else if (
       operation.type === "RANGE_SCAN" ||
       operation.type === "RANGE_ITERATE"
@@ -855,6 +974,15 @@ export const Home = () => {
                 error={error}
                 notFoundMessage={notFoundMessage}
                 isSuccess={!error && !notFoundMessage && !!result}
+                iteratorOperation={
+                  selectedOperation === "PREFIX_ITERATE"
+                    ? operations.find(
+                        (op) =>
+                          op.type === "PREFIX_ITERATE" && op.key === prefix
+                      )
+                    : null
+                }
+                onIteratorNext={handlePrefixIteratorNext}
               />
             )}
           </div>

@@ -25,13 +25,24 @@ export const RecentOperations = ({ operations, onOperationClick }) => {
                   : "bg-red-50 active:bg-red-100/70 border-red-300 hover:border-red-400 hover:translate-x-1 md:hover:translate-x-0.5"
               }`}
             >
-              <div className="flex justify-between items-start text-sm">
+              <div className="flex justify-between items-start text-sm flex-wrap">
                 <div className="flex items-start">
                   <span className="font-bold">{op.type}</span>
                   <span className="text-gray-600 ml-2 inline-block w-32 truncate text-left">
                     {op.key}
                   </span>
                 </div>
+                {op.type === "PREFIX_ITERATE" && (
+                  <span
+                    className={`ml-2 text-xs px-1 py-0.5 rounded ${
+                      op.ended
+                        ? "bg-gray-200 text-gray-600"
+                        : "bg-blue-200 text-blue-700"
+                    }`}
+                  >
+                    {op.ended ? "Ended" : "Active"}
+                  </span>
+                )}
                 <span className="text-xs text-gray-500">{op.timestamp}</span>
               </div>
               <div

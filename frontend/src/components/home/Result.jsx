@@ -8,6 +8,8 @@ const Result = ({
   error,
   notFoundMessage,
   isSuccess = false,
+  iteratorOperation = null,
+  onIteratorNext = null,
 }) => {
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
@@ -166,6 +168,11 @@ const Result = ({
           </pre>
         );
 
+      case "PREFIX_ITERATE":
+        if (iteratorOperation && onIteratorNext) {
+          return renderIteratorContent(iteratorOperation);
+        }
+
       default:
         // For all other operations, use the original text display
         return (
@@ -174,6 +181,58 @@ const Result = ({
           </pre>
         );
     }
+  };
+
+  const renderIteratorContent = (operation) => {
+    if (
+      !operation.currentRecord &&
+      !operation.notFoundMessage &&
+      !operation.message
+    ) {
+      return (
+        <div className="text-center py-4">
+          <span className="text-gray-500">No current record</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* Current Record Display */}
+        {operation.currentRecord && <Record record={operation.currentRecord} />}
+
+        {/* Not Found Message */}
+        {operation.notFoundMessage && !operation.currentRecord && (
+          <div className="text-center py-4 text-yellow-700 bg-yellow-50 rounded-lg border border-yellow-200">
+            {operation.notFoundMessage}
+          </div>
+        )}
+
+        {/* Error Message */}
+        {operation.message &&
+          !operation.success &&
+          !operation.currentRecord && (
+            <div className="text-center py-4 text-red-700 bg-red-50 rounded-lg border border-red-200">
+              {operation.message}
+            </div>
+          )}
+
+        {/* Next Button */}
+        <div className="flex justify-end pt-[0.4rem]">
+          <button
+            onClick={() => onIteratorNext(operation)}
+            disabled={operation.ended}
+            className={`px-4 py-2 rounded-lg font-bold text-sm border-2 transition-all duration-200 ${
+              operation.ended
+                ? "bg-gray-300 text-gray-500 border-gray-400 cursor-not-allowed"
+                : "bg-blue-500 text-white border-blue-700 hover:bg-blue-600 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+            }`}
+          >
+            {operation.ended ? "Iterator Ended" : "Next →"}
+          </button>
+        </div>
+      </div>
+    );
   };
 
   // Determine title based on result type
