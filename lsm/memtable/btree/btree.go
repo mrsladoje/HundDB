@@ -91,7 +91,7 @@ func (bt *BTree) Get(key string) *model.Record {
 // constrained to the given prefix, or nil if none exists.
 // tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
 func (bt *BTree) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
-	if bt.root == nil || prefix == "" {
+	if bt.root == nil {
 		return nil
 	}
 

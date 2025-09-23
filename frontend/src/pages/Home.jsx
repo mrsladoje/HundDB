@@ -26,7 +26,6 @@ import {
   FaDatabase,
   FaDog,
   FaList,
-  FaPlus,
   FaRegSave,
   FaRegTrashAlt,
   FaSearch,
@@ -135,6 +134,11 @@ const dogNotFoundMessages = {
   ],
 };
 
+// TODO: The Results.jsx changes as we change the input. That is obviously bad.
+// This will be fixed when we add concurrency. Then we won't rely on useStates for
+// result/error/notFoundMessage/etc. but rather on the operations array only.
+// We will just track the current operation.
+
 export const Home = () => {
   const [selectedOperation, setSelectedOperation] = useState("GET");
   const [key, setKey] = useState("");
@@ -220,7 +224,8 @@ export const Home = () => {
     resultData = null,
     currentKey = null,
     ended = false,
-    currentRecord = null
+    currentRecord = null,
+    prefix = null
   ) => {
     const operation = {
       id: Date.now(),
@@ -449,14 +454,75 @@ export const Home = () => {
     }
   };
 
+  /**
+   * Finds the lexicographically smaller string that is as close as possible
+   * to the given string using the full UTF-8 character set.
+   * If the input is empty, returns the empty string itself.
+   *
+   * @param {string} str The input string.
+   * @returns {string} The lexicographically smaller string, or empty string if input is empty.
+   */
+  function findLexicographicallySmaller(str) {
+    // If empty string, return empty string (can't get smaller)
+    if (str.length === 0) {
+      return "";
+    }
+
+    // Convert the string to a mutable array of characters.
+    const arr = str.split("");
+    const n = arr.length;
+
+    // Try to find a position where we can decrement a character
+    for (let i = n - 1; i >= 0; i--) {
+      const currentCharCode = arr[i].charCodeAt(0);
+
+      // If we can decrement this character (not at minimum UTF-8 value)
+      if (currentCharCode > 0) {
+        // Decrement the character
+        arr[i] = String.fromCharCode(currentCharCode - 1);
+
+        // Set all characters after this position to the maximum UTF-8 character
+        // to get the lexicographically largest suffix, making the overall string
+        // as close as possible to the original
+        for (let j = i + 1; j < n; j++) {
+          arr[j] = String.fromCharCode(0x10ffff); // Maximum Unicode code point
+        }
+
+        return arr.join("");
+      }
+      // If current character is at minimum (charCode 0), we continue to the next position
+    }
+
+    // If we get here, all characters were at minimum value (all char code 0)
+    // The only string smaller would be a shorter string
+    // Return the string with the last character removed, and set remaining chars to max
+    if (n === 1) {
+      return ""; // Single character at minimum becomes empty string
+    }
+
+    const result = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      result[i] = String.fromCharCode(0x10ffff);
+    }
+
+    return result.join("");
+  }
+
   const handlePrefixIterate = async () => {
     setError(null);
     setResult(null);
     setIsLoading(true);
     setNotFoundMessage(null);
 
+    console.log(prefix);
+    console.log(`Finding lexicographically smaller for prefix: ${prefix}`);
+
     try {
-      const record = await PrefixIterate(prefix, prefix); // Use prefix as both prefix and starting key
+      const record = await PrefixIterate(
+        prefix,
+        findLexicographicallySmaller(prefix)
+      );
+
       if (record) {
         const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
         setResult(resultText);
@@ -469,7 +535,8 @@ export const Home = () => {
           resultText,
           record.key,
           false,
-          record
+          record,
+          prefix
         );
       } else {
         const notFoundMessage = getRandomDogNotFound("ITERATE");
@@ -670,6 +737,7 @@ export const Home = () => {
     } else if (operation.type === "PREFIX_SCAN") {
       setPrefix(operation.key);
     } else if (operation.type === "PREFIX_ITERATE") {
+      setPrefix(key);
       // For iterators, we want to show the current state and provide next functionality
       if (operation.success && operation.resultData) {
         setResult(operation.resultData);
@@ -934,6 +1002,9 @@ export const Home = () => {
                   onChange={(o) => {
                     setValidationError(null);
                     setSelectedOperation(o);
+                    setResult(null);
+                    setError(null);
+                    setNotFoundMessage(null);
                   }}
                   isDisabled={isLoading}
                 />

@@ -190,9 +190,6 @@ func (s *SkipList) Get(key string) *model.Record {
 // constrained to the given prefix, or nil if none exists.
 // tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
 func (s *SkipList) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
-	if prefix == "" {
-		return nil
-	}
 
 	// Start from head and traverse level 0 (bottom level) which has all nodes in sorted order
 	current := s.head.nextNodes[0]

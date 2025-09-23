@@ -88,9 +88,6 @@ func (hm *HashMap) Get(key string) *model.Record {
 // constrained to the given prefix, or nil if none exists.
 // tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
 func (hm *HashMap) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
-	if prefix == "" {
-		return nil
-	}
 
 	// Get all keys and sort them
 	keys := make([]string, 0, len(hm.data))

@@ -434,6 +434,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 			bloomFilter.Add([]byte(prefixWithMarker))
 		}
 	}
+	bloomFilter.Add([]byte(prependPrefixPrefix("")))
 
 	filterComp := &FilterComp{
 		FilePath:    filterFilePath,

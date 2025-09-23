@@ -2,7 +2,6 @@ package lsm
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"hunddb/lsm/block_manager"
 	cache "hunddb/lsm/cache"
@@ -11,7 +10,6 @@ import (
 	wal "hunddb/lsm/wal"
 	model "hunddb/model/record"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -324,9 +322,7 @@ func (lsm *LSM) Delete(key string) (bool, error) {
 GetNextForPrefix retrieves the next record for a given prefix and start key.
 */
 func (lsm *LSM) GetNextForPrefix(prefix string, key string) (*model.Record, error) {
-	if !strings.HasPrefix(key, prefix) {
-		return nil, errors.New("key does not match prefix")
-	}
+
 	tomstonedKeys := make([]string, 0)
 	nextRecord := lsm.checkMemtablesForPrefixIterate(prefix, key, &tomstonedKeys)
 	nextRecordFromSSTable, err := lsm.checkSSTableForPrefixIterate(prefix, key, &tomstonedKeys)
