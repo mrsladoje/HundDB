@@ -12,6 +12,7 @@ import (
 	record "hunddb/model/record"
 	byte_util "hunddb/utils/byte_util"
 	crc_util "hunddb/utils/crc"
+	string_util "hunddb/utils/string_util"
 	"io"
 	"os"
 	"strings"
@@ -1482,6 +1483,255 @@ func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix st
 		// Found a valid record!
 		return rec, nil
 	}
+}
+
+/*
+ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+Only keys are added for memory efficiency - use Get() to retrieve full records.
+Parameters:
+- prefix: the key prefix to search for
+- tombstonedKeys: keys that have been tombstoned in more recent structures
+- bestKeys: best keys found so far from previous memtables (will be modified)
+- pageSize: maximum number of results per page (typically <= 50)
+- pageNumber: which page to return (0-based)
+- index: SSTable index to scan
+*/
+func ScanForPrefix(prefix string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, index int) error {
+	// 0. Deserialize SSTable Config
+	config, sizes, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1. Bloom Filter Check
+	if config.UseSeparateFiles {
+		filterPath := fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index)
+		filterSize, err := getComponentSize(filterPath)
+		if err != nil {
+			return fmt.Errorf("failed to get filter component size: %v", err)
+		}
+		filter, err := deserializeFilter(filterPath, 0, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize filter: %v", err)
+		}
+		if !filter.Contains([]byte(prependPrefixPrefix(prefix))) {
+			return nil // No records with this prefix
+		}
+	} else {
+		filterPath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+		filterOffset := offsets[3]
+		filterSize := sizes[3]
+		filter, err := deserializeFilter(filterPath, filterOffset, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize filter (single file): %v", err)
+		}
+
+		// Check multiple prefix lengths up to 10 characters
+		maxPrefixLen := len(prefix)
+		if maxPrefixLen > 10 {
+			maxPrefixLen = 10
+		}
+		for prefixLen := 1; prefixLen <= maxPrefixLen; prefixLen++ {
+			checkPrefix := prefix[:prefixLen]
+			if !filter.Contains([]byte(prependPrefixPrefix(checkPrefix))) {
+				return nil
+			}
+		}
+	}
+
+	// 1.5. Data, Index and Summary preparation
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check
+	inIndexBounds, _, _, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForPrefix(indexPath, indexFileOffset, prefix, config.SparseStepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to check index bounds: %v", err)
+	}
+	if !inIndexBounds {
+		return nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position using lexicographically smaller string
+	searchKey := string_util.FindLexicographicallySmaller(prefix)
+
+	// Use existing binary search to find the starting position
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	var startingDataOffset uint64
+	if found {
+		startingDataOffset = offset
+	} else {
+		// If not found, start from the beginning of data
+		startingDataOffset = uint64(CRC_SIZE)
+		if config.UseSeparateFiles {
+			startingDataOffset += STANDARD_FLAG_SIZE
+		} else {
+			startingDataOffset = offsets[0] + CRC_SIZE
+		}
+	}
+
+	// 4. Sequential scan from the starting position
+	return scanSequentiallyForPrefixRange(dataPath, startingDataOffset, prefix, tombstonedKeys, bestKeys, pageSize, pageNumber, config.CompressionEnabled)
+}
+
+/*
+scanSequentiallyForPrefixRange scans records sequentially starting from the given offset,
+looking for records with the specified prefix. It handles tombstones and maintains bestKeys with pagination.
+*/
+func scanSequentiallyForPrefixRange(dataPath string, startOffset uint64, prefix string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, compressionEnabled bool) error {
+	blockManager := block_manager.GetBlockManager()
+	currentOffset := startOffset
+
+	// Create sets for efficient lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	var candidateKeys []string
+	foundPrefixRange := false
+
+	// Read records sequentially
+	for {
+		// Read record size
+		recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+		if recordSize == 0 {
+			break // Invalid record size indicates end
+		}
+		currentOffset = newOffset
+
+		// Read record data
+		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		currentOffset = newOffset
+
+		// Deserialize record
+		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+		// Check if we've found the prefix range
+		if strings.HasPrefix(rec.Key, prefix) {
+			foundPrefixRange = true
+		} else if foundPrefixRange {
+			// We've moved past the prefix range, stop scanning
+			break
+		} else {
+			// We haven't reached the prefix range yet, continue scanning
+			continue
+		}
+
+		// Skip if already tombstoned by higher levels
+		if tombstonedSet[rec.Key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[rec.Key] {
+			continue
+		}
+
+		// Handle tombstones
+		if rec.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
+				tombstonedSet[rec.Key] = true
+			}
+			continue
+		}
+
+		// Add to candidate keys
+		candidateKeys = append(candidateKeys, rec.Key)
+		bestKeysSet[rec.Key] = true
+	}
+
+	// Handle pagination
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(candidateKeys) {
+		return nil // No keys for this page
+	}
+
+	if endIndex > len(candidateKeys) {
+		endIndex = len(candidateKeys)
+	}
+
+	// Add paginated keys to bestKeys in sorted order
+	if bestKeys != nil {
+		for i := startIndex; i < endIndex; i++ {
+			*bestKeys = insertKeySortedIfNotExists(*bestKeys, candidateKeys[i])
+		}
+	}
+
+	return nil
+}
+
+// insertKeySortedIfNotExists inserts a key in sorted order into the slice if it doesn't already exist
+func insertKeySortedIfNotExists(keys []string, newKey string) []string {
+	// Check if key already exists
+	for _, key := range keys {
+		if key == newKey {
+			return keys // Key already exists, don't add
+		}
+	}
+
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
 }
 
 /*
