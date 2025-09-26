@@ -110,14 +110,28 @@ func (a *App) PersistLSM() error {
 	return a.lsm.PersistLSM()
 }
 
-func (a *App) PrefixScan() string {
-	return "Not implemented yet"
+// PrefixScan scans for keys with the given prefix using pagination
+func (a *App) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string, error) {
+	if pageSize <= 0 {
+		pageSize = 10 // Default page size
+	}
+	if pageNumber < 0 {
+		pageNumber = 0 // Default to first page
+	}
+
+	keys, err := a.lsm.PrefixScan(prefix, pageSize, pageNumber)
+	if err != nil {
+		return nil, fmt.Errorf("error scanning prefix '%s': %v", prefix, err)
+	}
+
+	return keys, nil
 }
 
 func (a *App) RangeScan() string {
 	return "Not implemented yet"
 }
 
+// PrefixIterate retrieves the next record for a given prefix and key
 func (a *App) PrefixIterate(prefix string, key string) (map[string]interface{}, error) {
 	record, err := a.lsm.GetNextForPrefix(prefix, key)
 	if err != nil {

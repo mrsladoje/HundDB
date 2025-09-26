@@ -376,6 +376,52 @@ func (lsm *LSM) checkSSTableForPrefixIterate(prefix string, key string, tomstone
 	return nextRecord, err
 }
 
+/*
+PrefixScan scans all memtables and SSTables for keys with the given prefix.
+Returns a slice of keys for the specified page.
+Parameters:
+- prefix: the key prefix to search for
+- pageSize: maximum number of results per page
+- pageNumber: which page to return (0-based)
+*/
+func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string, error) {
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+
+	// Check memtables first (newest to oldest)
+	// We use a large page size initially to collect all relevant keys
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		mt.ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10000, 0) // Large page size to get all keys
+	}
+
+	// Check SSTables (newest to oldest)
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			err := sstable.ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10000, 0, tableIndex)
+			if err != nil {
+				return nil, fmt.Errorf("failed to scan SSTable %d: %v", tableIndex, err)
+			}
+		}
+	}
+
+	// Apply pagination to final results
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(bestKeys) {
+		return []string{}, nil // Return empty slice for pages beyond available data
+	}
+
+	if endIndex > len(bestKeys) {
+		endIndex = len(bestKeys)
+	}
+
+	return bestKeys[startIndex:endIndex], nil
+}
+
 func (lsm *LSM) checkIfToFlush(key string) error {
 	n := lsm.memtables[len(lsm.memtables)-1]
 	if len(lsm.memtables) == MAX_MEMTABLES && n.IsFull() {
