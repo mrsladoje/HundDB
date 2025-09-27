@@ -113,7 +113,7 @@ func (a *App) PersistLSM() error {
 // PrefixScan scans for keys with the given prefix using pagination
 func (a *App) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string, error) {
 	if pageSize <= 0 {
-		pageSize = 10 // Default page size
+		pageSize = 5 // Default page size
 	}
 	if pageNumber < 0 {
 		pageNumber = 0 // Default to first page

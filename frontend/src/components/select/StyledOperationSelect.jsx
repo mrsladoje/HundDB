@@ -113,16 +113,16 @@ const operationOptions = [
 ];
 
 // The styled Select component
-const StyledOperationSelect = ({ value, onChange, isDisabled }) => {
+const StyledOperationSelect = ({ value, onChange, isDisabled, options = operationOptions }) => {
   return (
     <Select
-      value={operationOptions.find(option => option.value === value)}
+      value={options.find(option => option.value === value)}
       onChange={(selectedOption) => onChange(selectedOption.value)}
-      options={operationOptions}
+      options={options}
       styles={customSelectStyles}
       isDisabled={isDisabled}
       isSearchable={false}
-      placeholder="Choose your mission..."
+      placeholder="Choose..."
       className="react-select-container"
       classNamePrefix="react-select"
       menuPortalTarget={document.body}

@@ -150,7 +150,7 @@ export const Home = () => {
   const [minKey, setMinKey] = useState("");
   const [maxKey, setMaxKey] = useState("");
   const [pageNumber, setPageNumber] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [result, setResult] = useState(null);
   const [notFoundMessage, setNotFoundMessage] = useState(null);
   const [error, setError] = useState(null);
@@ -226,7 +226,8 @@ export const Home = () => {
     currentKey = null,
     ended = false,
     currentRecord = null,
-    prefix = null
+  prefix = null,
+  extra = null
   ) => {
     const operation = {
       id: Date.now(),
@@ -242,7 +243,8 @@ export const Home = () => {
       prefix,
       timestamp: new Date().toLocaleTimeString(),
     };
-    setOperations((prev) => [operation, ...prev.slice(0, 14)]); // Keep only last 15 operations
+  const opWithExtras = extra && typeof extra === "object" ? { ...operation, ...extra } : operation;
+  setOperations((prev) => [opWithExtras, ...prev.slice(0, 14)]); // Keep only last 15 operations
   };
 
   const validateOperation = () => {
@@ -266,7 +268,17 @@ export const Home = () => {
           return "Please upload a file or switch to text tab to enter a value!";
         }
         break;
-      // ... rest of validation cases
+      case "PREFIX_SCAN":
+        if (pageSize < 1 || pageSize > 20) {
+          return "Page size must be between 1 and 20!";
+        }
+        {
+          const pn = Number(pageNumber);
+          if (!Number.isFinite(pn) || pn < 1) {
+            return "Page number must be at least 1!";
+          }
+        }
+        break;
     }
     return null;
   };
@@ -401,20 +413,42 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      const records = await PrefixScan(prefix, pageNumber, pageSize);
-      const resultText = `Prefix scan results (page ${pageNumber}):\n${JSON.stringify(
-        records,
-        null,
-        2
-      )}`;
-      setResult(resultText);
+      const pn = Number(pageNumber) || 1;
+      const keys = await PrefixScan(prefix, pageSize, pn - 1);
+
+      const isEmpty = !keys || keys.length === 0;
+      const notFoundMsg = isEmpty
+        ? getRandomDogNotFound("SCAN")
+        : null;
+
+      // If nothing found on initial scan: mark as notFound (yellow UI)
+      if (isEmpty) {
+        setNotFoundMessage(notFoundMsg);
+      }
+
       addOperation(
         "PREFIX_SCAN",
         prefix,
-        true,
-        `Found ${records.length} records`
+        !isEmpty,
+        isEmpty
+          ? null
+          : `Found ${keys.length} records on page ${pn}`,
+        isEmpty ? notFoundMsg : null,
+        null,
+        null,
+        false,
+        null,
+        prefix,
+        { pageSize, currentPage: pn, keys, paginationError: false }
       );
       setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
+
+      // Set result to trigger the table display and card coloring
+      setResult(
+        isEmpty
+          ? "No records found for this prefix."
+          : `Prefix scan completed: ${keys.length} records found`
+      );
     } catch (err) {
       const dogError = getRandomDogError("SCAN");
       setError(dogError);
@@ -425,6 +459,44 @@ export const Home = () => {
     }
   };
 
+  const handlePrefixScanPageChange = async (newPage, newPageSize = null) => {
+    const currentOperation = operations.find(
+      (op) => op.type === "PREFIX_SCAN" && op.prefix === prefix
+    );
+    if (!currentOperation) return;
+
+    try {
+      const effectivePageSize = newPageSize || currentOperation.pageSize;
+      const keys = await PrefixScan(prefix, effectivePageSize, Math.max(0, newPage - 1));
+
+  // Update the existing operation instead of creating a new one
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === currentOperation.id) {
+    const hadResultsBefore = Array.isArray(currentOperation.keys) && currentOperation.keys.length > 0;
+    const paginationError = hadResultsBefore && keys.length === 0;
+            return {
+              ...op,
+              currentPage: newPage,
+              pageSize: effectivePageSize,
+              keys: keys,
+              message: `Found ${keys.length} records on page ${newPage}`,
+              timestamp: new Date().toLocaleTimeString(),
+              paginationError,
+            };
+          }
+          return op;
+        })
+      );
+
+  // Pagination empties should NOT turn the whole card yellow
+  setNotFoundMessage(null);
+  setResult(`Prefix scan completed: ${keys.length} records found`);
+    } catch (err) {
+      console.error("Error changing page:", err);
+    }
+  };
+
   const handleRangeScan = async () => {
     setError(null);
     setResult(null);
@@ -432,8 +504,9 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      const records = await RangeScan(minKey, maxKey, pageNumber, pageSize);
-      const resultText = `Range scan results (page ${pageNumber}):\n${JSON.stringify(
+  const pn = Number(pageNumber) || 1;
+  const records = await RangeScan(minKey, maxKey, pn, pageSize);
+  const resultText = `Range scan results (page ${pn}):\n${JSON.stringify(
         records,
         null,
         2
@@ -737,6 +810,8 @@ export const Home = () => {
       // Note: We don't have the original value stored, so we can't restore it
     } else if (operation.type === "PREFIX_SCAN") {
       setPrefix(operation.key);
+      const count = Array.isArray(operation.keys) ? operation.keys.length : 0;
+      setResult(`Prefix scan completed: ${count} records found`);
     } else if (operation.type === "PREFIX_ITERATE") {
       setPrefix(operation.key);
       // For iterators, we want to show the current state and provide next functionality
@@ -918,18 +993,68 @@ export const Home = () => {
       case "PREFIX_SCAN":
       case "PREFIX_ITERATE":
         return (
-          <div>
-            <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-              🎯 Prefix (Starting pattern)
-            </label>
-            <input
-              type="text"
-              placeholder="Enter prefix... woof!"
-              value={prefix}
-              onChange={(e) => setPrefix(e.target.value)}
-              className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
-              disabled={isLoading}
-            />
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                🎯 Prefix (Starting pattern)
+              </label>
+              <input
+                type="text"
+                placeholder="Enter prefix... woof!"
+                value={prefix}
+                onChange={(e) => setPrefix(e.target.value)}
+                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                disabled={isLoading}
+              />
+            </div>
+
+            {selectedOperation === "PREFIX_SCAN" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                    📄 Page Size
+                  </label>
+                  <StyledOperationSelect
+                    value={pageSize}
+                    onChange={(val) => setPageSize(Number(val))}
+                    isDisabled={isLoading}
+                    options={[
+                      { value: 5, label: "5" },
+                      { value: 10, label: "10" },
+                      { value: 20, label: "20" },
+                    ]}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                    🔢 Page Number
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="1"
+                    value={pageNumber}
+                    onChange={(e) => {
+                      const raw = e.target.value || "";
+                      // Keep only digits
+                      let v = raw.replace(/\D/g, "");
+                      // Disallow leading zeros
+                      v = v.replace(/^0+/, "");
+                      // Allow empty while typing
+                      setPageNumber(v);
+                    }}
+                    onBlur={() => {
+                      const pn = Number(pageNumber);
+                      if (!Number.isFinite(pn) || pn < 1) {
+                        setPageNumber(1);
+                      }
+                    }}
+                    className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         );
       case "RANGE_SCAN":
@@ -1055,6 +1180,9 @@ export const Home = () => {
                     : null
                 }
                 onIteratorNext={handlePrefixIteratorNext}
+                operations={operations}
+                onPrefixScanPageChange={handlePrefixScanPageChange}
+                currentPrefix={prefix}
               />
             )}
           </div>

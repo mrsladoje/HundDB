@@ -1,6 +1,7 @@
-import React from "react";
-import { FaBone, FaDog, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
+import { FaDog, FaBone, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
+import PrefixScanTable from "@/components/table/PrefixScanTable";
 import Record from "@/components/home/Record";
+import { Get } from "@wails/main/App.js";
 
 const Result = ({
   operation,
@@ -10,6 +11,9 @@ const Result = ({
   isSuccess = false,
   iteratorOperation = null,
   onIteratorNext = null,
+  operations = [],
+  onPrefixScanPageChange = null,
+  currentPrefix = "",
 }) => {
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
@@ -35,7 +39,6 @@ const Result = ({
   // Parse record data for GET operations
   const parseRecord = (resultString) => {
     try {
-      // Extract JSON from "Found record: {...}" format
       const jsonStart = resultString.indexOf("{");
       if (jsonStart === -1) return null;
 
@@ -89,11 +92,9 @@ const Result = ({
         if (isSuccess && result) {
           const record = parseRecord(result);
           if (record) {
-            // Use the new Record component for GET operations
             return <Record record={record} />;
           }
         }
-        // Fallback to original text display for GET
         return (
           <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
             {result || notFoundMessage || error}
@@ -102,7 +103,6 @@ const Result = ({
 
       case "PUT":
         if (isSuccess && result) {
-          // Extract key from success message
           const keyMatch = result.match(/key: (.+)$/);
           const extractedKey = keyMatch ? keyMatch[1] : "Unknown";
 
@@ -127,7 +127,6 @@ const Result = ({
             </div>
           );
         }
-        // Fallback to original text display for PUT
         return (
           <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
             {result || error}
@@ -136,7 +135,6 @@ const Result = ({
 
       case "DELETE":
         if (isSuccess && result) {
-          // Extract key from success message
           const keyMatch = result.match(/key: (.+)$/);
           const extractedKey = keyMatch ? keyMatch[1] : "Unknown";
 
@@ -161,7 +159,6 @@ const Result = ({
             </div>
           );
         }
-        // Fallback to original text display for DELETE
         return (
           <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
             {result || notFoundMessage || error}
@@ -173,8 +170,78 @@ const Result = ({
           return renderIteratorContent(iteratorOperation);
         }
 
+      case "PREFIX_SCAN":
+        if (!error) {
+          let currentOperation = operations?.find(
+            (op) => op.type === "PREFIX_SCAN" && op.prefix === currentPrefix
+          );
+          if (!currentOperation) {
+            currentOperation = operations?.find((op) => op.type === "PREFIX_SCAN");
+          }
+          if (currentOperation) {
+            return (
+              <div className="flex flex-col gap-4">
+                <div className="mt-2 flex items-center gap-2">
+                  <span
+                    className={`${
+                      currentOperation.notFoundMessage
+                        ? "text-yellow-700"
+                        : !currentOperation.success
+                        ? "text-red-700"
+                        : "text-green-700"
+                    } text-md font-medium`}
+                  >
+                    Prefix:
+                  </span>
+                  <TruncatedText
+                    text={currentOperation.prefix}
+                    className={`font-mono ${
+                      currentOperation.notFoundMessage
+                        ? "text-yellow-700 bg-yellow-100"
+                        : !currentOperation.success
+                        ? "text-red-700 bg-red-100"
+                        : "text-green-700 bg-green-100"
+                    }  px-2 py-1 rounded text-md`}
+                    maxLength={50}
+                  />
+                </div>
+                <PrefixScanTable
+                  operation={currentOperation}
+                  onPageChange={async (newPage, newPageSize) => {
+                    if (onPrefixScanPageChange) {
+                      await onPrefixScanPageChange(newPage, newPageSize);
+                    }
+                  }}
+                  onViewRecord={async (key) => {
+                    try {
+                      const record = await Get(key);
+                      if (record) {
+                        return {
+                          key: record.key,
+                          value: record.value,
+                          timestamp: record.timestamp,
+                          deleted: record.deleted,
+                        };
+                      }
+                      return null;
+                    } catch (error) {
+                      console.error("Error fetching record:", error);
+                      return null;
+                    }
+                  }}
+                  isLoading={false}
+                />
+              </div>
+            );
+          }
+        }
+        return (
+          <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
+            {result || notFoundMessage || error}
+          </pre>
+        );
+
       default:
-        // For all other operations, use the original text display
         return (
           <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
             {result || notFoundMessage || error}
@@ -198,17 +265,14 @@ const Result = ({
 
     return (
       <div className="space-y-4">
-        {/* Current Record Display */}
         {operation.currentRecord && <Record record={operation.currentRecord} />}
 
-        {/* Not Found Message */}
         {operation.notFoundMessage && !operation.currentRecord && (
           <div className="text-center py-4 text-yellow-700 bg-yellow-50 rounded-lg border border-yellow-200">
             {operation.notFoundMessage}
           </div>
         )}
 
-        {/* Error Message */}
         {operation.message &&
           !operation.success &&
           !operation.currentRecord && (
@@ -217,7 +281,6 @@ const Result = ({
             </div>
           )}
 
-        {/* Footer */}
         <div className="flex justify-between pt-[0.4rem]">
           <div className="mt-2 flex items-center gap-2">
             <span
@@ -259,7 +322,6 @@ const Result = ({
     );
   };
 
-  // Determine title based on result type
   const getTitle = () => {
     if (error) return "Something went wrong!";
     if (notFoundMessage) return "Record not found!";
@@ -279,7 +341,6 @@ const Result = ({
 
       <div className={colors.contentColor}>{renderContent()}</div>
 
-      {/* Result decoration */}
       <FaBone
         className={`absolute top-2 right-2 text-2xl opacity-20 ${colors.boneColor}`}
       />
