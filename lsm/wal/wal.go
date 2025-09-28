@@ -35,7 +35,7 @@ type WAL struct {
 func NewWAL(dirPath string, logIndex uint32) *WAL {
 	return &WAL{
 		lastBlock:          make([]byte, BLOCK_SIZE),
-		offsetInBlock:      0,
+		offsetInBlock:      crc.CRC_SIZE,
 		blocksInCurrentLog: 0,
 		lastLogIndex:       logIndex,
 		dirPath:            dirPath,
@@ -66,7 +66,7 @@ func (wal *WAL) WriteRecord(record *record.Record) error {
 // writeFragmentedRecord handles records larger than a single block by splitting them into fragments.
 // All fragments for a record are kept within the same log file.
 func (wal *WAL) writeFragmentedRecord(payload []byte) error {
-	maxPayloadSize := int(BLOCK_SIZE) - HEADER_TOTAL_SIZE
+	maxPayloadSize := int(BLOCK_SIZE) - HEADER_TOTAL_SIZE - crc.CRC_SIZE
 	numberOfFragments := int(math.Ceil(float64(len(payload)) / float64(maxPayloadSize)))
 
 	// Ensure all fragments fit in the current log
@@ -110,8 +110,7 @@ func (wal *WAL) writeFragmentedRecord(payload []byte) error {
 // fragmentType: the fragment type (FULL, FIRST, MIDDLE, LAST).
 func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 	header := NewWALHeader(
-		crc.GetCRC(payload),
-		uint16(len(payload)),
+		uint64(len(payload)),
 		fragmentType,
 		wal.lastLogIndex,
 	).Serialize()
@@ -138,6 +137,7 @@ func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 // TODO: Agree on the correct path to logs
 // flushCurrentAndMakeNewBlock writes the current block to storage and prepares for the next block.
 func (wal *WAL) flushCurrentAndMakeNewBlock() error {
+	wal.lastBlock = crc.AddCRCToBlockData(wal.lastBlock)
 	err := bm.GetBlockManager().WriteBlock(block_location.BlockLocation{
 		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, wal.lastLogIndex),
 		BlockIndex: uint64(wal.blocksInCurrentLog),
@@ -147,7 +147,7 @@ func (wal *WAL) flushCurrentAndMakeNewBlock() error {
 	}
 
 	wal.lastBlock = make([]byte, BLOCK_SIZE)
-	wal.offsetInBlock = 0
+	wal.offsetInBlock = crc.CRC_SIZE
 	wal.blocksInCurrentLog++
 
 	// Start new log if current log is full
