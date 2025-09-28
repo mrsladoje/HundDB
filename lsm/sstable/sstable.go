@@ -2267,18 +2267,20 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 	if config.UseSeparateFiles {
 		dataPath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
 		dataCompSizeBytes, dataStartOffset, err := blockManager.ReadFromDisk(dataPath, 0, uint64(STANDARD_FLAG_SIZE))
-		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
-			FilePath:   dataPath,
-			BlockIndex: 0,
-		})
 		if err != nil {
+			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+				FilePath:   dataPath,
+				BlockIndex: 0,
+			})
 			return false, corruptDataBlocks, true, fmt.Errorf("failed to read data file size: %v", err)
 		}
 		dataOffset = dataStartOffset
 		dataCompSize := binary.LittleEndian.Uint64(dataCompSizeBytes)
-		dataEndOffset = crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(dataOffset) + dataCompSize)
-	}
-	if !config.UseSeparateFiles {
+
+		totalLogicalSize := STANDARD_FLAG_SIZE + dataCompSize
+		dataEndOffset = crc_util.SizeAfterAddingCRCs(totalLogicalSize)
+
+	} else {
 		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
 		dataOffset = offsets[0] + CRC_SIZE
 		dataCompSize := sizes[0]
@@ -2463,6 +2465,12 @@ func Compact(sstableIndexes []int, newIndex int) error {
 		return fmt.Errorf("failed to create compacted components: %v", err)
 	}
 
+	// 8. Clean up old SSTable files after successful compaction
+	err = cleanupOldSSTables(sstableIndexes)
+	if err != nil {
+		return fmt.Errorf("compaction succeeded but failed to clean up old files: %v", err)
+	}
+
 	return nil
 }
 
@@ -2508,7 +2516,7 @@ func performStreamingDataCompaction(state *CompactionState) error {
 
 		// Create index entry using total logical bytes so far (since data start)
 		noOfBlocks := uint64(state.totalLogical / (BLOCK_SIZE - CRC_SIZE))
-		actualOffset := state.currentDataOffset + noOfBlocks*CRC_SIZE
+		actualOffset := state.dataPhysicalBase + state.totalLogical + noOfBlocks*CRC_SIZE
 
 		state.indexEntries = append(state.indexEntries, IndexEntry{
 			Key:    currentRecord.Key,
@@ -2581,18 +2589,17 @@ func performStreamingDataCompaction(state *CompactionState) error {
 		if err != nil {
 			return fmt.Errorf("failed to read first data block for patching: %v", err)
 		}
-		// Extract data portion
-		if uint64(len(blk)) < BLOCK_SIZE {
+		if uint64(len(blk)) != BLOCK_SIZE {
 			return fmt.Errorf("invalid block size while patching data size prefix")
 		}
-		dataPart := make([]byte, BLOCK_SIZE-CRC_SIZE)
-		copy(dataPart, blk[CRC_SIZE:CRC_SIZE+int(BLOCK_SIZE-CRC_SIZE)])
-		// Set size prefix = total logical bytes. The prefix stores the length of the data *following* it.
-		sizeVal := state.totalLogical
-		binary.LittleEndian.PutUint64(dataPart[0:STANDARD_FLAG_SIZE], sizeVal)
-		// Recompute CRC for this block and write it back
-		newBlk := crc_util.AddCRCToBlockData(dataPart)
-		if err := blockManager.WriteToDisk(newBlk, state.dataFilePath, 0); err != nil {
+
+		payload := blk[CRC_SIZE:]
+		binary.LittleEndian.PutUint64(payload[0:STANDARD_FLAG_SIZE], state.totalLogical)
+
+		crc_util.AddCRCToBlockData(blk)
+
+		// Write the fully corrected block back to disk.
+		if err := blockManager.WriteToDisk(blk, state.dataFilePath, 0); err != nil {
 			return fmt.Errorf("failed to patch size prefix in data file: %v", err)
 		}
 	}
@@ -2866,5 +2873,42 @@ func createCompactedComponentsFromState(state *CompactionState, newIndex int, co
 		return err
 	}
 
+	return nil
+}
+
+// cleanupOldSSTables removes the files of old SSTables after successful compaction
+func cleanupOldSSTables(sstableIndexes []int) error {
+	for _, index := range sstableIndexes {
+		// Get config to determine if using separate files
+		config, _, _, err := deserializeSSTableConfig(index)
+		if err != nil {
+			// If we can't read config, try to delete both file patterns
+			config = &SSTableConfig{UseSeparateFiles: false}
+		}
+
+		if config.UseSeparateFiles {
+			// Delete all component files
+			filesToDelete := []string{
+				fmt.Sprintf(FILE_NAME_FORMAT, index), // Main config file
+				fmt.Sprintf(DATA_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(METADATA_FILE_NAME_FORMAT, index),
+			}
+
+			for _, filePath := range filesToDelete {
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("failed to delete file %s: %v", filePath, err)
+				}
+			}
+		} else {
+			// Delete single file
+			filePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+			if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to delete file %s: %v", filePath, err)
+			}
+		}
+	}
 	return nil
 }
