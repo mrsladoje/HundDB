@@ -1,5 +1,5 @@
 import Record from "@/components/home/Record";
-import PrefixScanTable from "@/components/table/PrefixScanTable";
+import ScanTable from "@/components/table/ScanTable";
 import { Get } from "@wails/main/App.js";
 import { FaBone, FaDog, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
 
@@ -13,6 +13,7 @@ const Result = ({
   onIteratorNext = null,
   operations = [],
   onPrefixScanPageChange = null,
+  onRangeScanPageChange = null,
   currentPrefix = "",
   activeOperationId = null,
 }) => {
@@ -360,7 +361,7 @@ const Result = ({
                     maxLength={50}
                   />
                 </div>
-                <PrefixScanTable
+                <ScanTable
                   operation={currentOperation}
                   onPageChange={async (newPage, newPageSize) => {
                     if (onPrefixScanPageChange) {
@@ -385,6 +386,92 @@ const Result = ({
                     }
                   }}
                   isLoading={false}
+                  emptySearchQuery={currentOperation.prefix || ""}
+                />
+              </div>
+            );
+          }
+        }
+        return (
+          <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
+            {result || notFoundMessage || error}
+          </pre>
+        );
+      }
+
+      case "RANGE_SCAN": {
+        if (!error) {
+          const currentOperation =
+            (activeOperationId
+              ? operations.find(
+                  (op) =>
+                    op.id === activeOperationId && op.type === "RANGE_SCAN"
+                )
+              : operations.find((op) => op.type === "RANGE_SCAN")) || null;
+          if (currentOperation) {
+            return (
+              <div className="flex flex-col gap-4">
+                <div className="mt-2 flex items-center gap-2">
+                  <span
+                    className={`${
+                      currentOperation.notFoundMessage
+                        ? "text-yellow-700"
+                        : !currentOperation.success
+                        ? "text-red-700"
+                        : "text-green-700"
+                    } text-md font-medium`}
+                  >
+                    Range:
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <TruncatedText
+                      text={currentOperation.rangeMin ?? currentOperation.key?.split("-")[0] ?? ""}
+                      className={`font-mono ${
+                        currentOperation.notFoundMessage
+                          ? "text-yellow-700 bg-yellow-100"
+                          : !currentOperation.success
+                          ? "text-red-700 bg-red-100"
+                          : "text-green-700 bg-green-100"
+                      }  px-2 py-1 rounded text-md`}
+                      maxLength={40}
+                    />
+                    <span
+                      className={`${
+                        currentOperation.notFoundMessage
+                          ? "text-yellow-700"
+                          : !currentOperation.success
+                          ? "text-red-700"
+                          : "text-green-700"
+                      } font-bold`}
+                    >
+                      →
+                    </span>
+                    <TruncatedText
+                      text={
+                        currentOperation.rangeMax ?? currentOperation.key?.split("-")?.slice(1).join("-") ?? ""
+                      }
+                      className={`font-mono ${
+                        currentOperation.notFoundMessage
+                          ? "text-yellow-700 bg-yellow-100"
+                          : !currentOperation.success
+                          ? "text-red-700 bg-red-100"
+                          : "text-green-700 bg-green-100"
+                      }  px-2 py-1 rounded text-md`}
+                      maxLength={40}
+                    />
+                  </div>
+                </div>
+                <ScanTable
+                  operation={currentOperation}
+                  onPageChange={async (newPage, newPageSize) => {
+                    if (onRangeScanPageChange) {
+                      await onRangeScanPageChange(newPage, newPageSize);
+                    }
+                  }}
+                  isLoading={false}
+                  emptySearchQuery={`${currentOperation.rangeMin ?? ""} → ${
+                    currentOperation.rangeMax ?? ""
+                  }`}
                 />
               </div>
             );

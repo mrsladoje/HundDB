@@ -286,6 +286,15 @@ export const Home = () => {
         break;
       case "RANGE_ITERATE":
       case "RANGE_SCAN":
+        if (selectedOperation === "RANGE_SCAN") {
+          if (pageSize < 1 || pageSize > 20) {
+            return "Page size must be between 1 and 20!";
+          }
+          const pn = Number(pageNumber);
+          if (!Number.isFinite(pn) || pn < 1) {
+            return "Page number must be at least 1!";
+          }
+        }
         if (maxKey < minKey) {
           return "Range end must be greater than or equal to range start!";
         }
@@ -520,20 +529,35 @@ export const Home = () => {
 
     try {
       const pn = Number(pageNumber) || 1;
-      const records = await RangeScan(minKey, maxKey, pn, pageSize);
-      const resultText = `Range scan results (page ${pn}):\n${JSON.stringify(
-        records,
-        null,
-        2
-      )}`;
-      setResult(resultText);
+  const keys = await RangeScan(minKey, maxKey, pageSize, pn - 1);
+
+      const isEmpty = !keys || keys.length === 0;
+      const notFoundMsg = isEmpty ? getRandomDogNotFound("SCAN") : null;
+
+      if (isEmpty) {
+        setNotFoundMessage(notFoundMsg);
+      }
+
       addOperation(
         "RANGE_SCAN",
         `${minKey}-${maxKey}`,
-        true,
-        `Found ${records.length} records`
+        !isEmpty,
+        isEmpty ? null : `Found ${keys.length} records on page ${pn}`,
+        isEmpty ? notFoundMsg : null,
+        null,
+        null,
+        false,
+        null,
+        null,
+        { pageSize, currentPage: pn, keys, paginationError: false, rangeMin: minKey, rangeMax: maxKey }
       );
       setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
+
+      setResult(
+        isEmpty
+          ? "No records found for this range."
+          : `Range scan completed: ${keys.length} records found`
+      );
     } catch (err) {
       const dogError = getRandomDogError("SCAN");
       setError(dogError);
@@ -541,6 +565,49 @@ export const Home = () => {
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleRangeScanPageChange = async (newPage, newPageSize = null) => {
+    const currentOperation = operations.find(
+      (op) => op.type === "RANGE_SCAN" && (op.rangeMin ?? op.key.split("-")[0]) === minKey && (op.rangeMax ?? op.key.split("-").slice(1).join("-")) === maxKey
+    );
+    if (!currentOperation) return;
+
+    try {
+      const effectivePageSize = newPageSize || currentOperation.pageSize;
+      const rangeMin = currentOperation.rangeMin ?? currentOperation.key.split("-")[0] ?? "";
+      const rangeMax = currentOperation.rangeMax ?? currentOperation.key.split("-").slice(1).join("-") ?? "";
+      const keys = await RangeScan(
+        rangeMin,
+        rangeMax,
+        effectivePageSize,
+        Math.max(0, newPage - 1)
+      );
+
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === currentOperation.id) {
+            const hadResultsBefore = Array.isArray(currentOperation.keys) && currentOperation.keys.length > 0;
+            const paginationError = hadResultsBefore && keys.length === 0;
+            return {
+              ...op,
+              currentPage: newPage,
+              pageSize: effectivePageSize,
+              keys: keys,
+              message: `Found ${keys.length} records on page ${newPage}`,
+              timestamp: new Date().toLocaleTimeString(),
+              paginationError,
+            };
+          }
+          return op;
+        })
+      );
+
+      setNotFoundMessage(null);
+      setResult(`Range scan completed: ${keys.length} records found`);
+    } catch (err) {
+      console.error("Error changing range page:", err);
     }
   };
 
@@ -989,6 +1056,10 @@ export const Home = () => {
       const [min, max] = operation.key.split("-");
       setMinKey(min);
       setMaxKey(max);
+      if (operation.type === "RANGE_SCAN") {
+        const count = Array.isArray(operation.keys) ? operation.keys.length : 0;
+        setResult(`Range scan completed: ${count} records found`);
+      }
     }
   };
 
@@ -1022,7 +1093,7 @@ export const Home = () => {
       case "PREFIX_SCAN":
         return isLoading ? "Scanning..." : "Prefix Scan";
       case "RANGE_SCAN":
-        return isLoading ? "Scanning..." : "Range Scan";
+  return isLoading ? "Scanning..." : "Range Scan";
       case "PREFIX_ITERATE":
         return isLoading ? "Creating..." : "Create Iterator";
       case "RANGE_ITERATE":
@@ -1220,33 +1291,80 @@ export const Home = () => {
       case "RANGE_SCAN":
       case "RANGE_ITERATE":
         return (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                🏁 Min Key (Range start)
-              </label>
-              <input
-                type="text"
-                placeholder="From key..."
-                value={minKey}
-                onChange={(e) => setMinKey(e.target.value)}
-                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
-                disabled={isLoading}
-              />
+          <div className="grid grid-cols-1 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                  🏁 Min Key (Range start)
+                </label>
+                <input
+                  type="text"
+                  placeholder="From key..."
+                  value={minKey}
+                  onChange={(e) => setMinKey(e.target.value)}
+                  className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                  disabled={isLoading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                  🏆 Max Key (Range end)
+                </label>
+                <input
+                  type="text"
+                  placeholder="To key..."
+                  value={maxKey}
+                  onChange={(e) => setMaxKey(e.target.value)}
+                  className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                  disabled={isLoading}
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-                🏆 Max Key (Range end)
-              </label>
-              <input
-                type="text"
-                placeholder="To key..."
-                value={maxKey}
-                onChange={(e) => setMaxKey(e.target.value)}
-                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
-                disabled={isLoading}
-              />
-            </div>
+
+            {selectedOperation === "RANGE_SCAN" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                    📄 Page Size
+                  </label>
+                  <StyledOperationSelect
+                    value={pageSize}
+                    onChange={(val) => setPageSize(Number(val))}
+                    isDisabled={isLoading}
+                    options={[
+                      { value: 5, label: "5" },
+                      { value: 10, label: "10" },
+                      { value: 20, label: "20" },
+                    ]}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                    🔢 Page Number
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="1"
+                    value={pageNumber}
+                    onChange={(e) => {
+                      const raw = e.target.value || "";
+                      let v = raw.replace(/\D/g, "");
+                      v = v.replace(/^0+/, "");
+                      setPageNumber(v);
+                    }}
+                    onBlur={() => {
+                      const pn = Number(pageNumber);
+                      if (!Number.isFinite(pn) || pn < 1) {
+                        setPageNumber(1);
+                      }
+                    }}
+                    className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         );
       default:
@@ -1334,6 +1452,7 @@ export const Home = () => {
                 onIteratorNext={handleIteratorNext}
                 operations={operations}
                 onPrefixScanPageChange={handlePrefixScanPageChange}
+                onRangeScanPageChange={handleRangeScanPageChange}
                 currentPrefix={prefix}
                 activeOperationId={activeOperationId}
               />

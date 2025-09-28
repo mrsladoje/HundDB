@@ -76,6 +76,14 @@ export const RecentOperations = ({
                   }`}
                 >
                   {op.message || op.notFoundMessage}
+                  {op.type === "RANGE_SCAN" && (
+                    <div className="mt-1 text-[0.7rem] text-gray-600 flex items-center flex-wrap">
+                      <span className="mr-1">Range:</span>
+                      <span className="max-w-[7.25rem] truncate">{op.rangeMin === "" ? '""' : (op.rangeMin ?? op.key.split("-")[0])}</span>
+                      <span className="mx-1">→</span>
+                      <span className="max-w-[7.25rem] truncate">{op.rangeMax === "" ? '""' : (op.rangeMax ?? op.key.split("-").slice(1).join("-"))}</span>
+                    </div>
+                  )}
                   {op.type === "RANGE_ITERATE" && (
                     <div className="mt-1 text-[0.7rem] text-gray-600 flex items-center flex-wrap">
                       <span className="mr-1">Range:</span>
