@@ -140,8 +140,12 @@ func (a *App) PrefixIterate(prefix string, key string) (map[string]interface{}, 
 	return a.recordToMap(record), nil
 }
 
-func (a *App) RangeIterate() string {
-	return "Not implemented yet"
+func (a *App) RangeIterate(rangeStart string, rangeEnd string, key string) (map[string]interface{}, error) {
+	record, err := a.lsm.GetNextForRange(rangeStart, rangeEnd, key)
+	if err != nil {
+		return nil, err
+	}
+	return a.recordToMap(record), nil
 }
 
 // Helper function to check if an error is or contains ErrKeyNotFound
