@@ -1192,6 +1192,7 @@ export const Home = () => {
             <RecentOperations
               operations={operations}
               onOperationClick={handleOperationClick}
+              activeOperationId={activeOperationId}
             />
           </div>
         </div>
