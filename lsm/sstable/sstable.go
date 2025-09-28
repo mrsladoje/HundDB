@@ -1003,8 +1003,125 @@ func GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string, index
 	var startingDataOffset uint64 = offset
 
 	// 4. Sequential iteration from the starting position
-	return iterateSequentiallyForPrefix(dataPath, startingDataOffset, prefix, tombstonedKeys, config.CompressionEnabled)
+	within := func(k string) bool { return strings.HasPrefix(k, prefix) }
+	stop := func(k string) bool { return !strings.HasPrefix(k, prefix) }
+	return iterateSequentially(dataPath, startingDataOffset, tombstonedKeys, config.CompressionEnabled, within, stop)
 
+}
+
+/*
+Checks basic bounds for a range and computes last summary and index entry indexes for searching.
+Returns inBounds=false if [rangeStart, rangeEnd] doesn't overlap with [firstKey, lastKey] of the table.
+*/
+func checkIndexBoundsForRange(filepath string, offset uint64, rangeStart string, rangeEnd string, sparseStep int) (bool, uint64, uint64, error) {
+	// Read first entry key
+	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, 0, 0, err
+	}
+
+	// Read last entry info
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+	lastEntryKey, _, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+	if err != nil {
+		return false, 0, 0, err
+	}
+
+	// Quick overlap check: [rangeStart, rangeEnd] vs [firstEntryKey, lastEntryKey]
+	if rangeEnd < firstEntryKey || rangeStart > lastEntryKey {
+		return false, 0, 0, nil
+	}
+
+	// Compute last entry indexes similarly to other helpers
+	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
+	crcsFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsFirst*CRC_SIZE
+	physicalOffsetLast := lastEntryOffset
+	crcsLast := (physicalOffsetLast / BLOCK_SIZE) + 1
+	logicalOffsetLast := physicalOffsetLast - crcsLast*CRC_SIZE
+
+	indexOfLastIndexEntry := (logicalOffsetLast - logicalOffsetFirst) / INDEX_ENTRY_METADATA_SIZE
+	indexOfLastSummaryEntry := indexOfLastIndexEntry / uint64(sparseStep)
+
+	return true, indexOfLastSummaryEntry, indexOfLastIndexEntry, nil
+}
+
+/*
+GetNextForRange retrieves the next record whose key is within [rangeStart, rangeEnd] (inclusive).
+No Bloom filter checks are performed (range cannot be easily represented in filter).
+It returns the next record strictly greater than the provided key.
+*/
+func GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string, index int) (*record.Record, error) {
+
+	// Quick invalid range check
+	if rangeStart > rangeEnd {
+		return nil, nil
+	}
+
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1.5. Data, Index and Summary preparation (no Bloom filter for range)
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check for range overlap
+	inBounds, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForRange(indexPath, indexFileOffset, rangeStart, rangeEnd, config.SparseStepIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check index bounds for range: %v", err)
+	}
+	if !inBounds {
+		return nil, nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position: first key strictly greater than max(key, rangeStart)
+	startingKey := key
+	if startingKey < rangeStart {
+		startingKey = rangeStart
+	}
+
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, startingKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	// If there is no key strictly greater than startingKey, there's no next record in range
+	if !found {
+		return nil, nil
+	}
+
+	// Exact lower-bound offset to begin reading data
+	startingDataOffset := offset
+
+	// 4. Sequential iteration within range [rangeStart, rangeEnd] and strictly greater than 'key'
+	within := func(k string) bool { return k > key && k >= rangeStart && k <= rangeEnd }
+	stop := func(k string) bool { return k > rangeEnd }
+	return iterateSequentially(dataPath, startingDataOffset, tombstonedKeys, config.CompressionEnabled, within, stop)
 }
 
 /*
@@ -1408,9 +1525,18 @@ func lowerBoundSearchIndexes(filepath string, startingKey string, offsetFirst ui
 }
 
 /*
-Helper function for sequential iteration.
+Generic helper for sequential iteration with custom inclusion and stop conditions.
+within returns true if the record is within the desired window (e.g., has prefix or in range).
+stop returns true if we should stop scanning (e.g., key no longer has prefix or key > rangeEnd).
 */
-func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix string, tombstonedKeys *[]string, compressionEnabled bool) (*record.Record, error) {
+func iterateSequentially(
+	dataPath string,
+	startOffset uint64,
+	tombstonedKeys *[]string,
+	compressionEnabled bool,
+	within func(string) bool,
+	stop func(string) bool,
+) (*record.Record, error) {
 	blockManager := block_manager.GetBlockManager()
 	currentOffset := startOffset
 
@@ -1431,6 +1557,11 @@ func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix st
 		currentOffset = newOffset
 
 		// Read record data
+		// Guard against pathological sizes which would cause panics deeper in deserialization
+		// If recordSize is excessively large, bail out gracefully.
+		if recordSize > 64*1024*1024 { // 64MB safety cap, data files here are small
+			return nil, nil
+		}
 		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
 		if err != nil {
 			if err == io.EOF {
@@ -1443,41 +1574,47 @@ func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix st
 		// Deserialize record
 		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
 
-		// Check if record still has the prefix (if not, we're done)
-		if !strings.HasPrefix(rec.Key, prefix) {
+		// If we are outside of the scan window, stop.
+		if stop != nil && stop(rec.Key) {
 			return nil, nil
 		}
 
-		// Handle tombstones
+		// If not in our window yet, continue scanning
+		if within != nil && !within(rec.Key) {
+			continue
+		}
+
+		// Handle tombstones only for records within the window
 		if rec.IsDeleted() {
-
-			isTomstonedAlready := false
-			for _, tombstonedKey := range *tombstonedKeys {
-				if tombstonedKey == rec.Key {
-					isTomstonedAlready = true
-					break
+			if tombstonedKeys != nil {
+				isTomstonedAlready := false
+				for _, tombstonedKey := range *tombstonedKeys {
+					if tombstonedKey == rec.Key {
+						isTomstonedAlready = true
+						break
+					}
 				}
+				if isTomstonedAlready {
+					continue
+				}
+				// Add to tombstoned list and continue
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
 			}
-			if isTomstonedAlready {
-				continue
-			}
-
-			// Add to tombstoned list and continue
-			*tombstonedKeys = append(*tombstonedKeys, rec.Key)
 			continue
 		}
 
 		// Check if already tombstoned by higher levels
-		isTombstoned := false
-		for _, tombstonedKey := range *tombstonedKeys {
-			if tombstonedKey == rec.Key {
-				isTombstoned = true
-				break
+		if tombstonedKeys != nil {
+			isTombstoned := false
+			for _, tombstonedKey := range *tombstonedKeys {
+				if tombstonedKey == rec.Key {
+					isTombstoned = true
+					break
+				}
 			}
-		}
-
-		if isTombstoned {
-			continue // Skip tombstoned record
+			if isTombstoned {
+				continue // Skip tombstoned record
+			}
 		}
 
 		// Found a valid record!
@@ -1658,6 +1795,207 @@ func scanSequentiallyForPrefixRange(dataPath string, startOffset uint64, prefix 
 			break
 		} else {
 			// We haven't reached the prefix range yet, continue scanning
+			continue
+		}
+
+		// Skip if already tombstoned by higher levels
+		if tombstonedSet[rec.Key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[rec.Key] {
+			continue
+		}
+
+		// Handle tombstones
+		if rec.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
+				tombstonedSet[rec.Key] = true
+			}
+			continue
+		}
+
+		// Add to candidate keys
+		candidateKeys = append(candidateKeys, rec.Key)
+		bestKeysSet[rec.Key] = true
+	}
+
+	// Handle pagination
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(candidateKeys) {
+		return nil // No keys for this page
+	}
+
+	if endIndex > len(candidateKeys) {
+		endIndex = len(candidateKeys)
+	}
+
+	// Add paginated keys to bestKeys in sorted order
+	if bestKeys != nil {
+		for i := startIndex; i < endIndex; i++ {
+			*bestKeys = insertKeySortedIfNotExists(*bestKeys, candidateKeys[i])
+		}
+	}
+
+	return nil
+}
+
+/*
+ScanForRange scans records within the given range [rangeStart, rangeEnd] (inclusive) and adds keys to bestKeys.
+Only keys are added for memory efficiency - use Get() to retrieve full records.
+No Bloom filter checks are performed as ranges cannot be easily represented in filters.
+Parameters:
+- rangeStart: the starting key of the range (inclusive)
+- rangeEnd: the ending key of the range (inclusive)
+- tombstonedKeys: keys that have been tombstoned in more recent structures
+- bestKeys: best keys found so far from previous memtables (will be modified)
+- pageSize: maximum number of results per page (typically <= 50)
+- pageNumber: which page to return (0-based)
+- index: SSTable index to scan
+*/
+func ScanForRange(rangeStart string, rangeEnd string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, index int) error {
+	// Quick invalid range check
+	if rangeStart > rangeEnd {
+		return nil
+	}
+
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// Skip Bloom filter check - ranges cannot be easily represented in filters
+
+	// 1. Data, Index and Summary preparation
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check for range overlap
+	inBounds, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForRange(indexPath, indexFileOffset, rangeStart, rangeEnd, config.SparseStepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to check index bounds for range: %v", err)
+	}
+	if !inBounds {
+		return nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position using lexicographically smaller string than rangeStart
+	searchKey := string_util.FindLexicographicallySmaller(rangeStart)
+
+	// Use existing binary search to find the starting position
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	var startingDataOffset uint64
+	if found {
+		startingDataOffset = offset
+	} else {
+		// If not found, start from the beginning of data
+		startingDataOffset = uint64(CRC_SIZE)
+		if config.UseSeparateFiles {
+			startingDataOffset += STANDARD_FLAG_SIZE
+		} else {
+			startingDataOffset = offsets[0] + CRC_SIZE
+		}
+	}
+
+	// 4. Sequential scan from the starting position
+	return scanSequentiallyForRange(dataPath, startingDataOffset, rangeStart, rangeEnd, tombstonedKeys, bestKeys, pageSize, pageNumber, config.CompressionEnabled)
+}
+
+/*
+scanSequentiallyForRange scans records sequentially starting from the given offset,
+looking for records within the specified range [rangeStart, rangeEnd] (inclusive).
+It handles tombstones and maintains bestKeys with pagination.
+*/
+func scanSequentiallyForRange(dataPath string, startOffset uint64, rangeStart string, rangeEnd string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, compressionEnabled bool) error {
+	blockManager := block_manager.GetBlockManager()
+	currentOffset := startOffset
+
+	// Create sets for efficient lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	var candidateKeys []string
+	foundRangeStart := false
+
+	// Read records sequentially
+	for {
+		// Read record size
+		recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+		if recordSize == 0 {
+			break // Invalid record size indicates end
+		}
+		currentOffset = newOffset
+
+		// Read record data
+		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		currentOffset = newOffset
+
+		// Deserialize record
+		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+		// Check if we've reached the range
+		if rec.Key >= rangeStart && rec.Key <= rangeEnd {
+			foundRangeStart = true
+		} else if foundRangeStart && rec.Key > rangeEnd {
+			// We've moved past the range, stop scanning
+			break
+		} else if rec.Key < rangeStart {
+			// We haven't reached the range yet, continue scanning
+			continue
+		}
+
+		// If we're not in the range, skip
+		if rec.Key < rangeStart || rec.Key > rangeEnd {
 			continue
 		}
 

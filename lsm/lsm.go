@@ -339,6 +339,110 @@ func (lsm *LSM) GetNextForPrefix(prefix string, key string) (*model.Record, erro
 }
 
 /*
+GetNextForRange retrieves the next record within a given [rangeStart, rangeEnd) for a start key.
+*/
+func (lsm *LSM) GetNextForRange(rangeStart string, rangeEnd string, key string) (*model.Record, error) {
+	tombstonedKeys := make([]string, 0)
+	nextRecord := lsm.checkMemtablesForRangeIterate(rangeStart, rangeEnd, key, &tombstonedKeys)
+	nextRecordFromSSTable, err := lsm.checkSSTableForRangeIterate(rangeStart, rangeEnd, key, &tombstonedKeys)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if nextRecordFromSSTable != nil && (nextRecord == nil || nextRecordFromSSTable.Key < nextRecord.Key) {
+		nextRecord = nextRecordFromSSTable
+	}
+
+	return nextRecord, nil
+}
+
+/*
+RangeScan scans all memtables and SSTables for keys within the given range [rangeStart, rangeEnd).
+Returns a slice of keys for the specified page.
+Parameters:
+- rangeStart: the start of the range (inclusive)
+- rangeEnd: the end of the range (exclusive)
+- pageSize: maximum number of results per page
+- pageNumber: which page to return (0-based)
+*/
+func (lsm *LSM) RangeScan(rangeStart string, rangeEnd string, pageSize int, pageNumber int) ([]string, error) {
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+
+	// Check memtables first (newest to oldest)
+	// We use a large page size initially to collect all relevant keys
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		mt.ScanForRange(rangeStart, rangeEnd, &tombstonedKeys, &bestKeys, 10000, 0) // Large page size to get all keys
+	}
+
+	// Check SSTables (newest to oldest)
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			err := sstable.ScanForRange(rangeStart, rangeEnd, &tombstonedKeys, &bestKeys, 10000, 0, tableIndex)
+			if err != nil {
+				return nil, fmt.Errorf("failed to scan SSTable %d: %v", tableIndex, err)
+			}
+		}
+	}
+
+	// Apply pagination to final results
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(bestKeys) {
+		return []string{}, nil // Return empty slice for pages beyond available data
+	}
+
+	if endIndex > len(bestKeys) {
+		endIndex = len(bestKeys)
+	}
+
+	return bestKeys[startIndex:endIndex], nil
+}
+
+/*
+checkMemtablesForRangeIterate checks the memtables in reverse order (newest to oldest) for the next key in range.
+*/
+func (lsm *LSM) checkMemtablesForRangeIterate(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record {
+	var smallestRecord *model.Record = nil
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		if record := mt.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys); record != nil {
+			if smallestRecord == nil || record.Key < smallestRecord.Key {
+				smallestRecord = record
+			}
+		}
+	}
+	return smallestRecord
+}
+
+/*
+checkSSTableForRangeIterate checks the SSTables in reverse order (newest to oldest) for the next key in range.
+*/
+func (lsm *LSM) checkSSTableForRangeIterate(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) (*model.Record, error) {
+	var err error
+	var nextRecord *model.Record = nil
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			record, err := sstable.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys, tableIndex)
+			if err != nil {
+				return nil, err
+			}
+			if record != nil && (nextRecord == nil || record.Key < nextRecord.Key) {
+				nextRecord = record
+			}
+		}
+	}
+	return nextRecord, err
+}
+
+/*
 checkMemtables checks the memtables in reverse order (newest to oldest) for the given key.
 */
 func (lsm *LSM) checkMemtablesForPrefixIterate(prefix string, key string, tomstonedKeys *[]string) *model.Record {

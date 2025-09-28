@@ -2686,6 +2686,277 @@ func BenchmarkGetNextForPrefix_LargeDataset(b *testing.B) {
 	}
 }
 
+// =====================
+// Range iteration tests
+// =====================
+
+// Helper to create ordered numeric user records for range tests
+func createNumericUserRecords(n int) []record.Record {
+	recs := make([]record.Record, 0, n)
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("user_%03d", i)
+		recs = append(recs, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix())+uint64(i),
+			false,
+		))
+	}
+	return recs
+}
+
+func TestGetNextForRange_Basic(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createNumericUserRecords(20)
+	if err := PersistMemtable(records, 101); err != nil {
+		t.Fatalf("persist failed: %v", err)
+	}
+
+	tombstoned := make([]string, 0)
+	start, end := "user_005", "user_012"
+	cur := start
+	got := make([]string, 0)
+
+	for range 20 {
+		r, err := GetNextForRange(start, end, cur, &tombstoned, 101)
+		if err != nil {
+			t.Fatalf("GetNextForRange error: %v", err)
+		}
+		if r == nil {
+			break
+		}
+		got = append(got, r.Key)
+		cur = r.Key
+	}
+
+	expected := []string{"user_006", "user_007", "user_008", "user_009", "user_010", "user_011", "user_012"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d, got %d: %v", len(expected), len(got), got)
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Errorf("at %d expected %s got %s", i, expected[i], got[i])
+		}
+	}
+}
+
+func TestGetNextForRange_Boundaries(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 5
+
+	records := createNumericUserRecords(10)
+	if err := PersistMemtable(records, 102); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	tombstoned := make([]string, 0)
+
+	// Entire range
+	cur := "user_000"
+	count := 0
+	for range 20 {
+		r, err := GetNextForRange("user_000", "user_009", cur, &tombstoned, 102)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if r == nil {
+			break
+		}
+		if r.Key <= cur {
+			t.Fatalf("order violated: %s <= %s", r.Key, cur)
+		}
+		cur = r.Key
+		count++
+	}
+	if count != 9 {
+		t.Errorf("expected 9 nexts, got %d", count)
+	}
+
+	// Disjoint before
+	r, err := GetNextForRange("aaa", "aaz", "aay", &tombstoned, 102)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if r != nil {
+		t.Errorf("expected nil for disjoint-before range, got %v", r)
+	}
+
+	// Disjoint after
+	r, err = GetNextForRange("zzz", "zzzz", "zzz", &tombstoned, 102)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if r != nil {
+		t.Errorf("expected nil for disjoint-after range, got %v", r)
+	}
+}
+
+func TestGetNextForRange_Tombstones(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create dataset with some tombstones in range
+	recs := make([]record.Record, 0)
+	for i := 0; i < 10; i++ {
+		k := fmt.Sprintf("user_%03d", i)
+		tomb := i%3 == 0 // 0,3,6,9 tombstones
+		val := []byte(nil)
+		if !tomb {
+			val = []byte("v_" + k)
+		}
+		recs = append(recs, *record.NewRecord(k, val, uint64(time.Now().Unix())+uint64(i), tomb))
+	}
+	// records must be sorted already by construction
+	if err := PersistMemtable(recs, 103); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	tombstoned := make([]string, 0)
+	cur := "user_000"
+	got := make([]string, 0)
+	for range 20 {
+		r, err := GetNextForRange("user_000", "user_009", cur, &tombstoned, 103)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if r == nil {
+			break
+		}
+		got = append(got, r.Key)
+		cur = r.Key
+	}
+
+	// Expect only non-tombstones in [0..9] excluding 0,3,6,9
+	expected := []string{"user_001", "user_002", "user_004", "user_005", "user_007", "user_008"}
+	if len(got) != len(expected) {
+		t.Fatalf("expected %d got %d: %v", len(expected), len(got), got)
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Errorf("%d exp %s got %s", i, expected[i], got[i])
+		}
+	}
+
+	// Check that tombstones got recorded
+	for _, k := range []string{"user_003", "user_006", "user_009"} {
+		found := false
+		for _, tk := range tombstoned {
+			if tk == k {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected tombstone recorded for %s, got %v", k, tombstoned)
+		}
+	}
+}
+
+func TestGetNextForRange_DifferentConfigurations(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	configs := []struct {
+		sep, comp bool
+		sparse    int
+	}{
+		{true, false, 10}, {false, false, 10}, {true, true, 5}, {false, true, 5},
+	}
+	for i, c := range configs {
+		USE_SEPARATE_FILES = c.sep
+		COMPRESSION_ENABLED = c.comp
+		SPARSE_STEP_INDEX = c.sparse
+		recs := createNumericUserRecords(30)
+		idx := 200 + i
+		if err := PersistMemtable(recs, idx); err != nil {
+			t.Fatalf("persist: %v", err)
+		}
+		tomb := make([]string, 0)
+		cur := "user_010"
+		got := make([]string, 0)
+		for range 20 {
+			r, err := GetNextForRange("user_010", "user_020", cur, &tomb, idx)
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if r == nil {
+				break
+			}
+			got = append(got, r.Key)
+			cur = r.Key
+		}
+		expected := []string{"user_011", "user_012", "user_013", "user_014", "user_015", "user_016", "user_017", "user_018", "user_019", "user_020"}
+		if len(got) != len(expected) {
+			t.Fatalf("cfg %d expected %d got %d: %v", i, len(expected), len(got), got)
+		}
+		for j := range expected {
+			if got[j] != expected[j] {
+				t.Errorf("cfg %d at %d exp %s got %s", i, j, expected[j], got[j])
+			}
+		}
+	}
+}
+
+func TestGetNextForRange_InvalidIndex(t *testing.T) {
+	setupTestDir(t)
+	tomb := make([]string, 0)
+	r, err := GetNextForRange("a", "z", "m", &tomb, 999)
+	if err == nil {
+		t.Errorf("expected error for invalid index")
+	}
+	if r != nil {
+		t.Errorf("expected nil record, got %v", r)
+	}
+}
+
 // Test basic ScanForPrefix functionality
 func TestScanForPrefix_BasicFunctionality(t *testing.T) {
 	setupTestDir(t)
@@ -3313,6 +3584,404 @@ func BenchmarkScanForPrefix_LargeDataset(b *testing.B) {
 		err := ScanForPrefix("user", &tombstonedKeys, &bestKeys, 50, 0, 1)
 		if err != nil {
 			b.Fatalf("ScanForPrefix failed: %v", err)
+		}
+	}
+}
+
+// Test cases for ScanForRange functionality
+
+// Helper to create ordered records with different prefixes for range testing
+func createRangeTestRecords() []record.Record {
+	records := make([]record.Record, 0)
+
+	// Create records with various keys for range testing
+	keys := []string{
+		"admin_001", "admin_005", "admin_010",
+		"product_a", "product_m", "product_z",
+		"user_000", "user_005", "user_010", "user_015", "user_020", "user_025",
+		"vendor_01", "vendor_05", "vendor_10",
+	}
+
+	for _, key := range keys {
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix()),
+			false,
+		))
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Key < records[j].Key
+	})
+
+	return records
+}
+
+// Test basic range scanning functionality
+func TestScanForRange_BasicFunctionality(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createRangeTestRecords()
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test scanning range ["user_005", "user_020"]
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err = ScanForRange("user_005", "user_020", &tombstonedKeys, &bestKeys, 10, 0, 1)
+	if err != nil {
+		t.Errorf("ScanForRange failed: %v", err)
+	}
+
+	expectedKeys := []string{"user_005", "user_010", "user_015", "user_020"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys in range, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expectedKey := range expectedKeys {
+		if i >= len(bestKeys) || bestKeys[i] != expectedKey {
+			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(bestKeys) {
+						return bestKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+}
+
+// Test range scanning with pagination
+func TestScanForRange_WithPagination(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create larger dataset for pagination testing
+	records := make([]record.Record, 0)
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("item_%03d", i)
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix())+uint64(i),
+			false,
+		))
+	}
+
+	err := PersistMemtable(records, 2)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test pagination: page size 5, get page 0 for range ["item_005", "item_015"]
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err = ScanForRange("item_005", "item_015", &tombstonedKeys, &bestKeys, 5, 0, 2)
+	if err != nil {
+		t.Errorf("ScanForRange failed for page 0: %v", err)
+	}
+
+	expectedPage0 := []string{"item_005", "item_006", "item_007", "item_008", "item_009"}
+	if len(bestKeys) != len(expectedPage0) {
+		t.Errorf("Page 0: Expected %d keys, got %d: %v", len(expectedPage0), len(bestKeys), bestKeys)
+	}
+
+	// Test page 1
+	bestKeys = make([]string, 0)
+	err = ScanForRange("item_005", "item_015", &tombstonedKeys, &bestKeys, 5, 1, 2)
+	if err != nil {
+		t.Errorf("ScanForRange failed for page 1: %v", err)
+	}
+
+	expectedPage1 := []string{"item_010", "item_011", "item_012", "item_013", "item_014"}
+	if len(bestKeys) != len(expectedPage1) {
+		t.Errorf("Page 1: Expected %d keys, got %d: %v", len(expectedPage1), len(bestKeys), bestKeys)
+	}
+}
+
+// Test range scanning with tombstones
+func TestScanForRange_WithTombstones(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create dataset with some tombstones in range
+	records := make([]record.Record, 0)
+	for i := 0; i < 15; i++ {
+		key := fmt.Sprintf("test_%03d", i)
+		tombstone := i%3 == 0 // Every third record is a tombstone
+		var value []byte
+		if !tombstone {
+			value = []byte("value_" + key)
+		}
+
+		records = append(records, *record.NewRecord(
+			key,
+			value,
+			uint64(time.Now().Unix())+uint64(i),
+			tombstone,
+		))
+	}
+
+	err := PersistMemtable(records, 3)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test scanning range ["test_003", "test_012"] - should skip tombstones
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err = ScanForRange("test_003", "test_012", &tombstonedKeys, &bestKeys, 20, 0, 3)
+	if err != nil {
+		t.Errorf("ScanForRange failed: %v", err)
+	}
+
+	expectedLiveKeys := []string{"test_004", "test_005", "test_007", "test_008", "test_010", "test_011"}
+	expectedTombstones := []string{"test_003", "test_006", "test_009", "test_012"}
+
+	// Check live keys
+	if len(bestKeys) != len(expectedLiveKeys) {
+		t.Errorf("Expected %d live keys, got %d: %v", len(expectedLiveKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expectedKey := range expectedLiveKeys {
+		if i >= len(bestKeys) || bestKeys[i] != expectedKey {
+			t.Errorf("Expected live key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(bestKeys) {
+						return bestKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+
+	// Check tombstones were recorded
+	for _, expectedTombstone := range expectedTombstones {
+		found := false
+		for _, tombstone := range tombstonedKeys {
+			if tombstone == expectedTombstone {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected tombstone %s to be recorded, but it wasn't. Got: %v",
+				expectedTombstone, tombstonedKeys)
+		}
+	}
+}
+
+// Test boundary conditions
+func TestScanForRange_BoundaryConditions(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createRangeTestRecords()
+	err := PersistMemtable(records, 4)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	testCases := []struct {
+		rangeStart  string
+		rangeEnd    string
+		description string
+		expectEmpty bool
+	}{
+		{"admin_000", "admin_999", "admin range covering all admin keys", false},
+		{"zzz_000", "zzz_999", "range after all keys", true},
+		{"aaa_000", "aaa_999", "range before all keys", true},
+		{"user_000", "user_000", "single key range (exact match)", false},
+		{"user_001", "user_001", "single key range (no match)", true},
+		{"product_z", "vendor_10", "cross-prefix range", false},
+		{"invalid_end", "invalid_start", "invalid range (start > end)", true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			tombstonedKeys := make([]string, 0)
+			bestKeys := make([]string, 0)
+			err := ScanForRange(tc.rangeStart, tc.rangeEnd, &tombstonedKeys, &bestKeys, 50, 0, 4)
+
+			if err != nil {
+				t.Errorf("ScanForRange failed: %v", err)
+			}
+
+			if tc.expectEmpty && len(bestKeys) > 0 {
+				t.Errorf("Expected empty result for case '%s', got: %v", tc.description, bestKeys)
+			} else if !tc.expectEmpty && len(bestKeys) == 0 {
+				t.Errorf("Expected non-empty result for case '%s', got empty", tc.description)
+			}
+
+			// Verify all returned keys are within range
+			for _, key := range bestKeys {
+				if key < tc.rangeStart || key > tc.rangeEnd {
+					t.Errorf("Key %s is outside range [%s, %s]", key, tc.rangeStart, tc.rangeEnd)
+				}
+			}
+		})
+	}
+}
+
+// Test with different configurations
+func TestScanForRange_DifferentConfigurations(t *testing.T) {
+	setupTestDir(t)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	configurations := []struct {
+		separateFiles bool
+		compression   bool
+		sparseStep    int
+		name          string
+	}{
+		{true, false, 10, "separate_files_uncompressed"},
+		{false, false, 10, "single_file_uncompressed"},
+		{true, true, 5, "separate_files_compressed"},
+		{false, true, 5, "single_file_compressed"},
+	}
+
+	for i, config := range configurations {
+		t.Run(config.name, func(t *testing.T) {
+			USE_SEPARATE_FILES = config.separateFiles
+			COMPRESSION_ENABLED = config.compression
+			SPARSE_STEP_INDEX = config.sparseStep
+
+			records := createRangeTestRecords()
+			tableIndex := 20 + i
+			err := PersistMemtable(records, tableIndex)
+			if err != nil {
+				t.Fatalf("Failed to persist memtable for config %s: %v", config.name, err)
+			}
+
+			// Test scanning with this configuration
+			tombstonedKeys := make([]string, 0)
+			bestKeys := make([]string, 0)
+			err = ScanForRange("product_a", "user_015", &tombstonedKeys, &bestKeys, 20, 0, tableIndex)
+			if err != nil {
+				t.Errorf("ScanForRange failed for config %s: %v", config.name, err)
+				return
+			}
+
+			expectedKeys := []string{"product_a", "product_m", "product_z", "user_000", "user_005", "user_010", "user_015"}
+			if len(bestKeys) != len(expectedKeys) {
+				t.Errorf("Config %s: expected %d keys, got %d: %v", config.name, len(expectedKeys), len(bestKeys), bestKeys)
+				return
+			}
+
+			for j, expectedKey := range expectedKeys {
+				if j >= len(bestKeys) || bestKeys[j] != expectedKey {
+					t.Errorf("Config %s: expected key %s at position %d, got %s",
+						config.name, expectedKey, j,
+						func() string {
+							if j < len(bestKeys) {
+								return bestKeys[j]
+							}
+							return "none"
+						}())
+				}
+			}
+		})
+	}
+}
+
+// Benchmark ScanForRange
+func BenchmarkScanForRange_SmallDataset(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
+
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createRangeTestRecords()
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedKeys := make([]string, 0)
+		bestKeys := make([]string, 0)
+		err := ScanForRange("product_a", "user_020", &tombstonedKeys, &bestKeys, 10, 0, 1)
+		if err != nil {
+			b.Fatalf("ScanForRange failed: %v", err)
 		}
 	}
 }

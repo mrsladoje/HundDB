@@ -1,7 +1,7 @@
-import { FaDog, FaBone, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
-import PrefixScanTable from "@/components/table/PrefixScanTable";
 import Record from "@/components/home/Record";
+import ScanTable from "@/components/table/ScanTable";
 import { Get } from "@wails/main/App.js";
+import { FaBone, FaDog, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
 
 const Result = ({
   operation,
@@ -13,12 +13,15 @@ const Result = ({
   onIteratorNext = null,
   operations = [],
   onPrefixScanPageChange = null,
+  onRangeScanPageChange = null,
   currentPrefix = "",
   activeOperationId = null,
 }) => {
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
-    if (!text) return null;
+    if (!text || !text.trim()) {
+      return <span className={`${className} text-gray-400`}>{'""'}</span>;
+    }
 
     const shouldTruncate = text.length > maxLength;
     const displayText = shouldTruncate
@@ -27,7 +30,9 @@ const Result = ({
 
     return (
       <span
-        className={`${className} ${shouldTruncate ? "cursor-help" : ""} !select-text text-left`}
+        className={`${className} ${
+          shouldTruncate ? "cursor-help" : ""
+        } !select-text text-left`}
         title={shouldTruncate ? text : undefined}
       >
         {displayText}
@@ -110,35 +115,88 @@ const Result = ({
           </div>
         )}
 
-        <div className="flex justify-between pt-[0.4rem]">
-          <div className="mt-2 flex items-center gap-2">
-            <span
-              className={`${
-                op.notFoundMessage
-                  ? "text-yellow-700"
-                  : !op.success
-                  ? "text-red-700"
-                  : "text-green-700"
-              } text-md font-medium`}
-            >
-              Prefix:
-            </span>
-            <TruncatedText
-              text={op.prefix}
-              className={`font-mono ${
-                op.notFoundMessage
-                  ? "text-yellow-700 bg-yellow-100"
-                  : !op.success
-                  ? "text-red-700 bg-red-100"
-                  : "text-green-700 bg-green-100"
-              }  px-2 py-1 rounded text-md`}
-              maxLength={50}
-            />
-          </div>
+        <div className="flex justify-between items-end pt-[0.4rem]">
+          {op.type === "PREFIX_ITERATE" ? (
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                className={`${
+                  op.notFoundMessage
+                    ? "text-yellow-700"
+                    : !op.success
+                    ? "text-red-700"
+                    : "text-green-700"
+                } text-md font-medium`}
+              >
+                Prefix:
+              </span>
+              <TruncatedText
+                text={op.prefix}
+                className={`font-mono ${
+                  op.notFoundMessage
+                    ? "text-yellow-700 bg-yellow-100"
+                    : !op.success
+                    ? "text-red-700 bg-red-100"
+                    : "text-green-700 bg-green-100"
+                }  px-2 py-1 rounded text-md`}
+                maxLength={50}
+              />
+            </div>
+          ) : (
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                className={`${
+                  op.notFoundMessage
+                    ? "text-yellow-700"
+                    : !op.success
+                    ? "text-red-700"
+                    : "text-green-700"
+                } text-md font-medium`}
+              >
+                Range:
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                <TruncatedText
+                  text={op.rangeMin ?? op.key?.split("-")[0] ?? ""}
+                  className={`font-mono ${
+                    op.notFoundMessage
+                      ? "text-yellow-700 bg-yellow-100"
+                      : !op.success
+                      ? "text-red-700 bg-red-100"
+                      : "text-green-700 bg-green-100"
+                  }  px-2 py-1 rounded text-md`}
+                  maxLength={40}
+                />
+                <span
+                  className={`${
+                    op.notFoundMessage
+                      ? "text-yellow-700"
+                      : !op.success
+                      ? "text-red-700"
+                      : "text-green-700"
+                  } font-bold`}
+                >
+                  →
+                </span>
+                <TruncatedText
+                  text={
+                    op.rangeMax ?? op.key?.split("-")?.slice(1).join("-") ?? ""
+                  }
+                  className={`font-mono ${
+                    op.notFoundMessage
+                      ? "text-yellow-700 bg-yellow-100"
+                      : !op.success
+                      ? "text-red-700 bg-red-100"
+                      : "text-green-700 bg-green-100"
+                  }  px-2 py-1 rounded text-md`}
+                  maxLength={40}
+                />
+              </div>
+            </div>
+          )}
           <button
             onClick={() => onIteratorNext && onIteratorNext(op)}
             disabled={op.ended}
-            className={`px-4 py-2 rounded-lg font-bold text-sm border-2 transition-all duration-200 ${
+            className={`px-4 py-2 max-h-fit rounded-lg font-bold text-sm border-2 transition-all duration-200 whitespace-nowrap ${
               op.ended
                 ? "bg-gray-300 text-gray-500 border-gray-400 cursor-not-allowed"
                 : "bg-blue-500 text-white border-blue-700 hover:bg-blue-600 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
@@ -232,11 +290,29 @@ const Result = ({
       case "PREFIX_ITERATE": {
         // Prefer the active op (e.g., when a RecentOperations item is clicked),
         // otherwise fall back to the most recent executed iterator op
-        const op = (activeOperationId
-          ? operations.find(
-              (o) => o.id === activeOperationId && o.type === "PREFIX_ITERATE"
-            )
-          : operations.find((o) => o.type === "PREFIX_ITERATE")) || null;
+        const op =
+          (activeOperationId
+            ? operations.find(
+                (o) => o.id === activeOperationId && o.type === "PREFIX_ITERATE"
+              )
+            : operations.find((o) => o.type === "PREFIX_ITERATE")) || null;
+        if (op) {
+          return renderIteratorContent(op);
+        }
+        return (
+          <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
+            {result || notFoundMessage || error}
+          </pre>
+        );
+      }
+
+      case "RANGE_ITERATE": {
+        const op =
+          (activeOperationId
+            ? operations.find(
+                (o) => o.id === activeOperationId && o.type === "RANGE_ITERATE"
+              )
+            : operations.find((o) => o.type === "RANGE_ITERATE")) || null;
         if (op) {
           return renderIteratorContent(op);
         }
@@ -251,11 +327,13 @@ const Result = ({
         if (!error) {
           // Prefer the active op (e.g., when a RecentOperations item is clicked),
           // otherwise fall back to the most recent executed PREFIX_SCAN op
-          const currentOperation = (activeOperationId
-            ? operations.find(
-                (op) => op.id === activeOperationId && op.type === "PREFIX_SCAN"
-              )
-            : operations.find((op) => op.type === "PREFIX_SCAN")) || null;
+          const currentOperation =
+            (activeOperationId
+              ? operations.find(
+                  (op) =>
+                    op.id === activeOperationId && op.type === "PREFIX_SCAN"
+                )
+              : operations.find((op) => op.type === "PREFIX_SCAN")) || null;
           if (currentOperation) {
             return (
               <div className="flex flex-col gap-4">
@@ -283,7 +361,7 @@ const Result = ({
                     maxLength={50}
                   />
                 </div>
-                <PrefixScanTable
+                <ScanTable
                   operation={currentOperation}
                   onPageChange={async (newPage, newPageSize) => {
                     if (onPrefixScanPageChange) {
@@ -308,6 +386,92 @@ const Result = ({
                     }
                   }}
                   isLoading={false}
+                  emptySearchQuery={currentOperation.prefix || ""}
+                />
+              </div>
+            );
+          }
+        }
+        return (
+          <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
+            {result || notFoundMessage || error}
+          </pre>
+        );
+      }
+
+      case "RANGE_SCAN": {
+        if (!error) {
+          const currentOperation =
+            (activeOperationId
+              ? operations.find(
+                  (op) =>
+                    op.id === activeOperationId && op.type === "RANGE_SCAN"
+                )
+              : operations.find((op) => op.type === "RANGE_SCAN")) || null;
+          if (currentOperation) {
+            return (
+              <div className="flex flex-col gap-4">
+                <div className="mt-2 flex items-center gap-2">
+                  <span
+                    className={`${
+                      currentOperation.notFoundMessage
+                        ? "text-yellow-700"
+                        : !currentOperation.success
+                        ? "text-red-700"
+                        : "text-green-700"
+                    } text-md font-medium`}
+                  >
+                    Range:
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <TruncatedText
+                      text={currentOperation.rangeMin ?? currentOperation.key?.split("-")[0] ?? ""}
+                      className={`font-mono ${
+                        currentOperation.notFoundMessage
+                          ? "text-yellow-700 bg-yellow-100"
+                          : !currentOperation.success
+                          ? "text-red-700 bg-red-100"
+                          : "text-green-700 bg-green-100"
+                      }  px-2 py-1 rounded text-md`}
+                      maxLength={40}
+                    />
+                    <span
+                      className={`${
+                        currentOperation.notFoundMessage
+                          ? "text-yellow-700"
+                          : !currentOperation.success
+                          ? "text-red-700"
+                          : "text-green-700"
+                      } font-bold`}
+                    >
+                      →
+                    </span>
+                    <TruncatedText
+                      text={
+                        currentOperation.rangeMax ?? currentOperation.key?.split("-")?.slice(1).join("-") ?? ""
+                      }
+                      className={`font-mono ${
+                        currentOperation.notFoundMessage
+                          ? "text-yellow-700 bg-yellow-100"
+                          : !currentOperation.success
+                          ? "text-red-700 bg-red-100"
+                          : "text-green-700 bg-green-100"
+                      }  px-2 py-1 rounded text-md`}
+                      maxLength={40}
+                    />
+                  </div>
+                </div>
+                <ScanTable
+                  operation={currentOperation}
+                  onPageChange={async (newPage, newPageSize) => {
+                    if (onRangeScanPageChange) {
+                      await onRangeScanPageChange(newPage, newPageSize);
+                    }
+                  }}
+                  isLoading={false}
+                  emptySearchQuery={`${currentOperation.rangeMin ?? ""} → ${
+                    currentOperation.rangeMax ?? ""
+                  }`}
                 />
               </div>
             );
