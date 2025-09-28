@@ -204,7 +204,7 @@ func TestSizeSSTable(t *testing.T) {
 				Value: []byte("value"),
 			},
 			compressed: false,
-			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 5,
+			expected:   TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 5,
 		},
 		{
 			name: "Compressed record with value",
@@ -214,7 +214,7 @@ func TestSizeSSTable(t *testing.T) {
 				Tombstone: false,
 			},
 			compressed: true,
-			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 5, // No key in compressed format
+			expected:   TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 5, // No key in compressed format
 		},
 		{
 			name: "Compressed tombstone record",
@@ -224,7 +224,7 @@ func TestSizeSSTable(t *testing.T) {
 				Tombstone: true,
 			},
 			compressed: true,
-			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE, // No value size or value for tombstone
+			expected:   TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE, // No value size or value for tombstone
 		},
 		{
 			name: "Uncompressed tombstone record",
@@ -234,7 +234,7 @@ func TestSizeSSTable(t *testing.T) {
 				Tombstone: true,
 			},
 			compressed: false,
-			expected:   COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 0, // Key included in uncompressed format
+			expected:   TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + 4 + 0, // Key included in uncompressed format
 		},
 	}
 

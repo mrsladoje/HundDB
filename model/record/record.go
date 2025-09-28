@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/binary"
+	byte_util "hunddb/utils/byte_util"
 	global_key_dict "hunddb/utils/global_key_dict"
 	"strconv"
 )
@@ -73,11 +74,12 @@ Serialization format for the SSTable:
 
 // Field size consts - used for serialization and deserialization
 const (
-	COMPRESSED_FLAG_SIZE = 1
-	TIMESTAMP_SIZE       = 8
-	TOMBSTONE_SIZE       = 1
-	KEY_SIZE_SIZE        = 8
-	VALUE_SIZE_SIZE      = 8
+	TIMESTAMP_SIZE  = 8
+	TOMBSTONE_SIZE  = 1
+	KEY_SIZE_SIZE   = 8
+	VALUE_SIZE_SIZE = 8
+	// For SSTable compressed Records
+	INDEX_SIZE = 8
 
 	TIMESTAMP_START  = 0
 	TOMBSTONE_START  = TIMESTAMP_START + TIMESTAMP_SIZE
@@ -85,17 +87,9 @@ const (
 	VALUE_SIZE_START = KEY_SIZE_START + KEY_SIZE_SIZE
 	KEY_START        = VALUE_SIZE_START + VALUE_SIZE_SIZE
 
-	TIMESTAMP_START_SSTABLE = 0
-	TOMBSTONE_START_SSTABLE = TIMESTAMP_START_SSTABLE + TIMESTAMP_SIZE
-
-	// For uncompressed Records
-	KEY_SIZE_START_SSTABLE   = TOMBSTONE_START_SSTABLE + TOMBSTONE_SIZE
-	VALUE_SIZE_START_SSTABLE = KEY_SIZE_START_SSTABLE + KEY_SIZE_SIZE
-	KEY_START_SSTABLE        = VALUE_SIZE_START_SSTABLE + VALUE_SIZE_SIZE
-
-	// For compressed Records
-	INDEX_START_SSTABLE         = TOMBSTONE_START_SSTABLE + TOMBSTONE_SIZE
-	VALUE_SIZE_COMPRESSED_START = INDEX_START_SSTABLE + KEY_SIZE_SIZE
+	// For SSTable compressed Records
+	INDEX_START                 = TOMBSTONE_START + TOMBSTONE_SIZE
+	VALUE_SIZE_COMPRESSED_START = INDEX_START + INDEX_SIZE
 )
 
 // Size returns the size of the serialized record in bytes. Used for WAL records.
@@ -103,15 +97,15 @@ func (r *Record) Size() int {
 	return TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + len(r.Key) + len(r.Value)
 }
 
-// Size returns the size of the serialized record in bytes. Used for SSTable records.
+// Size returns the size of the serialized record in bytes. Used for SSTable records. Varies if compressed or not and if tombstoned.
 func (r *Record) SizeSSTable(compressed bool) int {
 	if compressed {
 		if r.Tombstone {
-			return COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE
+			return TIMESTAMP_SIZE + TOMBSTONE_SIZE + INDEX_SIZE
 		}
-		return COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + len(r.Value)
+		return TIMESTAMP_SIZE + TOMBSTONE_SIZE + INDEX_SIZE + VALUE_SIZE_SIZE + len(r.Value)
 	}
-	return COMPRESSED_FLAG_SIZE + TIMESTAMP_SIZE + TOMBSTONE_SIZE + KEY_SIZE_SIZE + VALUE_SIZE_SIZE + len(r.Key) + len(r.Value)
+	return r.Size()
 }
 
 // Serialize serializes a Record into a byte array. The byte array contains the following fields:
@@ -126,11 +120,7 @@ func (rec *Record) Serialize() []byte {
 	data := make([]byte, rec.Size())
 
 	binary.LittleEndian.PutUint64(data[TIMESTAMP_START:], rec.Timestamp)
-	if rec.Tombstone {
-		data[TOMBSTONE_START] = 1
-	} else {
-		data[TOMBSTONE_START] = 0
-	}
+	data[TOMBSTONE_START] = byte_util.BoolToByte(rec.Tombstone)
 	keySize := uint64(len(rec.Key))
 	binary.LittleEndian.PutUint64(data[KEY_SIZE_START:], keySize)
 	binary.LittleEndian.PutUint64(data[VALUE_SIZE_START:], uint64(len(rec.Value)))
@@ -188,12 +178,8 @@ func (rec *Record) serializeForSSTableUncompressed() []byte {
 func (rec *Record) serializeForSSTableCompressed() []byte {
 	data := make([]byte, rec.SizeSSTable(true))
 
-	binary.LittleEndian.PutUint64(data[TIMESTAMP_START_SSTABLE:], rec.Timestamp)
-	if rec.Tombstone {
-		data[TOMBSTONE_START_SSTABLE] = 1
-	} else {
-		data[TOMBSTONE_START_SSTABLE] = 0
-	}
+	binary.LittleEndian.PutUint64(data[TIMESTAMP_START:], rec.Timestamp)
+	data[TOMBSTONE_START] = byte_util.BoolToByte(rec.Tombstone)
 	globalKeyDict := global_key_dict.GetGlobalKeyDict("global_key_dict.db")
 	index, exists := globalKeyDict.GetEntryID(rec.Key)
 	if !exists {
@@ -203,7 +189,7 @@ func (rec *Record) serializeForSSTableCompressed() []byte {
 		}
 		index = indexNew
 	}
-	binary.LittleEndian.PutUint64(data[INDEX_START_SSTABLE:], index)
+	binary.LittleEndian.PutUint64(data[INDEX_START:], index)
 
 	if !rec.Tombstone {
 		binary.LittleEndian.PutUint64(data[VALUE_SIZE_COMPRESSED_START:], uint64(len(rec.Value)))
@@ -240,9 +226,9 @@ func deserializeForSSTableUncompressed(data []byte) *Record {
 
 // DeserializeForSSTableCompressed takes a byte array and reconstructs its Record for compressed settings.
 func deserializeForSSTableCompressed(data []byte) *Record {
-	timestamp := binary.LittleEndian.Uint64(data[TIMESTAMP_START_SSTABLE:])
-	tombstone := data[TOMBSTONE_START_SSTABLE] != 0
-	index := binary.LittleEndian.Uint64(data[INDEX_START_SSTABLE:])
+	timestamp := binary.LittleEndian.Uint64(data[TIMESTAMP_START:])
+	tombstone := data[TOMBSTONE_START] != 0
+	index := binary.LittleEndian.Uint64(data[INDEX_START:])
 	globalKeyDict := global_key_dict.GetGlobalKeyDict("global_key_dict.db")
 	key, exists := globalKeyDict.GetKey(index)
 	if !exists {
