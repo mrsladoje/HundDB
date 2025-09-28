@@ -74,7 +74,7 @@ func TestReadPathCache(t *testing.T) {
 		if newCache.Size() != 0 {
 			t.Errorf("Expected initial size to be 0, got %d", newCache.Size())
 		}
-		if newCache.Capacity() != READ_PATH_CACHE_CAPACITY {
+		if newCache.Capacity() != uint32(READ_PATH_CACHE_CAPACITY) {
 			t.Errorf("Expected capacity to be %d, got %d", READ_PATH_CACHE_CAPACITY, newCache.Capacity())
 		}
 	})

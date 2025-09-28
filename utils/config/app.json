@@ -1,0 +1,38 @@
+{
+  "lsm": {
+    "max_levels": 7,
+    "max_tables_per_level": 4,
+    "max_memtables": 4,
+    "compaction_type": "size",
+    "lsm_path": "lsm.db"
+  },
+  "cache": {
+    "read_path_capacity": 1000,
+    "block_capacity": 100
+  },
+  "wal": {
+    "block_size": 4096,
+    "log_size": 16,
+    "wal_path": "wal.log"
+  },
+  "sstable": {
+    "compression_enabled": true,
+    "block_size": 4096,
+    "use_separate_files": true,
+    "sparse_step_index": 10
+  },
+  "memtable": {
+    "capacity": 1000,
+    "memtable_type": "btree"
+  },
+  "bloom_filter": {
+    "false_positive_rate": 0.01
+  },
+  "block_manager": {
+    "block_size": 4096,
+    "cache_size": 100
+  },
+  "crc": {
+    "size": 4
+  }
+}

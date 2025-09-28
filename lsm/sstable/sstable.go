@@ -11,6 +11,7 @@ import (
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
 	byte_util "hunddb/utils/byte_util"
+	"hunddb/utils/config"
 	crc_util "hunddb/utils/crc"
 	string_util "hunddb/utils/string_util"
 	"io"
@@ -29,13 +30,24 @@ TODO:
 Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
 */
 
-// TODO: Load from config
+// Configuration variables loaded from config file
 var (
-	COMPRESSION_ENABLED = true
-	BLOCK_SIZE          = 1024 * uint64(4) // 4KB
-	USE_SEPARATE_FILES  = true
-	SPARSE_STEP_INDEX   = 10 // Every 10th index goes into the summary
+	COMPRESSION_ENABLED bool   // Default values as fallback
+	BLOCK_SIZE          uint64        
+	USE_SEPARATE_FILES  bool 
+	SPARSE_STEP_INDEX   uint64 // Every 10th index goes into the summary
 )
+
+// init loads SSTable configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	if cfg != nil {
+		COMPRESSION_ENABLED = cfg.SSTable.CompressionEnabled
+		BLOCK_SIZE = uint64(cfg.SSTable.BlockSize)
+		USE_SEPARATE_FILES = cfg.SSTable.UseSeparateFiles
+		SPARSE_STEP_INDEX = cfg.SSTable.SparseStepIndex
+	}
+}
 
 const (
 	FILE_NAME_FORMAT          = "sstable_%d.db"
@@ -323,7 +335,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	SSTableConfig := &SSTableConfig{
 		UseSeparateFiles:   USE_SEPARATE_FILES,
 		CompressionEnabled: COMPRESSION_ENABLED,
-		SparseStepIndex:    SPARSE_STEP_INDEX,
+		SparseStepIndex:    int(SPARSE_STEP_INDEX),
 	}
 
 	serializedConfig, configSize, err := SSTableConfig.serialize()
@@ -636,7 +648,7 @@ func generateSummaryEntries(indexEntries []IndexEntry) []IndexEntry {
 	summaryEntries := make([]IndexEntry, 0, len(indexEntries))
 
 	for i, entry := range indexEntries {
-		if i%SPARSE_STEP_INDEX == 0 {
+		if i%int(SPARSE_STEP_INDEX) == 0 {
 			summaryEntries = append(summaryEntries, entry)
 		}
 	}

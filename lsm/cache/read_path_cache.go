@@ -3,12 +3,20 @@ package cache
 import (
 	lru_cache "hunddb/lsm/lru_cache"
 	model "hunddb/model/record"
+	"hunddb/utils/config"
 )
 
-// TODO: Load capacity from config
-const (
-	READ_PATH_CACHE_CAPACITY = 1000
+// Configuration variables loaded from config file
+var (
+	READ_PATH_CACHE_CAPACITY uint64 
 )
+
+// init loads Cache configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	// Always use config - no fallbacks here
+	READ_PATH_CACHE_CAPACITY = cfg.Cache.ReadPathCapacity
+}
 
 // ReadPathCache wraps the LRU cache for the read path
 // This cache stores actual key-value pairs read from SSTables
@@ -19,7 +27,7 @@ type ReadPathCache struct {
 // NewReadPathCache creates a new cache for the read path
 func NewReadPathCache() *ReadPathCache {
 	return &ReadPathCache{
-		cache: lru_cache.NewLRUCache[string, *model.Record](READ_PATH_CACHE_CAPACITY),
+		cache: lru_cache.NewLRUCache[string, *model.Record](uint32(READ_PATH_CACHE_CAPACITY)),
 	}
 }
 
