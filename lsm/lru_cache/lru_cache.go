@@ -13,7 +13,6 @@ var (
 	ErrKeyNotFound = errors.New("key not found")
 )
 
-// TODO: Add capacity of lru to config, validating it and setting the default value
 
 // LRUCache is a generic Least Recently Used cache implementation (Used for read path cache and for block manager)
 // K is the key type (string for records, disk location for blocks)
