@@ -363,7 +363,7 @@ func TestPersistMemtable_DifferentSparseStepIndexes(t *testing.T) {
 	COMPRESSION_ENABLED = false
 
 	// Test different sparse step indexes
-	testCases := []int{1, 5, 10, 25}
+	testCases := []uint64{1, 5, 10, 25}
 
 	for i, stepIndex := range testCases {
 		SPARSE_STEP_INDEX = stepIndex
@@ -830,7 +830,7 @@ func TestGet_DifferentSparseStepIndexes(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		SPARSE_STEP_INDEX = tc.sparseIndex
+		SPARSE_STEP_INDEX = uint64(tc.sparseIndex)
 
 		records := createTestRecords(tc.recordCount)
 		err := PersistMemtable(records, tc.tableIndex)
@@ -1044,7 +1044,7 @@ func TestGet_AllConfigurationCombinations(t *testing.T) {
 	configurations := []struct {
 		separateFiles bool
 		compression   bool
-		sparseStep    int
+		sparseStep    uint64
 		name          string
 	}{
 		{true, true, 5, "separate_files_compressed_sparse5"},
@@ -1496,7 +1496,7 @@ func TestCheckIntegrity_AllConfigurationCombinations(t *testing.T) {
 	configurations := []struct {
 		separateFiles bool
 		compression   bool
-		sparseStep    int
+		sparseStep    uint64
 		name          string
 	}{
 		{true, true, 5, "separate_files_compressed_sparse5"},
@@ -2387,7 +2387,7 @@ func TestGetNextForPrefix_DifferentConfigurations(t *testing.T) {
 	configurations := []struct {
 		separateFiles bool
 		compression   bool
-		sparseStep    int
+		sparseStep    uint64
 		name          string
 	}{
 		{true, false, 10, "separate_files_uncompressed"},
@@ -3020,7 +3020,7 @@ func TestScanForPrefix_DifferentConfigurations(t *testing.T) {
 	configurations := []struct {
 		separateFiles bool
 		compression   bool
-		sparseStep    int
+		sparseStep    uint64
 		name          string
 	}{
 		{true, false, 10, "separate_files_uncompressed"},

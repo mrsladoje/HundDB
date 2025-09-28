@@ -9,18 +9,9 @@ import (
 	"hunddb/lsm/sstable"
 	wal "hunddb/lsm/wal"
 	model "hunddb/model/record"
+	"hunddb/utils/config"
 	"os"
 	"time"
-)
-
-// TODO: load from config
-const (
-	MAX_LEVELS           = 7
-	COMPACTION_TYPE      = "size"
-	MAX_TABLES_PER_LEVEL = 4
-	MAX_MEMTABLES        = 4
-	LSM_PATH             = "lsm.db"
-	CRC_SIZE             = 4
 )
 
 /*
@@ -32,6 +23,14 @@ type LSM struct {
 	memtables []*memtable.MemTable
 	wal       *wal.WAL
 	cache     *cache.ReadPathCache
+
+	// Configuration attributes - loaded from config file
+	maxLevels         uint64
+	maxTablesPerLevel uint64
+	maxMemtables      uint64
+	compactionType    string
+	lsmPath          string
+	crcSize          uint64
 
 	// Flag to indicate if previous data was lost during loading
 	DataLost bool
@@ -72,7 +71,7 @@ func (lsm *LSM) PersistLSM() error {
 
 	blockManager := block_manager.GetBlockManager()
 
-	err := blockManager.WriteToDisk(data, LSM_PATH, 0)
+	err := blockManager.WriteToDisk(data, lsm.lsmPath, 0)
 
 	return err
 }
@@ -89,7 +88,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 	stringifiedLevels := string(data)
 
 	// Parse the stringified levels back into the levels slice
-	lsm.levels = make([][]int, MAX_LEVELS)
+	lsm.levels = make([][]int, lsm.maxLevels)
 
 	i := 0
 	for i < len(stringifiedLevels) {
@@ -129,7 +128,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 			i++ // skip ']'
 		}
 
-		if levelNum < MAX_LEVELS {
+		if uint64(levelNum) < lsm.maxLevels {
 			lsm.levels[levelNum] = tableIndexes
 		}
 	}
@@ -142,10 +141,19 @@ LoadLSM loads the LSM from disk, or creates a new one if it doesn't exist.
 Always returns an LSM instance. If previous data couldn't be loaded, the DataLost flag will be set to true.
 */
 func LoadLSM() *LSM {
-	// Create a new LSM instance with default values
+	// Create a new LSM instance with config values
+	cfg := config.GetConfig()
 	lsm := &LSM{
-		levels:    make([][]int, MAX_LEVELS),
-		memtables: make([]*memtable.MemTable, 0, MAX_MEMTABLES),
+		// Initialize config attributes
+		maxLevels:         cfg.LSM.MaxLevels,
+		maxTablesPerLevel: cfg.LSM.MaxTablesPerLevel,
+		maxMemtables:      cfg.LSM.MaxMemtables,
+		compactionType:    cfg.LSM.CompactionType,
+		lsmPath:          cfg.LSM.LSMPath,
+		crcSize:          cfg.CRC.Size,
+		// Initialize slices with config values
+		levels:    make([][]int, int(cfg.LSM.MaxLevels)),
+		memtables: make([]*memtable.MemTable, 0, int(cfg.LSM.MaxMemtables)),
 		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
 		cache:     cache.NewReadPathCache(),
 		DataLost:  false, // Initially assume no data loss
@@ -154,7 +162,7 @@ func LoadLSM() *LSM {
 	blockManager := block_manager.GetBlockManager()
 
 	// Check if the file exists using os.Stat
-	_, err := os.Stat(LSM_PATH)
+	_, err := os.Stat(lsm.lsmPath)
 	if os.IsNotExist(err) {
 		// File doesn't exist - this is a fresh start (not data loss)
 		firstMemtable, _ := memtable.NewMemtable()
@@ -165,7 +173,7 @@ func LoadLSM() *LSM {
 	// File exists, so any errors from here on are considered data corruption
 
 	// Try to read the levels size
-	levelsSizeBytes, _, err := blockManager.ReadFromDisk(LSM_PATH, 0, 8)
+	levelsSizeBytes, _, err := blockManager.ReadFromDisk(lsm.lsmPath, 0, 8)
 	if err != nil {
 		// File exists but can't read size header - corruption
 		lsm.DataLost = true
@@ -175,7 +183,7 @@ func LoadLSM() *LSM {
 	levelsSize := binary.LittleEndian.Uint64(levelsSizeBytes)
 
 	// Try to read the actual levels data
-	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8+CRC_SIZE, uint64(levelsSize))
+	data, _, err := blockManager.ReadFromDisk(lsm.lsmPath, 8+uint64(lsm.crcSize), uint64(levelsSize))
 	if err != nil {
 		// File exists but can't read data - corruption
 		lsm.DataLost = true
@@ -424,7 +432,7 @@ func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]strin
 
 func (lsm *LSM) checkIfToFlush(key string) error {
 	n := lsm.memtables[len(lsm.memtables)-1]
-	if len(lsm.memtables) == MAX_MEMTABLES && n.IsFull() {
+	if uint64(len(lsm.memtables)) == lsm.maxMemtables && n.IsFull() {
 		// Flush the memtable to disk
 		// TODO: concurrently flush
 	}
