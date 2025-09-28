@@ -14,6 +14,7 @@ const Result = ({
   operations = [],
   onPrefixScanPageChange = null,
   currentPrefix = "",
+  activeOperationId = null,
 }) => {
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
@@ -26,9 +27,7 @@ const Result = ({
 
     return (
       <span
-        className={`${className} ${
-          shouldTruncate ? "cursor-help" : ""
-        } !select-text text-left`}
+        className={`${className} ${shouldTruncate ? "cursor-help" : ""} !select-text text-left`}
         title={shouldTruncate ? text : undefined}
       >
         {displayText}
@@ -86,26 +85,90 @@ const Result = ({
 
   const colors = getColorScheme();
 
+  const renderIteratorContent = (op) => {
+    if (!op.currentRecord && !op.notFoundMessage && !op.message) {
+      return (
+        <div className="text-center py-4">
+          <span className="text-gray-500">No current record</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        {op.currentRecord && <Record record={op.currentRecord} />}
+
+        {op.notFoundMessage && !op.currentRecord && (
+          <div className="text-center py-4 text-yellow-700 bg-yellow-50 rounded-lg border border-yellow-200">
+            {op.notFoundMessage}
+          </div>
+        )}
+
+        {op.message && !op.success && !op.currentRecord && (
+          <div className="text-center py-4 text-red-700 bg-red-50 rounded-lg border border-red-200">
+            {op.message}
+          </div>
+        )}
+
+        <div className="flex justify-between pt-[0.4rem]">
+          <div className="mt-2 flex items-center gap-2">
+            <span
+              className={`${
+                op.notFoundMessage
+                  ? "text-yellow-700"
+                  : !op.success
+                  ? "text-red-700"
+                  : "text-green-700"
+              } text-md font-medium`}
+            >
+              Prefix:
+            </span>
+            <TruncatedText
+              text={op.prefix}
+              className={`font-mono ${
+                op.notFoundMessage
+                  ? "text-yellow-700 bg-yellow-100"
+                  : !op.success
+                  ? "text-red-700 bg-red-100"
+                  : "text-green-700 bg-green-100"
+              }  px-2 py-1 rounded text-md`}
+              maxLength={50}
+            />
+          </div>
+          <button
+            onClick={() => onIteratorNext && onIteratorNext(op)}
+            disabled={op.ended}
+            className={`px-4 py-2 rounded-lg font-bold text-sm border-2 transition-all duration-200 ${
+              op.ended
+                ? "bg-gray-300 text-gray-500 border-gray-400 cursor-not-allowed"
+                : "bg-blue-500 text-white border-blue-700 hover:bg-blue-600 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+            }`}
+          >
+            {op.ended ? "Iterator Ended" : "Next →"}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderContent = () => {
     switch (operation) {
-      case "GET":
+      case "GET": {
         if (isSuccess && result) {
           const record = parseRecord(result);
-          if (record) {
-            return <Record record={record} />;
-          }
+          if (record) return <Record record={record} />;
         }
         return (
           <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
             {result || notFoundMessage || error}
           </pre>
         );
+      }
 
-      case "PUT":
+      case "PUT": {
         if (isSuccess && result) {
           const keyMatch = result.match(/key: (.+)$/);
           const extractedKey = keyMatch ? keyMatch[1] : "Unknown";
-
           return (
             <div className="space-y-4">
               <div className="bg-white/50 rounded-lg p-4 border-2 border-green-300">
@@ -132,12 +195,12 @@ const Result = ({
             {result || error}
           </pre>
         );
+      }
 
-      case "DELETE":
+      case "DELETE": {
         if (isSuccess && result) {
           const keyMatch = result.match(/key: (.+)$/);
           const extractedKey = keyMatch ? keyMatch[1] : "Unknown";
-
           return (
             <div className="space-y-4">
               <div className="bg-white/50 rounded-lg p-4 border-2 border-green-300">
@@ -164,20 +227,35 @@ const Result = ({
             {result || notFoundMessage || error}
           </pre>
         );
+      }
 
-      case "PREFIX_ITERATE":
-        if (iteratorOperation && onIteratorNext) {
-          return renderIteratorContent(iteratorOperation);
+      case "PREFIX_ITERATE": {
+        // Prefer the active op (e.g., when a RecentOperations item is clicked),
+        // otherwise fall back to the most recent executed iterator op
+        const op = (activeOperationId
+          ? operations.find(
+              (o) => o.id === activeOperationId && o.type === "PREFIX_ITERATE"
+            )
+          : operations.find((o) => o.type === "PREFIX_ITERATE")) || null;
+        if (op) {
+          return renderIteratorContent(op);
         }
+        return (
+          <pre className={`whitespace-pre-wrap ${colors.contentColor}`}>
+            {result || notFoundMessage || error}
+          </pre>
+        );
+      }
 
-      case "PREFIX_SCAN":
+      case "PREFIX_SCAN": {
         if (!error) {
-          let currentOperation = operations?.find(
-            (op) => op.type === "PREFIX_SCAN" && op.prefix === currentPrefix
-          );
-          if (!currentOperation) {
-            currentOperation = operations?.find((op) => op.type === "PREFIX_SCAN");
-          }
+          // Prefer the active op (e.g., when a RecentOperations item is clicked),
+          // otherwise fall back to the most recent executed PREFIX_SCAN op
+          const currentOperation = (activeOperationId
+            ? operations.find(
+                (op) => op.id === activeOperationId && op.type === "PREFIX_SCAN"
+              )
+            : operations.find((op) => op.type === "PREFIX_SCAN")) || null;
           if (currentOperation) {
             return (
               <div className="flex flex-col gap-4">
@@ -195,7 +273,7 @@ const Result = ({
                   </span>
                   <TruncatedText
                     text={currentOperation.prefix}
-                    className={`font-mono ${
+                    className={`${
                       currentOperation.notFoundMessage
                         ? "text-yellow-700 bg-yellow-100"
                         : !currentOperation.success
@@ -224,8 +302,8 @@ const Result = ({
                         };
                       }
                       return null;
-                    } catch (error) {
-                      console.error("Error fetching record:", error);
+                    } catch (e) {
+                      console.error("Error fetching record:", e);
                       return null;
                     }
                   }}
@@ -240,6 +318,7 @@ const Result = ({
             {result || notFoundMessage || error}
           </pre>
         );
+      }
 
       default:
         return (
@@ -248,78 +327,6 @@ const Result = ({
           </pre>
         );
     }
-  };
-
-  const renderIteratorContent = (operation) => {
-    if (
-      !operation.currentRecord &&
-      !operation.notFoundMessage &&
-      !operation.message
-    ) {
-      return (
-        <div className="text-center py-4">
-          <span className="text-gray-500">No current record</span>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-4">
-        {operation.currentRecord && <Record record={operation.currentRecord} />}
-
-        {operation.notFoundMessage && !operation.currentRecord && (
-          <div className="text-center py-4 text-yellow-700 bg-yellow-50 rounded-lg border border-yellow-200">
-            {operation.notFoundMessage}
-          </div>
-        )}
-
-        {operation.message &&
-          !operation.success &&
-          !operation.currentRecord && (
-            <div className="text-center py-4 text-red-700 bg-red-50 rounded-lg border border-red-200">
-              {operation.message}
-            </div>
-          )}
-
-        <div className="flex justify-between pt-[0.4rem]">
-          <div className="mt-2 flex items-center gap-2">
-            <span
-              className={`${
-                operation.notFoundMessage
-                  ? "text-yellow-700"
-                  : !operation.success
-                  ? "text-red-700"
-                  : "text-green-700"
-              } text-md font-medium`}
-            >
-              Prefix:
-            </span>
-            <TruncatedText
-              text={operation.prefix}
-              className={`font-mono ${
-                operation.notFoundMessage
-                  ? "text-yellow-700 bg-yellow-100"
-                  : !operation.success
-                  ? "text-red-700 bg-red-100"
-                  : "text-green-700 bg-green-100"
-              }  px-2 py-1 rounded text-md`}
-              maxLength={50}
-            />
-          </div>
-          <button
-            onClick={() => onIteratorNext(operation)}
-            disabled={operation.ended}
-            className={`px-4 py-2 rounded-lg font-bold text-sm border-2 transition-all duration-200 ${
-              operation.ended
-                ? "bg-gray-300 text-gray-500 border-gray-400 cursor-not-allowed"
-                : "bg-blue-500 text-white border-blue-700 hover:bg-blue-600 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
-            }`}
-          >
-            {operation.ended ? "Iterator Ended" : "Next →"}
-          </button>
-        </div>
-      </div>
-    );
   };
 
   const getTitle = () => {

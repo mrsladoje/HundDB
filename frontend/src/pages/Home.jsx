@@ -162,6 +162,7 @@ export const Home = () => {
   const [isDogHovered, setIsDogHovered] = useState(false);
   const [isSleepyDogHovered, setIsSleepyDogHovered] = useState(false);
   const [operations, setOperations] = useState([]);
+  const [activeOperationId, setActiveOperationId] = useState(null);
   const [stats, setStats] = useState({
     gets: 0,
     puts: 0,
@@ -245,6 +246,7 @@ export const Home = () => {
     };
   const opWithExtras = extra && typeof extra === "object" ? { ...operation, ...extra } : operation;
   setOperations((prev) => [opWithExtras, ...prev.slice(0, 14)]); // Keep only last 15 operations
+  setActiveOperationId(operation.id);
   };
 
   const validateOperation = () => {
@@ -786,6 +788,7 @@ export const Home = () => {
   const handleOperationClick = (operation) => {
     // Set the operation type and restore the input values
     setSelectedOperation(operation.type);
+  setActiveOperationId(operation.id);
 
     // Clear any existing errors/validation
     setError(null);
@@ -1171,18 +1174,11 @@ export const Home = () => {
                 error={error}
                 notFoundMessage={notFoundMessage}
                 isSuccess={!error && !notFoundMessage && !!result}
-                iteratorOperation={
-                  selectedOperation === "PREFIX_ITERATE"
-                    ? operations.find(
-                        (op) =>
-                          op.type === "PREFIX_ITERATE" && op.key === prefix
-                      )
-                    : null
-                }
                 onIteratorNext={handlePrefixIteratorNext}
                 operations={operations}
                 onPrefixScanPageChange={handlePrefixScanPageChange}
                 currentPrefix={prefix}
+                activeOperationId={activeOperationId}
               />
             )}
           </div>

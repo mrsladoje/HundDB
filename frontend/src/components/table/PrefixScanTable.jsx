@@ -129,8 +129,6 @@ const PrefixScanTable = ({
   }
 
   if (!keys || keys.length === 0) {
-    console.log(operation.prefix);
-    
     return (
       <NoResultsFoundCard
         searchQuery={operation?.prefix || ""}
