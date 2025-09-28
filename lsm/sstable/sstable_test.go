@@ -2913,7 +2913,7 @@ func TestGetNextForRange_DifferentConfigurations(t *testing.T) {
 	for i, c := range configs {
 		USE_SEPARATE_FILES = c.sep
 		COMPRESSION_ENABLED = c.comp
-		SPARSE_STEP_INDEX = c.sparse
+		SPARSE_STEP_INDEX = uint64(c.sparse)
 		recs := createNumericUserRecords(30)
 		idx := 200 + i
 		if err := PersistMemtable(recs, idx); err != nil {
@@ -3910,7 +3910,7 @@ func TestScanForRange_DifferentConfigurations(t *testing.T) {
 		t.Run(config.name, func(t *testing.T) {
 			USE_SEPARATE_FILES = config.separateFiles
 			COMPRESSION_ENABLED = config.compression
-			SPARSE_STEP_INDEX = config.sparseStep
+			SPARSE_STEP_INDEX = uint64(config.sparseStep)
 
 			records := createRangeTestRecords()
 			tableIndex := 20 + i

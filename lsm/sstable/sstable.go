@@ -32,9 +32,9 @@ Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
 
 // Configuration variables loaded from config file
 var (
-	COMPRESSION_ENABLED bool   // Default values as fallback
-	BLOCK_SIZE          uint64        
-	USE_SEPARATE_FILES  bool 
+	COMPRESSION_ENABLED bool // Default values as fallback
+	BLOCK_SIZE          uint64
+	USE_SEPARATE_FILES  bool
 	SPARSE_STEP_INDEX   uint64 // Every 10th index goes into the summary
 )
 
@@ -151,7 +151,7 @@ type SSTableConfig struct {
 		Each sparseStepIndex-th index for the Index component goes into the Summary component.
 		Chosen by user.
 	*/
-	SparseStepIndex int
+	SparseStepIndex uint64
 }
 
 // DataComp handles the actual key-value data storage.
@@ -469,7 +469,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	SSTableConfig := &SSTableConfig{
 		UseSeparateFiles:   USE_SEPARATE_FILES,
 		CompressionEnabled: COMPRESSION_ENABLED,
-		SparseStepIndex:    int(SPARSE_STEP_INDEX),
+		SparseStepIndex:    uint64(SPARSE_STEP_INDEX),
 	}
 
 	serializedConfig, configSize, err := SSTableConfig.serialize()
@@ -1159,7 +1159,7 @@ func GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string, index
 Checks basic bounds for a range and computes last summary and index entry indexes for searching.
 Returns inBounds=false if [rangeStart, rangeEnd] doesn't overlap with [firstKey, lastKey] of the table.
 */
-func checkIndexBoundsForRange(filepath string, offset uint64, rangeStart string, rangeEnd string, sparseStep int) (bool, uint64, uint64, error) {
+func checkIndexBoundsForRange(filepath string, offset uint64, rangeStart string, rangeEnd string, sparseStep uint64) (bool, uint64, uint64, error) {
 	// Read first entry key
 	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
 	if err != nil {
@@ -1293,7 +1293,7 @@ func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, er
 
 	useSeparateFiles := byte_util.ByteToBool(blockData[CRC_SIZE])
 	compressionEnabled := byte_util.ByteToBool(blockData[CRC_SIZE+1])
-	sparseStepIndex := int(binary.LittleEndian.Uint64(blockData[CRC_SIZE+2 : CRC_SIZE+10]))
+	sparseStepIndex := uint64(binary.LittleEndian.Uint64(blockData[CRC_SIZE+2 : CRC_SIZE+10]))
 
 	config := &SSTableConfig{
 		UseSeparateFiles:   useSeparateFiles,
@@ -1351,7 +1351,7 @@ If the key happens to be one of the bounds, we return the offset in Data compone
 
 If the key is not in the bounds, there is no point in searching further.
 */
-func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
+func checkIndexBounds(filepath string, offset uint64, key string, sparseStep uint64) (bool, bool, uint64, uint64, uint64, error) {
 
 	firstEntryKey, firstEntryDataOffset, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
 
@@ -1403,7 +1403,7 @@ If the key happens to be one of the bounds, we return the offset in Data compone
 
 If the key is not in the bounds, there is no point in searching further.
 */
-func checkIndexBoundsForPrefix(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
+func checkIndexBoundsForPrefix(filepath string, offset uint64, key string, sparseStep uint64) (bool, bool, uint64, uint64, uint64, error) {
 
 	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
 
@@ -1472,7 +1472,7 @@ Binary search the summary index for the given key.
 When we reach recursion base case, we do binary search of the index component.
 */
 func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
-	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
+	sparseIndex uint64, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
 	if indexFirst > indexLast {
 		return 0, false, nil // Key not found, terminate gracefully
@@ -1572,7 +1572,7 @@ lowerBoundSearchSummaryForPrefix performs a lower-bound search in the summary co
 If found, it then performs a more precise lower-bound search in the index component to find the exact offset.
 */
 func lowerBoundSearchSummary(summaryPath string, offsetFirst uint64, indexFirst uint64,
-	indexLast uint64, startingKey string, sparseIndex int, indexFileOffset uint64,
+	indexLast uint64, startingKey string, sparseIndex uint64, indexFileOffset uint64,
 	useSeparateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
 	low := indexFirst
@@ -2410,7 +2410,7 @@ func Compact(sstableIndexes []int, newIndex int) error {
 	newConfig := &SSTableConfig{
 		UseSeparateFiles:   USE_SEPARATE_FILES,
 		CompressionEnabled: COMPRESSION_ENABLED,
-		SparseStepIndex:    SPARSE_STEP_INDEX,
+		SparseStepIndex:    uint64(SPARSE_STEP_INDEX),
 	}
 
 	// 3. Persist new config
