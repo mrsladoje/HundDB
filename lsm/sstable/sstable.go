@@ -2465,6 +2465,12 @@ func Compact(sstableIndexes []int, newIndex int) error {
 		return fmt.Errorf("failed to create compacted components: %v", err)
 	}
 
+	// 8. Clean up old SSTable files after successful compaction
+	err = cleanupOldSSTables(sstableIndexes)
+	if err != nil {
+		return fmt.Errorf("compaction succeeded but failed to clean up old files: %v", err)
+	}
+
 	return nil
 }
 
@@ -2867,5 +2873,42 @@ func createCompactedComponentsFromState(state *CompactionState, newIndex int, co
 		return err
 	}
 
+	return nil
+}
+
+// cleanupOldSSTables removes the files of old SSTables after successful compaction
+func cleanupOldSSTables(sstableIndexes []int) error {
+	for _, index := range sstableIndexes {
+		// Get config to determine if using separate files
+		config, _, _, err := deserializeSSTableConfig(index)
+		if err != nil {
+			// If we can't read config, try to delete both file patterns
+			config = &SSTableConfig{UseSeparateFiles: false}
+		}
+
+		if config.UseSeparateFiles {
+			// Delete all component files
+			filesToDelete := []string{
+				fmt.Sprintf(FILE_NAME_FORMAT, index), // Main config file
+				fmt.Sprintf(DATA_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(METADATA_FILE_NAME_FORMAT, index),
+			}
+
+			for _, filePath := range filesToDelete {
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("failed to delete file %s: %v", filePath, err)
+				}
+			}
+		} else {
+			// Delete single file
+			filePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+			if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to delete file %s: %v", filePath, err)
+			}
+		}
+	}
 	return nil
 }
