@@ -12,7 +12,6 @@ import (
 	"os"
 )
 
-// TODO: Create tests for WAL when all dependencies are complete.
 // TODO: These const values should be imported from user config
 const (
 	BLOCK_SIZE = 4096
