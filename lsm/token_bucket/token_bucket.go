@@ -6,12 +6,16 @@ import (
 	"time"
 )
 
+// Configuration variables loaded from config file
+var (
+	TOKEN_CAPACITY  uint16 // Maximum amount of tokens
+	REFILL_INTERVAL uint   // Refills tokens on every passed interval (seconds)
+	REFILL_AMOUNT   uint16 // Amount to be refilled
+)
+
 const (
-	TOKEN_CAPACITY        uint16 = 5  // Maximum amount of tokens
-	REFILL_INTERVAL       uint64 = 20 // Refills tokens on every passed interval
-	REFILL_AMOUNT         uint16 = 1  // Amount to be refilled
-	LAST_RESET_SIZE       uint16 = 8  // Size of LastReset in bytes
-	REMAINING_TOKENS_SIZE uint16 = 2  // Size of RemainingTokens in bytes
+	LAST_RESET_SIZE       uint16 = 8 // Size of LastReset in bytes
+	REMAINING_TOKENS_SIZE uint16 = 2 // Size of RemainingTokens in bytes
 	FILEPATH              string = "lsm/token_bucket/token_bucket.db"
 )
 
