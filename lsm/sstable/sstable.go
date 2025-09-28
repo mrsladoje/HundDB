@@ -1844,6 +1844,207 @@ func scanSequentiallyForPrefixRange(dataPath string, startOffset uint64, prefix 
 	return nil
 }
 
+/*
+ScanForRange scans records within the given range [rangeStart, rangeEnd] (inclusive) and adds keys to bestKeys.
+Only keys are added for memory efficiency - use Get() to retrieve full records.
+No Bloom filter checks are performed as ranges cannot be easily represented in filters.
+Parameters:
+- rangeStart: the starting key of the range (inclusive)
+- rangeEnd: the ending key of the range (inclusive)
+- tombstonedKeys: keys that have been tombstoned in more recent structures
+- bestKeys: best keys found so far from previous memtables (will be modified)
+- pageSize: maximum number of results per page (typically <= 50)
+- pageNumber: which page to return (0-based)
+- index: SSTable index to scan
+*/
+func ScanForRange(rangeStart string, rangeEnd string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, index int) error {
+	// Quick invalid range check
+	if rangeStart > rangeEnd {
+		return nil
+	}
+
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// Skip Bloom filter check - ranges cannot be easily represented in filters
+
+	// 1. Data, Index and Summary preparation
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check for range overlap
+	inBounds, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForRange(indexPath, indexFileOffset, rangeStart, rangeEnd, config.SparseStepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to check index bounds for range: %v", err)
+	}
+	if !inBounds {
+		return nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position using lexicographically smaller string than rangeStart
+	searchKey := string_util.FindLexicographicallySmaller(rangeStart)
+
+	// Use existing binary search to find the starting position
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	var startingDataOffset uint64
+	if found {
+		startingDataOffset = offset
+	} else {
+		// If not found, start from the beginning of data
+		startingDataOffset = uint64(CRC_SIZE)
+		if config.UseSeparateFiles {
+			startingDataOffset += STANDARD_FLAG_SIZE
+		} else {
+			startingDataOffset = offsets[0] + CRC_SIZE
+		}
+	}
+
+	// 4. Sequential scan from the starting position
+	return scanSequentiallyForRange(dataPath, startingDataOffset, rangeStart, rangeEnd, tombstonedKeys, bestKeys, pageSize, pageNumber, config.CompressionEnabled)
+}
+
+/*
+scanSequentiallyForRange scans records sequentially starting from the given offset,
+looking for records within the specified range [rangeStart, rangeEnd] (inclusive).
+It handles tombstones and maintains bestKeys with pagination.
+*/
+func scanSequentiallyForRange(dataPath string, startOffset uint64, rangeStart string, rangeEnd string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, compressionEnabled bool) error {
+	blockManager := block_manager.GetBlockManager()
+	currentOffset := startOffset
+
+	// Create sets for efficient lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	var candidateKeys []string
+	foundRangeStart := false
+
+	// Read records sequentially
+	for {
+		// Read record size
+		recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+		if recordSize == 0 {
+			break // Invalid record size indicates end
+		}
+		currentOffset = newOffset
+
+		// Read record data
+		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		currentOffset = newOffset
+
+		// Deserialize record
+		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+		// Check if we've reached the range
+		if rec.Key >= rangeStart && rec.Key <= rangeEnd {
+			foundRangeStart = true
+		} else if foundRangeStart && rec.Key > rangeEnd {
+			// We've moved past the range, stop scanning
+			break
+		} else if rec.Key < rangeStart {
+			// We haven't reached the range yet, continue scanning
+			continue
+		}
+
+		// If we're not in the range, skip
+		if rec.Key < rangeStart || rec.Key > rangeEnd {
+			continue
+		}
+
+		// Skip if already tombstoned by higher levels
+		if tombstonedSet[rec.Key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[rec.Key] {
+			continue
+		}
+
+		// Handle tombstones
+		if rec.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
+				tombstonedSet[rec.Key] = true
+			}
+			continue
+		}
+
+		// Add to candidate keys
+		candidateKeys = append(candidateKeys, rec.Key)
+		bestKeysSet[rec.Key] = true
+	}
+
+	// Handle pagination
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(candidateKeys) {
+		return nil // No keys for this page
+	}
+
+	if endIndex > len(candidateKeys) {
+		endIndex = len(candidateKeys)
+	}
+
+	// Add paginated keys to bestKeys in sorted order
+	if bestKeys != nil {
+		for i := startIndex; i < endIndex; i++ {
+			*bestKeys = insertKeySortedIfNotExists(*bestKeys, candidateKeys[i])
+		}
+	}
+
+	return nil
+}
+
 // insertKeySortedIfNotExists inserts a key in sorted order into the slice if it doesn't already exist
 func insertKeySortedIfNotExists(keys []string, newKey string) []string {
 	// Check if key already exists
