@@ -1088,6 +1088,248 @@ func TestSkipList_ScanForPrefix_LargeDataset(t *testing.T) {
 	}
 }
 
+func TestSkipList_GetNextForRange_WithKey_FirstRecord(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key123", []byte("value1"), false))
+	_ = sl.Put(rec("key456", []byte("value2"), false))
+	_ = sl.Put(rec("key789", []byte("value3"), false))
+
+	tombstoned := []string{}
+	// Start iteration from beginning (empty key should return first match in range)
+	result := sl.GetNextForRange("key100", "key800", "", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key123" {
+		t.Errorf("Expected key123, got %s", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_IterateNext(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key123", []byte("value1"), false))
+	_ = sl.Put(rec("key456", []byte("value2"), false))
+	_ = sl.Put(rec("key789", []byte("value3"), false))
+
+	tombstoned := []string{}
+	// Get next after key123 within range
+	result := sl.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key456" {
+		t.Errorf("Expected key456, got %s", result.Key)
+	}
+
+	// Get next after key456 within range
+	result = sl.GetNextForRange("key100", "key800", "key456", &tombstoned)
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+
+	// Get next after key789 (should be nil)
+	result = sl.GetNextForRange("key100", "key800", "key789", &tombstoned)
+	if result != nil {
+		t.Errorf("Expected nil, got %s", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_RangeConstraints(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key100", []byte("value1"), false))
+	_ = sl.Put(rec("key200", []byte("value2"), false))
+	_ = sl.Put(rec("key300", []byte("value3"), false))
+	_ = sl.Put(rec("key400", []byte("value4"), false))
+	_ = sl.Put(rec("key500", []byte("value5"), false))
+
+	tombstoned := []string{}
+	// Range [key150, key350) should only include key200 and key300
+	result := sl.GetNextForRange("key150", "key350", "", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key200" {
+		t.Errorf("Expected key200, got %s", result.Key)
+	}
+
+	// Get next after key200 within range
+	result = sl.GetNextForRange("key150", "key350", "key200", &tombstoned)
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key300" {
+		t.Errorf("Expected key300, got %s", result.Key)
+	}
+
+	// Get next after key300 within range (should be nil, key400 is out of range)
+	result = sl.GetNextForRange("key150", "key350", "key300", &tombstoned)
+	if result != nil {
+		t.Errorf("Expected nil (key out of range), got %s", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_SkipTombstoned(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key123", []byte("value1"), false))
+	_ = sl.Put(rec("key456", []byte("value2"), false))
+	_ = sl.Put(rec("key789", []byte("value3"), false))
+
+	// Mark key456 as tombstoned locally
+	_ = sl.Delete(rec("key456", nil, true))
+
+	tombstoned := []string{}
+	// Get next after key123 (should skip tombstoned key456)
+	result := sl.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+	// Tombstoned slice should contain key456
+	if len(tombstoned) != 1 || tombstoned[0] != "key456" {
+		t.Errorf("Expected tombstoned slice to contain key456, got %v", tombstoned)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_ExternalTombstones(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key123", []byte("value1"), false))
+	_ = sl.Put(rec("key456", []byte("value2"), false))
+	_ = sl.Put(rec("key789", []byte("value3"), false))
+
+	// Simulate external tombstones
+	tombstoned := []string{"key456"}
+	result := sl.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_NoMatch(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key100", []byte("value1"), false))
+	_ = sl.Put(rec("key900", []byte("value2"), false))
+
+	tombstoned := []string{}
+	// Range [key200, key800) should not match any records
+	result := sl.GetNextForRange("key200", "key800", "", &tombstoned)
+
+	if result != nil {
+		t.Errorf("Expected nil (no records in range), got %s", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_EmptyRange(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key456", []byte("value1"), false))
+
+	tombstoned := []string{}
+	// Empty range should return nil
+	result := sl.GetNextForRange("key500", "key400", "", &tombstoned)
+
+	if result != nil {
+		t.Errorf("Expected nil (empty range), got %s", result.Key)
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_FullIteration(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+
+	expectedKeys := []string{"user001", "user003", "user005", "user007", "user009"}
+	for _, key := range expectedKeys {
+		_ = sl.Put(rec(key, []byte("value"), false))
+	}
+
+	// Also add some keys outside the range
+	_ = sl.Put(rec("admin001", []byte("value"), false))
+	_ = sl.Put(rec("zuser001", []byte("value"), false))
+
+	tombstoned := []string{}
+	var foundKeys []string
+
+	// Iterate through all user keys in range [user000, user999)
+	currentKey := ""
+	for {
+		result := sl.GetNextForRange("user000", "user999", currentKey, &tombstoned)
+		if result == nil {
+			break
+		}
+		foundKeys = append(foundKeys, result.Key)
+		currentKey = result.Key
+	}
+
+	if len(foundKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys, got %d", len(expectedKeys), len(foundKeys))
+	}
+
+	for i, expected := range expectedKeys {
+		if i >= len(foundKeys) || foundKeys[i] != expected {
+			t.Errorf("At index %d: expected %s, got %s", i, expected, foundKeys[i])
+		}
+	}
+}
+
+func TestSkipList_GetNextForRange_WithKey_MixedTombstones(t *testing.T) {
+	t.Parallel()
+	sl := New(5, 100)
+	_ = sl.Put(rec("key123", []byte("value1"), false))
+	_ = sl.Put(rec("key456", []byte("value2"), false))
+	_ = sl.Put(rec("key789", []byte("value3"), false))
+	_ = sl.Put(rec("key999", []byte("value4"), false))
+
+	// Mark key456 as tombstoned locally
+	_ = sl.Delete(rec("key456", nil, true))
+
+	// Simulate that key789 was tombstoned in a more recent memtable
+	tombstoned := []string{"key789"}
+	result := sl.GetNextForRange("key100", "key999", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key999" {
+		t.Errorf("Expected key999, got %s", result.Key)
+	}
+	// Tombstoned slice should now contain both keys
+	if len(tombstoned) != 2 {
+		t.Errorf("Expected 2 tombstoned keys, got %d", len(tombstoned))
+	}
+	// Check both keys are in tombstoned slice (order may vary)
+	found456 := false
+	found789 := false
+	for _, key := range tombstoned {
+		if key == "key456" {
+			found456 = true
+		}
+		if key == "key789" {
+			found789 = true
+		}
+	}
+	if !found456 || !found789 {
+		t.Errorf("Expected both key456 and key789 in tombstoned slice, got %v", tombstoned)
+	}
+}
+
 func BenchmarkSkipList_ScanForPrefix(b *testing.B) {
 	sl := New(16, 100000)
 

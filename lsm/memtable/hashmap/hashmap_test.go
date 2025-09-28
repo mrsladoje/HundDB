@@ -1060,6 +1060,248 @@ func TestHashMap_ScanForPrefix_EdgeCasePrefixes(t *testing.T) {
 	}
 }
 
+func TestHashMap_GetNextForRange_WithKey_FirstRecord(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	tombstoned := []string{}
+	// Start iteration from beginning (empty key should return first match in range)
+	result := hm.GetNextForRange("key100", "key800", "", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key123" {
+		t.Errorf("Expected key123, got %s", result.Key)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_IterateNext(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	tombstoned := []string{}
+	// Get next after key123 within range
+	result := hm.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key456" {
+		t.Errorf("Expected key456, got %s", result.Key)
+	}
+
+	// Get next after key456 within range
+	result = hm.GetNextForRange("key100", "key800", "key456", &tombstoned)
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+
+	// Get next after key789 (should be nil)
+	result = hm.GetNextForRange("key100", "key800", "key789", &tombstoned)
+	if result != nil {
+		t.Errorf("Expected nil, got %s", result.Key)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_RangeConstraints(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key100", "value1"))
+	_ = hm.Put(makeRec("key200", "value2"))
+	_ = hm.Put(makeRec("key300", "value3"))
+	_ = hm.Put(makeRec("key400", "value4"))
+	_ = hm.Put(makeRec("key500", "value5"))
+
+	tombstoned := []string{}
+	// Range [key150, key350) should only include key200 and key300
+	result := hm.GetNextForRange("key150", "key350", "", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key200" {
+		t.Errorf("Expected key200, got %s", result.Key)
+	}
+
+	// Get next after key200 within range
+	result = hm.GetNextForRange("key150", "key350", "key200", &tombstoned)
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key300" {
+		t.Errorf("Expected key300, got %s", result.Key)
+	}
+
+	// Get next after key300 within range (should be nil, key400 is out of range)
+	result = hm.GetNextForRange("key150", "key350", "key300", &tombstoned)
+	if result != nil {
+		t.Errorf("Expected nil (key out of range), got %s", result.Key)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_SkipTombstoned(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	// Mark key456 as tombstoned locally
+	_ = hm.Delete(makeTomb("key456"))
+
+	tombstoned := []string{}
+	// Get next after key123 (should skip tombstoned key456)
+	result := hm.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+	// Tombstoned slice should contain key456
+	if len(tombstoned) != 1 || tombstoned[0] != "key456" {
+		t.Errorf("Expected tombstoned slice to contain key456, got %v", tombstoned)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_ExternalTombstones(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	// Simulate external tombstones
+	tombstoned := []string{"key456"}
+	result := hm.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_NoMatch(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key100", "value1"))
+	_ = hm.Put(makeRec("key900", "value2"))
+
+	tombstoned := []string{}
+	// Range [key200, key800) should not match any records
+	result := hm.GetNextForRange("key200", "key800", "", &tombstoned)
+
+	if result != nil {
+		t.Errorf("Expected nil (no records in range), got %s", result.Key)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_EmptyRange(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key456", "value1"))
+
+	tombstoned := []string{}
+	// Empty range should return nil
+	result := hm.GetNextForRange("key500", "key400", "", &tombstoned)
+
+	if result != nil {
+		t.Errorf("Expected nil (empty range), got %s", result.Key)
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_FullIteration(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	expectedKeys := []string{"user001", "user003", "user005", "user007", "user009"}
+	for _, key := range expectedKeys {
+		_ = hm.Put(makeRec(key, "value"))
+	}
+
+	// Also add some keys outside the range
+	_ = hm.Put(makeRec("admin001", "value"))
+	_ = hm.Put(makeRec("zuser001", "value"))
+
+	tombstoned := []string{}
+	var foundKeys []string
+
+	// Iterate through all user keys in range [user000, user999)
+	currentKey := ""
+	for {
+		result := hm.GetNextForRange("user000", "user999", currentKey, &tombstoned)
+		if result == nil {
+			break
+		}
+		foundKeys = append(foundKeys, result.Key)
+		currentKey = result.Key
+	}
+
+	if len(foundKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys, got %d", len(expectedKeys), len(foundKeys))
+	}
+
+	for i, expected := range expectedKeys {
+		if i >= len(foundKeys) || foundKeys[i] != expected {
+			t.Errorf("At index %d: expected %s, got %s", i, expected, foundKeys[i])
+		}
+	}
+}
+
+func TestHashMap_GetNextForRange_WithKey_MixedTombstones(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+	_ = hm.Put(makeRec("key999", "value4"))
+
+	// Mark key456 as tombstoned locally
+	_ = hm.Delete(makeTomb("key456"))
+
+	// Simulate that key789 was tombstoned in a more recent memtable
+	tombstoned := []string{"key789"}
+	result := hm.GetNextForRange("key100", "key999", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key999" {
+		t.Errorf("Expected key999, got %s", result.Key)
+	}
+	// Tombstoned slice should now contain both keys
+	if len(tombstoned) != 2 {
+		t.Errorf("Expected 2 tombstoned keys, got %d", len(tombstoned))
+	}
+	// Check both keys are in tombstoned slice (order may vary)
+	found456 := false
+	found789 := false
+	for _, key := range tombstoned {
+		if key == "key456" {
+			found456 = true
+		}
+		if key == "key789" {
+			found789 = true
+		}
+	}
+	if !found456 || !found789 {
+		t.Errorf("Expected both key456 and key789 in tombstoned slice, got %v", tombstoned)
+	}
+}
+
 func BenchmarkHashMap_ScanForPrefix(b *testing.B) {
 	hm := NewHashMap(100000)
 

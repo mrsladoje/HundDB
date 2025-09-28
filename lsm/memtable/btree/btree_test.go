@@ -846,6 +846,207 @@ func TestBTree_ScanForPrefix_NilParameters(t *testing.T) {
 	}
 }
 
+func TestBTree_GetNextForRange_WithKey_FirstRecord(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key123", "value1"))
+	_ = btree.Put(createTestRecord("key456", "value2"))
+	_ = btree.Put(createTestRecord("key789", "value3"))
+
+	tombstoned := []string{}
+	// Start iteration from beginning (empty key should return first match in range)
+	result := btree.GetNextForRange("key100", "key800", "", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key123" {
+		t.Errorf("Expected key123, got %s", result.Key)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_IterateNext(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key123", "value1"))
+	_ = btree.Put(createTestRecord("key456", "value2"))
+	_ = btree.Put(createTestRecord("key789", "value3"))
+
+	tombstoned := []string{}
+	// Get next after key123 within range
+	result := btree.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key456" {
+		t.Errorf("Expected key456, got %s", result.Key)
+	}
+
+	// Get next after key456 within range
+	result = btree.GetNextForRange("key100", "key800", "key456", &tombstoned)
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+
+	// Get next after key789 (should be nil)
+	result = btree.GetNextForRange("key100", "key800", "key789", &tombstoned)
+	if result != nil {
+		t.Errorf("Expected nil, got %s", result.Key)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_RangeConstraints(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key100", "value1"))
+	_ = btree.Put(createTestRecord("key200", "value2"))
+	_ = btree.Put(createTestRecord("key300", "value3"))
+	_ = btree.Put(createTestRecord("key400", "value4"))
+	_ = btree.Put(createTestRecord("key500", "value5"))
+
+	tombstoned := []string{}
+	// Range [key150, key350] should only include key200 and key300
+	result := btree.GetNextForRange("key150", "key350", "", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key200" {
+		t.Errorf("Expected key200, got %s", result.Key)
+	}
+
+	// Get next after key200 within range
+	result = btree.GetNextForRange("key150", "key350", "key200", &tombstoned)
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key300" {
+		t.Errorf("Expected key300, got %s", result.Key)
+	}
+
+	// Get next after key300 within range (should be nil, key400 is out of range)
+	result = btree.GetNextForRange("key150", "key350", "key300", &tombstoned)
+	if result != nil {
+		t.Errorf("Expected nil (key out of range), got %s", result.Key)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_SkipTombstoned(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key123", "value1"))
+	_ = btree.Put(createTestRecord("key456", "value2"))
+	_ = btree.Put(createTestRecord("key789", "value3"))
+
+	// Mark key456 as tombstoned locally
+	_ = btree.Put(createTombstoneRecord("key456"))
+
+	tombstoned := []string{}
+	// Get next after key123 (should skip tombstoned key456)
+	result := btree.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+	// Tombstoned slice should contain key456
+	if len(tombstoned) != 1 || tombstoned[0] != "key456" {
+		t.Errorf("Expected tombstoned slice to contain key456, got %v", tombstoned)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_ExternalTombstones(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key123", "value1"))
+	_ = btree.Put(createTestRecord("key456", "value2"))
+	_ = btree.Put(createTestRecord("key789", "value3"))
+
+	// Simulate external tombstones
+	tombstoned := []string{"key456"}
+	result := btree.GetNextForRange("key100", "key800", "key123", &tombstoned)
+
+	if result == nil {
+		t.Fatal("Expected to find a record, but got nil")
+	}
+	if result.Key != "key789" {
+		t.Errorf("Expected key789, got %s", result.Key)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_NoMatch(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key100", "value1"))
+	_ = btree.Put(createTestRecord("key900", "value2"))
+
+	tombstoned := []string{}
+	// Range [key200, key800) should not match any records
+	result := btree.GetNextForRange("key200", "key800", "", &tombstoned)
+
+	if result != nil {
+		t.Errorf("Expected nil (no records in range), got %s", result.Key)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_EmptyRange(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+	_ = btree.Put(createTestRecord("key456", "value1"))
+
+	tombstoned := []string{}
+	// Empty range should return nil
+	result := btree.GetNextForRange("key500", "key400", "", &tombstoned)
+
+	if result != nil {
+		t.Errorf("Expected nil (empty range), got %s", result.Key)
+	}
+}
+
+func TestBTree_GetNextForRange_WithKey_FullIteration(t *testing.T) {
+	t.Parallel()
+	btree := NewBTree(3, 100)
+
+	expectedKeys := []string{"user001", "user003", "user005", "user007", "user009"}
+	for _, key := range expectedKeys {
+		_ = btree.Put(createTestRecord(key, "value"))
+	}
+
+	// Also add some keys outside the range
+	_ = btree.Put(createTestRecord("admin001", "value"))
+	_ = btree.Put(createTestRecord("zuser001", "value"))
+
+	tombstoned := []string{}
+	var foundKeys []string
+
+	// Iterate through all user keys in range [user000, user999)
+	currentKey := ""
+	for {
+		result := btree.GetNextForRange("user000", "user999", currentKey, &tombstoned)
+		if result == nil {
+			break
+		}
+		foundKeys = append(foundKeys, result.Key)
+		currentKey = result.Key
+	}
+
+	if len(foundKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys, got %d", len(expectedKeys), len(foundKeys))
+	}
+
+	for i, expected := range expectedKeys {
+		if i >= len(foundKeys) || foundKeys[i] != expected {
+			t.Errorf("At index %d: expected %s, got %s", i, expected, foundKeys[i])
+		}
+	}
+}
+
 func BenchmarkBTree_ScanForPrefix(b *testing.B) {
 	btree := NewBTree(64, 100000)
 

@@ -98,6 +98,17 @@ func (bt *BTree) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]s
 	return bt.findNextPrefixMatchAfterKey(prefix, key, bt.root, tombstonedKeys)
 }
 
+// GetNextForRange returns the next record in lexicographical order after the given key,
+// constrained to the given range [rangeStart, rangeEnd] (inclusive), or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (bt *BTree) GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record {
+	if bt.root == nil {
+		return nil
+	}
+
+	return bt.findNextRangeMatchAfterKey(rangeStart, rangeEnd, key, bt.root, tombstonedKeys)
+}
+
 // Put inserts or updates a record in the B-tree.
 //
 // Parameters:
@@ -327,6 +338,92 @@ func (bt *BTree) findNextPrefixMatchAfterKey(prefix string, afterKey string, nod
 		// Search right subtree of this record
 		if i+1 < len(node.children) {
 			if result := bt.findNextPrefixMatchAfterKey(prefix, afterKey, node.children[i+1], tombstonedKeys); result != nil {
+				return result
+			}
+		}
+	}
+
+	return nil
+}
+
+// findNextRangeMatchAfterKey finds the first non-tombstoned record within the given range
+// that comes lexicographically after the given key.
+func (bt *BTree) findNextRangeMatchAfterKey(rangeStart string, rangeEnd string, afterKey string, node *Node, tombstonedKeys *[]string) *model.Record {
+	if node == nil {
+		return nil
+	}
+
+	if node.isLeaf {
+		// Find the first record > afterKey
+		startIndex := sort.Search(len(node.records), func(i int) bool {
+			return node.records[i].Key > afterKey
+		})
+
+		// Check each record from startIndex onwards
+		for i := startIndex; i < len(node.records); i++ {
+			record := node.records[i]
+
+			// Check if key is within range [rangeStart, rangeEnd] (inclusive)
+			if record.Key < rangeStart {
+				continue
+			}
+			if record.Key > rangeEnd {
+				// We've gone beyond the range
+				return nil
+			}
+
+			// Check if this record is tombstoned locally
+			if record.IsDeleted() {
+				addToTombstoned(record.Key, tombstonedKeys)
+				continue
+			}
+
+			// Check if key is tombstoned in more recent structures
+			if isKeyTombstoned(record.Key, tombstonedKeys) {
+				continue
+			}
+
+			// Found a valid, non-tombstoned record within range
+			return record
+		}
+		return nil
+	}
+
+	// For internal nodes, find the appropriate child to start searching from
+	startChildIndex := sort.Search(len(node.records), func(i int) bool {
+		return node.records[i].Key > afterKey
+	})
+
+	// Search the appropriate child subtree first
+	if startChildIndex < len(node.children) {
+		if result := bt.findNextRangeMatchAfterKey(rangeStart, rangeEnd, afterKey, node.children[startChildIndex], tombstonedKeys); result != nil {
+			return result
+		}
+	}
+
+	// Check records in this internal node and their right subtrees
+	for i := startChildIndex; i < len(node.records); i++ {
+		record := node.records[i]
+
+		// Only consider records that come after afterKey and are within range [rangeStart, rangeEnd] (inclusive)
+		if record.Key > afterKey && record.Key >= rangeStart && record.Key <= rangeEnd {
+			// Check if this record is tombstoned locally
+			if record.IsDeleted() {
+				addToTombstoned(record.Key, tombstonedKeys)
+			} else if !isKeyTombstoned(record.Key, tombstonedKeys) {
+				// Found a valid, non-tombstoned record
+				return record
+			}
+		}
+
+		// If record key is > rangeEnd, we've gone too far
+		if record.Key > rangeEnd {
+			return nil
+		}
+
+		// Search right subtree of this record
+		if i+1 < len(node.children) {
+			if result := bt.findNextRangeMatchAfterKey(rangeStart, rangeEnd, afterKey, node.children[i+1], tombstonedKeys); result != nil {
 				return result
 			}
 		}

@@ -19,6 +19,11 @@ type MemtableInterface interface {
 	// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
 	GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record
 
+	// GetNextForRange returns the next record in lexicographical order for the given key,
+	// with the range [rangeStart, rangeEnd] as a constraint, or nil if none exists
+	// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+	GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record
+
 	// Only keys are returned for memory efficiency - use Get() to retrieve full records.
 	// Parameters:
 	// - prefix: the key prefix to search for

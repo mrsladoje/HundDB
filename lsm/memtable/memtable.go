@@ -87,6 +87,12 @@ func (mt *MemTable) ScanForPrefix(
 	mt.impl.ScanForPrefix(prefix, tombstonedKeys, bestKeys, pageSize, pageNumber)
 }
 
+func (mt *MemTable) GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys)
+}
+
 func (mt *MemTable) Size() int {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()

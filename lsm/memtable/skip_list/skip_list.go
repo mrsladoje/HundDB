@@ -237,6 +237,57 @@ func (s *SkipList) GetNextForPrefix(prefix string, key string, tombstonedKeys *[
 	return nil
 }
 
+// GetNextForRange returns the next record in lexicographical order after the given key,
+// constrained to the given range [rangeStart, rangeEnd] (inclusive), or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (s *SkipList) GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record {
+
+	// Start from head and traverse level 0 (bottom level) which has all nodes in sorted order
+	current := s.head.nextNodes[0]
+
+	// Find the first node with key > afterKey
+	for current != nil && current.key <= key {
+		current = current.nextNodes[0]
+	}
+
+	// Now search for the first matching record that isn't tombstoned and is within range
+	for current != nil {
+		// Check if key is within range [rangeStart, rangeEnd] (inclusive)
+		if current.key < rangeStart {
+			current = current.nextNodes[0]
+			continue
+		}
+		if current.key > rangeEnd {
+			// We've gone beyond the range
+			break
+		}
+
+		// Key is within range, check if record is valid
+		if current.rec == nil {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if record is tombstoned locally
+		if current.rec.IsDeleted() {
+			addToTombstoned(current.key, tombstonedKeys)
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if key is tombstoned in more recent structures
+		if isKeyTombstoned(current.key, tombstonedKeys) {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Found a valid, non-tombstoned record within range
+		return current.rec
+	}
+
+	return nil
+}
+
 // ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
 // Only keys are added for memory efficiency - use Get() to retrieve full records.
 func (s *SkipList) ScanForPrefix(
