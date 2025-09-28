@@ -26,9 +26,9 @@ import {
   FaDatabase,
   FaDog,
   FaList,
-  FaPlus,
+  FaRegSave,
+  FaRegTrashAlt,
   FaSearch,
-  FaTrash,
 } from "react-icons/fa";
 import { FaFont } from "react-icons/fa6";
 import { MdPermMedia } from "react-icons/md";
@@ -134,6 +134,12 @@ const dogNotFoundMessages = {
   ],
 };
 
+// TODO: The Results.jsx changes as we change the input. That is obviously bad.
+// This will be fixed when we add concurrency. Then we won't rely on useStates for
+// result/error/notFoundMessage/etc. but rather on the operations array only.
+// We will just track the current operation.
+// We should also add a unique ID to each operation, so we can track them better.
+
 export const Home = () => {
   const [selectedOperation, setSelectedOperation] = useState("GET");
   const [key, setKey] = useState("");
@@ -144,7 +150,7 @@ export const Home = () => {
   const [minKey, setMinKey] = useState("");
   const [maxKey, setMaxKey] = useState("");
   const [pageNumber, setPageNumber] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [result, setResult] = useState(null);
   const [notFoundMessage, setNotFoundMessage] = useState(null);
   const [error, setError] = useState(null);
@@ -156,6 +162,7 @@ export const Home = () => {
   const [isDogHovered, setIsDogHovered] = useState(false);
   const [isSleepyDogHovered, setIsSleepyDogHovered] = useState(false);
   const [operations, setOperations] = useState([]);
+  const [activeOperationId, setActiveOperationId] = useState(null);
   const [stats, setStats] = useState({
     gets: 0,
     puts: 0,
@@ -216,7 +223,12 @@ export const Home = () => {
     success,
     message,
     notFoundMessage = null,
-    resultData = null
+    resultData = null,
+    currentKey = null,
+    ended = false,
+    currentRecord = null,
+  prefix = null,
+  extra = null
   ) => {
     const operation = {
       id: Date.now(),
@@ -226,9 +238,15 @@ export const Home = () => {
       message,
       notFoundMessage,
       resultData,
+      currentKey,
+      ended,
+      currentRecord,
+      prefix,
       timestamp: new Date().toLocaleTimeString(),
     };
-    setOperations((prev) => [operation, ...prev.slice(0, 14)]); // Keep only last 15 operations
+  const opWithExtras = extra && typeof extra === "object" ? { ...operation, ...extra } : operation;
+  setOperations((prev) => [opWithExtras, ...prev.slice(0, 14)]); // Keep only last 15 operations
+  setActiveOperationId(operation.id);
   };
 
   const validateOperation = () => {
@@ -252,7 +270,17 @@ export const Home = () => {
           return "Please upload a file or switch to text tab to enter a value!";
         }
         break;
-      // ... rest of validation cases
+      case "PREFIX_SCAN":
+        if (pageSize < 1 || pageSize > 20) {
+          return "Page size must be between 1 and 20!";
+        }
+        {
+          const pn = Number(pageNumber);
+          if (!Number.isFinite(pn) || pn < 1) {
+            return "Page number must be at least 1!";
+          }
+        }
+        break;
     }
     return null;
   };
@@ -347,12 +375,30 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      await Delete(key);
-      setResult(`Successfully deleted record with key: ${key}`);
-      addOperation("DELETE", key, true, "Record deleted");
-      setStats((prev) => ({ ...prev, deletes: prev.deletes + 1 }));
-      setKey("");
+      const result = await Delete(key);
+
+      // The Go function returns a boolean indicating if the key existed
+      if (result === true) {
+        const resultText = `Successfully deleted record with key: ${key}`;
+        setResult(resultText);
+        addOperation("DELETE", key, true, "Record deleted", null, resultText);
+        setStats((prev) => ({ ...prev, deletes: prev.deletes + 1 }));
+      } else {
+        const notFoundMessage = getRandomDogNotFound("DELETE");
+        setNotFoundMessage(notFoundMessage);
+        addOperation(
+          "DELETE",
+          key,
+          false,
+          null,
+          notFoundMessage,
+          notFoundMessage
+        );
+      }
+
+      setKey(""); // Clear the key input after operation
     } catch (err) {
+      console.error("Delete operation failed:", err);
       const dogError = getRandomDogError("DELETE");
       setError(dogError);
       addOperation("DELETE", key, false, dogError);
@@ -369,20 +415,42 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      const records = await PrefixScan(prefix, pageNumber, pageSize);
-      const resultText = `Prefix scan results (page ${pageNumber}):\n${JSON.stringify(
-        records,
-        null,
-        2
-      )}`;
-      setResult(resultText);
+      const pn = Number(pageNumber) || 1;
+      const keys = await PrefixScan(prefix, pageSize, pn - 1);
+
+      const isEmpty = !keys || keys.length === 0;
+      const notFoundMsg = isEmpty
+        ? getRandomDogNotFound("SCAN")
+        : null;
+
+      // If nothing found on initial scan: mark as notFound (yellow UI)
+      if (isEmpty) {
+        setNotFoundMessage(notFoundMsg);
+      }
+
       addOperation(
         "PREFIX_SCAN",
         prefix,
-        true,
-        `Found ${records.length} records`
+        !isEmpty,
+        isEmpty
+          ? null
+          : `Found ${keys.length} records on page ${pn}`,
+        isEmpty ? notFoundMsg : null,
+        null,
+        null,
+        false,
+        null,
+        prefix,
+        { pageSize, currentPage: pn, keys, paginationError: false }
       );
       setStats((prev) => ({ ...prev, scans: prev.scans + 1 }));
+
+      // Set result to trigger the table display and card coloring
+      setResult(
+        isEmpty
+          ? "No records found for this prefix."
+          : `Prefix scan completed: ${keys.length} records found`
+      );
     } catch (err) {
       const dogError = getRandomDogError("SCAN");
       setError(dogError);
@@ -393,6 +461,44 @@ export const Home = () => {
     }
   };
 
+  const handlePrefixScanPageChange = async (newPage, newPageSize = null) => {
+    const currentOperation = operations.find(
+      (op) => op.type === "PREFIX_SCAN" && op.prefix === prefix
+    );
+    if (!currentOperation) return;
+
+    try {
+      const effectivePageSize = newPageSize || currentOperation.pageSize;
+      const keys = await PrefixScan(prefix, effectivePageSize, Math.max(0, newPage - 1));
+
+  // Update the existing operation instead of creating a new one
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === currentOperation.id) {
+    const hadResultsBefore = Array.isArray(currentOperation.keys) && currentOperation.keys.length > 0;
+    const paginationError = hadResultsBefore && keys.length === 0;
+            return {
+              ...op,
+              currentPage: newPage,
+              pageSize: effectivePageSize,
+              keys: keys,
+              message: `Found ${keys.length} records on page ${newPage}`,
+              timestamp: new Date().toLocaleTimeString(),
+              paginationError,
+            };
+          }
+          return op;
+        })
+      );
+
+  // Pagination empties should NOT turn the whole card yellow
+  setNotFoundMessage(null);
+  setResult(`Prefix scan completed: ${keys.length} records found`);
+    } catch (err) {
+      console.error("Error changing page:", err);
+    }
+  };
+
   const handleRangeScan = async () => {
     setError(null);
     setResult(null);
@@ -400,8 +506,9 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      const records = await RangeScan(minKey, maxKey, pageNumber, pageSize);
-      const resultText = `Range scan results (page ${pageNumber}):\n${JSON.stringify(
+  const pn = Number(pageNumber) || 1;
+  const records = await RangeScan(minKey, maxKey, pn, pageSize);
+  const resultText = `Range scan results (page ${pn}):\n${JSON.stringify(
         records,
         null,
         2
@@ -424,6 +531,60 @@ export const Home = () => {
     }
   };
 
+  /**
+   * Finds the lexicographically smaller string that is as close as possible
+   * to the given string using the full UTF-8 character set.
+   * If the input is empty, returns the empty string itself.
+   *
+   * @param {string} str The input string.
+   * @returns {string} The lexicographically smaller string, or empty string if input is empty.
+   */
+  function findLexicographicallySmaller(str) {
+    // If empty string, return empty string (can't get smaller)
+    if (str.length === 0) {
+      return "";
+    }
+
+    // Convert the string to a mutable array of characters.
+    const arr = str.split("");
+    const n = arr.length;
+
+    // Try to find a position where we can decrement a character
+    for (let i = n - 1; i >= 0; i--) {
+      const currentCharCode = arr[i].charCodeAt(0);
+
+      // If we can decrement this character (not at minimum UTF-8 value)
+      if (currentCharCode > 0) {
+        // Decrement the character
+        arr[i] = String.fromCharCode(currentCharCode - 1);
+
+        // Set all characters after this position to the maximum UTF-8 character
+        // to get the lexicographically largest suffix, making the overall string
+        // as close as possible to the original
+        for (let j = i + 1; j < n; j++) {
+          arr[j] = String.fromCharCode(0x10ffff); // Maximum Unicode code point
+        }
+
+        return arr.join("");
+      }
+      // If current character is at minimum (charCode 0), we continue to the next position
+    }
+
+    // If we get here, all characters were at minimum value (all char code 0)
+    // The only string smaller would be a shorter string
+    // Return the string with the last character removed, and set remaining chars to max
+    if (n === 1) {
+      return ""; // Single character at minimum becomes empty string
+    }
+
+    const result = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      result[i] = String.fromCharCode(0x10ffff);
+    }
+
+    return result.join("");
+  }
+
   const handlePrefixIterate = async () => {
     setError(null);
     setResult(null);
@@ -431,19 +592,133 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-      const iterator = await PrefixIterate(prefix);
-      setResult(
-        `Created prefix iterator for: ${prefix}\nUse next() and stop() methods to control iteration.`
+      const record = await PrefixIterate(
+        prefix,
+        findLexicographicallySmaller(prefix)
       );
-      addOperation("PREFIX_ITERATE", prefix, true, "Iterator created");
+
+      if (record) {
+        const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
+        setResult(resultText);
+        addOperation(
+          "PREFIX_ITERATE",
+          prefix,
+          true,
+          "Iterator created",
+          null,
+          resultText,
+          record.key,
+          false,
+          record,
+          prefix
+        );
+      } else {
+        const notFoundMessage = getRandomDogNotFound("ITERATE");
+        setNotFoundMessage(notFoundMessage);
+        addOperation(
+          "PREFIX_ITERATE",
+          prefix,
+          false,
+          null,
+          notFoundMessage,
+          notFoundMessage,
+          prefix,
+          true,
+          null,
+          prefix
+        );
+      }
       setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
     } catch (err) {
       const dogError = getRandomDogError("ITERATE");
       setError(dogError);
-      addOperation("ITERATE", prefix, false, dogError);
+      addOperation(
+        "PREFIX_ITERATE",
+        prefix,
+        false,
+        dogError,
+        null,
+        dogError,
+        prefix,
+        true,
+        null,
+        prefix
+      );
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handlePrefixIteratorNext = async (operation) => {
+    if (operation.ended) return;
+
+    try {
+      const record = await PrefixIterate(operation.key, operation.currentKey);
+
+      // Update the operation in the operations array
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === operation.id) {
+            if (record) {
+              const resultText = `Found record: ${JSON.stringify(
+                record,
+                null,
+                2
+              )}`;
+              return {
+                ...op,
+                resultData: resultText,
+                currentKey: record.key,
+                currentRecord: record,
+                success: true,
+                notFoundMessage: null,
+                message: "Next record found",
+              };
+            } else {
+              return {
+                ...op,
+                ended: true,
+                success: false,
+                notFoundMessage: "🐾Iterator has reached the end",
+                message: null,
+                currentRecord: null,
+              };
+            }
+          }
+          return op;
+        })
+      );
+
+      // Update the current result display
+      if (record) {
+        const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
+        setResult(resultText);
+        setError(null);
+        setNotFoundMessage(null);
+      } else {
+        setResult(null);
+        setError(null);
+        setNotFoundMessage("🐾Iterator has reached the end");
+      }
+    } catch (err) {
+      const dogError = getRandomDogError("ITERATE");
+      setError(dogError);
+
+      // Mark operation as ended due to error
+      setOperations((prev) =>
+        prev.map((op) => {
+          if (op.id === operation.id) {
+            return {
+              ...op,
+              ended: true,
+              success: false,
+              message: dogError,
+            };
+          }
+          return op;
+        })
+      );
     }
   };
 
@@ -513,6 +788,7 @@ export const Home = () => {
   const handleOperationClick = (operation) => {
     // Set the operation type and restore the input values
     setSelectedOperation(operation.type);
+  setActiveOperationId(operation.id);
 
     // Clear any existing errors/validation
     setError(null);
@@ -535,11 +811,20 @@ export const Home = () => {
     } else if (operation.type === "PUT") {
       setKey(operation.key);
       // Note: We don't have the original value stored, so we can't restore it
-    } else if (
-      operation.type === "PREFIX_SCAN" ||
-      operation.type === "PREFIX_ITERATE"
-    ) {
+    } else if (operation.type === "PREFIX_SCAN") {
       setPrefix(operation.key);
+      const count = Array.isArray(operation.keys) ? operation.keys.length : 0;
+      setResult(`Prefix scan completed: ${count} records found`);
+    } else if (operation.type === "PREFIX_ITERATE") {
+      setPrefix(operation.key);
+      // For iterators, we want to show the current state and provide next functionality
+      if (operation.success && operation.resultData) {
+        setResult(operation.resultData);
+      } else if (operation.notFoundMessage) {
+        setNotFoundMessage(operation.notFoundMessage);
+      } else if (!operation.success && operation.message) {
+        setError(operation.message);
+      }
     } else if (
       operation.type === "RANGE_SCAN" ||
       operation.type === "RANGE_ITERATE"
@@ -555,9 +840,9 @@ export const Home = () => {
       case "GET":
         return <FaSearch />;
       case "PUT":
-        return <FaPlus />;
+        return <FaRegSave />;
       case "DELETE":
-        return <FaTrash />;
+        return <FaRegTrashAlt />;
       case "PREFIX_SCAN":
       case "RANGE_SCAN":
         return <FaList />;
@@ -711,18 +996,68 @@ export const Home = () => {
       case "PREFIX_SCAN":
       case "PREFIX_ITERATE":
         return (
-          <div>
-            <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
-              🎯 Prefix (Starting pattern)
-            </label>
-            <input
-              type="text"
-              placeholder="Enter prefix... woof!"
-              value={prefix}
-              onChange={(e) => setPrefix(e.target.value)}
-              className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
-              disabled={isLoading}
-            />
+          <div className="grid grid-cols-1 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                🎯 Prefix (Starting pattern)
+              </label>
+              <input
+                type="text"
+                placeholder="Enter prefix... woof!"
+                value={prefix}
+                onChange={(e) => setPrefix(e.target.value)}
+                className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                disabled={isLoading}
+              />
+            </div>
+
+            {selectedOperation === "PREFIX_SCAN" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                    📄 Page Size
+                  </label>
+                  <StyledOperationSelect
+                    value={pageSize}
+                    onChange={(val) => setPageSize(Number(val))}
+                    isDisabled={isLoading}
+                    options={[
+                      { value: 5, label: "5" },
+                      { value: 10, label: "10" },
+                      { value: 20, label: "20" },
+                    ]}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-2">
+                    🔢 Page Number
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="1"
+                    value={pageNumber}
+                    onChange={(e) => {
+                      const raw = e.target.value || "";
+                      // Keep only digits
+                      let v = raw.replace(/\D/g, "");
+                      // Disallow leading zeros
+                      v = v.replace(/^0+/, "");
+                      // Allow empty while typing
+                      setPageNumber(v);
+                    }}
+                    onBlur={() => {
+                      const pn = Number(pageNumber);
+                      if (!Number.isFinite(pn) || pn < 1) {
+                        setPageNumber(1);
+                      }
+                    }}
+                    className="w-full px-4 py-3 border-4 border-sloth-brown-dark rounded-lg text-sloth-brown-dark font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px] transition-all duration-200"
+                    disabled={isLoading}
+                  />
+                </div>
+              </div>
+            )}
           </div>
         );
       case "RANGE_SCAN":
@@ -796,6 +1131,9 @@ export const Home = () => {
                   onChange={(o) => {
                     setValidationError(null);
                     setSelectedOperation(o);
+                    setResult(null);
+                    setError(null);
+                    setNotFoundMessage(null);
                   }}
                   isDisabled={isLoading}
                 />
@@ -836,6 +1174,11 @@ export const Home = () => {
                 error={error}
                 notFoundMessage={notFoundMessage}
                 isSuccess={!error && !notFoundMessage && !!result}
+                onIteratorNext={handlePrefixIteratorNext}
+                operations={operations}
+                onPrefixScanPageChange={handlePrefixScanPageChange}
+                currentPrefix={prefix}
+                activeOperationId={activeOperationId}
               />
             )}
           </div>
@@ -849,6 +1192,7 @@ export const Home = () => {
             <RecentOperations
               operations={operations}
               onOperationClick={handleOperationClick}
+              activeOperationId={activeOperationId}
             />
           </div>
         </div>

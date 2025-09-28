@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -637,8 +639,10 @@ func TestGet_NonExistentKey(t *testing.T) {
 	for _, key := range nonExistentKeys {
 		retrievedRecord, err := Get(key, 1)
 
+		// The key issue: Get should return (nil, nil) for non-existent keys, not (nil, error)
+		// If your implementation returns errors for non-existent keys, that's the bug
 		if err != nil {
-			t.Errorf("Get returned error for non-existent key %s: %v", key, err)
+			t.Errorf("Get should not return error for non-existent key %s, should return (nil, nil), but got error: %v", key, err)
 		}
 
 		if retrievedRecord != nil {
@@ -759,15 +763,13 @@ func TestGet_WithTombstones(t *testing.T) {
 	COMPRESSION_ENABLED = false
 	SPARSE_STEP_INDEX = 10
 
-	// Create and persist test records with tombstones
 	records := createTestRecordsWithTombstones(30)
 	err := PersistMemtable(records, 4)
 	if err != nil {
 		t.Fatalf("Failed to persist memtable: %v", err)
 	}
 
-	// Test retrieving both tombstone and regular records
-	for i := 0; i < 30; i += 3 { // Test every 3rd record to cover different tombstone patterns
+	for i := 0; i < 30; i++ {
 		key := fmt.Sprintf("key_%03d", i)
 		retrievedRecord, err := Get(key, 4)
 
@@ -776,16 +778,24 @@ func TestGet_WithTombstones(t *testing.T) {
 			continue
 		}
 
-		if retrievedRecord == nil {
-			t.Errorf("Get returned nil for existing key %s (even tombstones should be retrievable)", key)
-			continue
-		}
+		// Determine if the original record was a tombstone
+		isTombstonedInTest := i%3 == 0
 
-		// Check if tombstone status matches expected (every 3rd record is a tombstone)
-		expectedTombstone := i%3 == 0
-		if retrievedRecord.Tombstone != expectedTombstone {
-			t.Errorf("Retrieved record tombstone status incorrect. Key: %s, Expected: %v, Got: %v",
-				key, expectedTombstone, retrievedRecord.Tombstone)
+		if isTombstonedInTest {
+			// CORRECT LOGIC: If the record is a tombstone, the Get function
+			// should return (nil, nil) to indicate it's "not found" from the user's perspective.
+			if retrievedRecord != nil {
+				t.Errorf("Expected nil for tombstoned key %s, but got a record: %+v", key, retrievedRecord)
+			}
+		} else {
+			// CORRECT LOGIC: If the record is not a tombstone, we expect a valid record back.
+			if retrievedRecord == nil {
+				t.Errorf("Get returned nil for existing, non-tombstoned key %s", key)
+				continue
+			}
+			if retrievedRecord.IsDeleted() {
+				t.Errorf("Expected a non-deleted record for key %s, but IsDeleted() returned true", key)
+			}
 		}
 	}
 }
@@ -1852,6 +1862,1457 @@ func BenchmarkCheckIntegrity_Large(b *testing.B) {
 		_, _, _, err := CheckIntegrity(1)
 		if err != nil {
 			b.Fatalf("CheckIntegrity failed: %v", err)
+		}
+	}
+}
+
+// Helper function to create records with specific prefixes for testing
+func createTestRecordsWithPrefixes() []record.Record {
+	records := make([]record.Record, 0)
+
+	// User records
+	userKeys := []string{"user_001", "user_002", "user_005", "user_010", "user_015"}
+	for _, key := range userKeys {
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix()),
+			false,
+		))
+	}
+
+	// Admin records
+	adminKeys := []string{"admin_001", "admin_003", "admin_007"}
+	for _, key := range adminKeys {
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix()),
+			false,
+		))
+	}
+
+	// Product records
+	productKeys := []string{"product_a", "product_b", "product_z"}
+	for _, key := range productKeys {
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix()),
+			false,
+		))
+	}
+
+	// Single character prefixes
+	singleKeys := []string{"a_test", "b_test", "c_test"}
+	for _, key := range singleKeys {
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix()),
+			false,
+		))
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Key < records[j].Key
+	})
+
+	return records
+}
+
+// Helper function to create records with prefix tombstones
+func createTestRecordsWithPrefixTombstones() []record.Record {
+	records := make([]record.Record, 0)
+
+	// Mix of regular and tombstone records with same prefixes
+	testData := []struct {
+		key       string
+		tombstone bool
+	}{
+		{"user_001", false},
+		{"user_002", true}, // tombstone
+		{"user_003", false},
+		{"user_004", true}, // tombstone
+		{"user_005", false},
+		{"admin_001", true}, // tombstone
+		{"admin_002", false},
+		{"admin_003", false},
+		{"product_a", false},
+		{"product_b", true}, // tombstone
+		{"product_c", false},
+	}
+
+	for _, data := range testData {
+		var value []byte
+		if !data.tombstone {
+			value = []byte("value_" + data.key)
+		}
+		records = append(records, *record.NewRecord(
+			data.key,
+			value,
+			uint64(time.Now().Unix()),
+			data.tombstone,
+		))
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Key < records[j].Key
+	})
+
+	return records
+}
+
+// Test basic prefix iteration functionality
+func TestGetNextForPrefix_BasicFunctionality(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test iterating through "user" prefix
+	tombstonedKeys := make([]string, 0)
+	currentKey := "user"
+	expectedUserKeys := []string{"user_001", "user_002", "user_005", "user_010", "user_015"}
+	actualUserKeys := make([]string, 0)
+
+	for {
+		record, err := GetNextForPrefix("user", currentKey, &tombstonedKeys, 1)
+		if err != nil {
+			t.Errorf("GetNextForPrefix failed: %v", err)
+			break
+		}
+		if record == nil {
+			break
+		}
+
+		actualUserKeys = append(actualUserKeys, record.Key)
+		currentKey = record.Key
+
+		if len(actualUserKeys) > 10 { // Safety check
+			t.Error("Too many iterations, possible infinite loop")
+			break
+		}
+	}
+
+	if len(actualUserKeys) != len(expectedUserKeys) {
+		t.Errorf("Expected %d user records, got %d", len(expectedUserKeys), len(actualUserKeys))
+	}
+
+	for i, expectedKey := range expectedUserKeys {
+		if i >= len(actualUserKeys) || actualUserKeys[i] != expectedKey {
+			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(actualUserKeys) {
+						return actualUserKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+}
+
+// Test prefix iteration from specific starting key
+func TestGetNextForPrefix_FromSpecificKey(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 2)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Start from "user_005", should get user_010, user_015
+	tombstonedKeys := make([]string, 0)
+	currentKey := "user_005"
+	expectedKeys := []string{"user_010", "user_015"}
+	actualKeys := make([]string, 0)
+
+	for len(actualKeys) < 3 { // Safety limit
+		record, err := GetNextForPrefix("user", currentKey, &tombstonedKeys, 2)
+		if err != nil {
+			t.Errorf("GetNextForPrefix failed: %v", err)
+			break
+		}
+		if record == nil {
+			break
+		}
+
+		actualKeys = append(actualKeys, record.Key)
+		currentKey = record.Key
+	}
+
+	if len(actualKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys after user_005, got %d: %v", len(expectedKeys), len(actualKeys), actualKeys)
+	}
+
+	for i, expectedKey := range expectedKeys {
+		if i >= len(actualKeys) || actualKeys[i] != expectedKey {
+			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(actualKeys) {
+						return actualKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+}
+
+// Test prefix iteration with tombstones
+func TestGetNextForPrefix_WithTombstones(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixTombstones()
+	err := PersistMemtable(records, 3)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test "user" prefix - should skip tombstones but add them to tombstonedKeys
+	tombstonedKeys := make([]string, 0)
+	currentKey := "user"
+	actualKeys := make([]string, 0)
+	expectedLiveKeys := []string{"user_001", "user_003", "user_005"} // Non-tombstone user keys
+	expectedTombstones := []string{"user_002", "user_004"}           // Tombstone user keys
+
+	for len(actualKeys) < 10 { // Safety limit
+		record, err := GetNextForPrefix("user", currentKey, &tombstonedKeys, 3)
+		if err != nil {
+			t.Errorf("GetNextForPrefix failed: %v", err)
+			break
+		}
+		if record == nil {
+			break
+		}
+
+		actualKeys = append(actualKeys, record.Key)
+		currentKey = record.Key
+	}
+
+	// Check that only live keys were returned
+	if len(actualKeys) != len(expectedLiveKeys) {
+		t.Errorf("Expected %d live keys, got %d: %v", len(expectedLiveKeys), len(actualKeys), actualKeys)
+	}
+
+	for i, expectedKey := range expectedLiveKeys {
+		if i >= len(actualKeys) || actualKeys[i] != expectedKey {
+			t.Errorf("Expected live key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(actualKeys) {
+						return actualKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+
+	// Check that tombstones were added to tombstonedKeys
+	for _, expectedTombstone := range expectedTombstones {
+		found := false
+		for _, tombstone := range tombstonedKeys {
+			if tombstone == expectedTombstone {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected tombstone %s to be in tombstonedKeys, but it wasn't. Got: %v",
+				expectedTombstone, tombstonedKeys)
+		}
+	}
+}
+
+// Test prefix iteration with pre-existing tombstoned keys (from higher levels)
+func TestGetNextForPrefix_WithPreTombstonedKeys(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 4)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Pre-tombstone some keys (simulating higher level tombstones)
+	tombstonedKeys := []string{"user_002", "user_010"}
+	currentKey := "user"
+	actualKeys := make([]string, 0)
+	expectedKeys := []string{"user_001", "user_005", "user_015"} // Excluding pre-tombstoned keys
+
+	for len(actualKeys) < 10 { // Safety limit
+		record, err := GetNextForPrefix("user", currentKey, &tombstonedKeys, 4)
+		if err != nil {
+			t.Errorf("GetNextForPrefix failed: %v", err)
+			break
+		}
+		if record == nil {
+			break
+		}
+
+		actualKeys = append(actualKeys, record.Key)
+		currentKey = record.Key
+	}
+
+	if len(actualKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys (excluding pre-tombstoned), got %d: %v",
+			len(expectedKeys), len(actualKeys), actualKeys)
+	}
+
+	for i, expectedKey := range expectedKeys {
+		if i >= len(actualKeys) || actualKeys[i] != expectedKey {
+			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(actualKeys) {
+						return actualKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+}
+
+// Test non-existent prefix
+func TestGetNextForPrefix_NonExistentPrefix(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 5)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test prefixes that don't exist
+	nonExistentPrefixes := []string{
+		"xyz",          // No keys start with "xyz"
+		"nonexistent",  // No keys start with "nonexistent"
+		"user_999",     // No keys start with "user_999" (user_015 is the highest)
+		"z_after_all",  // Lexicographically after all keys
+		"0_before_all", // Lexicographically before all keys (but still should return first record)
+	}
+
+	for _, prefix := range nonExistentPrefixes {
+		tombstonedKeys := make([]string, 0)
+		record, err := GetNextForPrefix(prefix, prefix, &tombstonedKeys, 5)
+
+		if err != nil {
+			t.Errorf("GetNextForPrefix should not error for non-existent prefix %s: %v", prefix, err)
+		}
+
+		if record == nil {
+			continue
+		} else {
+			t.Errorf("Expected nil for prefix %s, got: %s", prefix, record.Key)
+		}
+	}
+
+	// Test empty prefix separately - should return first record since every string has empty prefix
+	tombstonedKeys := make([]string, 0)
+	record, err := GetNextForPrefix("", "", &tombstonedKeys, 5)
+
+	if err != nil {
+		t.Errorf("GetNextForPrefix should not error for empty prefix: %v", err)
+	}
+
+	if record == nil {
+		t.Errorf("Expected first record for empty prefix (every string contains empty prefix), got nil")
+	} else if record.Key != "a_test" {
+		t.Errorf("Expected first record 'a_test' for empty prefix, got: %s", record.Key)
+	}
+}
+
+// Test single character prefixes
+func TestGetNextForPrefix_SingleCharacterPrefix(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 6)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test single character prefixes
+	testCases := []struct {
+		prefix       string
+		expectedKeys []string
+	}{
+		{"a", []string{"a_test", "admin_001", "admin_003", "admin_007"}},
+		{"u", []string{"user_001", "user_002", "user_005", "user_010", "user_015"}},
+		{"p", []string{"product_a", "product_b", "product_z"}},
+		{"b", []string{"b_test"}},
+		{"c", []string{"c_test"}},
+	}
+
+	for _, tc := range testCases {
+		tombstonedKeys := make([]string, 0)
+		currentKey := tc.prefix
+		actualKeys := make([]string, 0)
+
+		for len(actualKeys) < 20 { // Safety limit
+			record, err := GetNextForPrefix(tc.prefix, currentKey, &tombstonedKeys, 6)
+			if err != nil {
+				t.Errorf("GetNextForPrefix failed for prefix %s: %v", tc.prefix, err)
+				break
+			}
+			if record == nil {
+				break
+			}
+
+			actualKeys = append(actualKeys, record.Key)
+			currentKey = record.Key
+		}
+
+		if len(actualKeys) != len(tc.expectedKeys) {
+			t.Errorf("Prefix %s: expected %d keys, got %d. Expected: %v, Got: %v",
+				tc.prefix, len(tc.expectedKeys), len(actualKeys), tc.expectedKeys, actualKeys)
+			continue
+		}
+
+		for i, expectedKey := range tc.expectedKeys {
+			if actualKeys[i] != expectedKey {
+				t.Errorf("Prefix %s: expected key %s at position %d, got %s",
+					tc.prefix, expectedKey, i, actualKeys[i])
+			}
+		}
+	}
+}
+
+// Test with different configurations (single file, compression, etc.)
+func TestGetNextForPrefix_DifferentConfigurations(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	configurations := []struct {
+		separateFiles bool
+		compression   bool
+		sparseStep    int
+		name          string
+	}{
+		{true, false, 10, "separate_files_uncompressed"},
+		{false, false, 10, "single_file_uncompressed"},
+		{true, true, 5, "separate_files_compressed"},
+		{false, true, 5, "single_file_compressed"},
+	}
+
+	for i, config := range configurations {
+		t.Run(config.name, func(t *testing.T) {
+			USE_SEPARATE_FILES = config.separateFiles
+			COMPRESSION_ENABLED = config.compression
+			SPARSE_STEP_INDEX = config.sparseStep
+
+			records := createTestRecordsWithPrefixes()
+			tableIndex := 10 + i
+			err := PersistMemtable(records, tableIndex)
+			if err != nil {
+				t.Fatalf("Failed to persist memtable for config %s: %v", config.name, err)
+			}
+
+			// Test basic prefix iteration
+			tombstonedKeys := make([]string, 0)
+			currentKey := "user"
+			actualKeys := make([]string, 0)
+			expectedKeys := []string{"user_001", "user_002", "user_005", "user_010", "user_015"}
+
+			for len(actualKeys) < 10 { // Safety limit
+				record, err := GetNextForPrefix("user", currentKey, &tombstonedKeys, tableIndex)
+				if err != nil {
+					t.Errorf("GetNextForPrefix failed for config %s: %v", config.name, err)
+					break
+				}
+				if record == nil {
+					break
+				}
+
+				actualKeys = append(actualKeys, record.Key)
+				currentKey = record.Key
+			}
+
+			if len(actualKeys) != len(expectedKeys) {
+				t.Errorf("Config %s: expected %d keys, got %d", config.name, len(expectedKeys), len(actualKeys))
+			}
+
+			for j, expectedKey := range expectedKeys {
+				if j >= len(actualKeys) || actualKeys[j] != expectedKey {
+					t.Errorf("Config %s: expected key %s at position %d, got %s",
+						config.name, expectedKey, j,
+						func() string {
+							if j < len(actualKeys) {
+								return actualKeys[j]
+							}
+							return "none"
+						}())
+				}
+			}
+		})
+	}
+}
+
+// Test boundary conditions
+func TestGetNextForPrefix_BoundaryConditions(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 7)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	testCases := []struct {
+		prefix      string
+		startKey    string
+		description string
+		expectNil   bool
+	}{
+		{"user", "user_999", "start after all user keys", true},
+		{"user", "user_000", "start before first user key", false},
+		{"user", "user_015", "start at last user key", true},
+		{"user", "user_014", "start just before last user key", false},
+		{"admin", "admin_999", "start after all admin keys", true},
+		{"product", "product", "start from prefix", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			tombstonedKeys := make([]string, 0)
+			record, err := GetNextForPrefix(tc.prefix, tc.startKey, &tombstonedKeys, 7)
+
+			if err != nil {
+				t.Errorf("GetNextForPrefix failed: %v", err)
+			}
+
+			if tc.expectNil && record != nil {
+				t.Errorf("Expected nil record for case '%s', got: %+v", tc.description, record)
+			} else if !tc.expectNil && record == nil {
+				t.Errorf("Expected non-nil record for case '%s', got nil", tc.description)
+			}
+		})
+	}
+}
+
+// Test large dataset prefix iteration
+func TestGetNextForPrefix_LargeDataset(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create large dataset with multiple prefixes
+	records := make([]record.Record, 0)
+	prefixes := []string{"user", "admin", "product", "order", "invoice"}
+
+	for _, prefix := range prefixes {
+		for i := 0; i < 100; i++ {
+			key := fmt.Sprintf("%s_%03d", prefix, i)
+			records = append(records, *record.NewRecord(
+				key,
+				[]byte("value_"+key),
+				uint64(time.Now().Unix())+uint64(i),
+				false,
+			))
+		}
+	}
+
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Key < records[j].Key
+	})
+
+	err := PersistMemtable(records, 8)
+	if err != nil {
+		t.Fatalf("Failed to persist large memtable: %v", err)
+	}
+
+	// Test iteration through each prefix
+	for _, prefix := range prefixes {
+		t.Run(fmt.Sprintf("prefix_%s", prefix), func(t *testing.T) {
+			tombstonedKeys := make([]string, 0)
+			currentKey := prefix
+			count := 0
+
+			for count < 150 { // Safety limit
+				record, err := GetNextForPrefix(prefix, currentKey, &tombstonedKeys, 8)
+				if err != nil {
+					t.Errorf("GetNextForPrefix failed for prefix %s: %v", prefix, err)
+					break
+				}
+				if record == nil {
+					break
+				}
+
+				// Verify key has correct prefix
+				if !strings.HasPrefix(record.Key, prefix) {
+					t.Errorf("Record key %s does not have prefix %s", record.Key, prefix)
+				}
+
+				// Verify keys are in order
+				if record.Key <= currentKey {
+					t.Errorf("Keys not in order: current %s <= previous %s", record.Key, currentKey)
+				}
+
+				currentKey = record.Key
+				count++
+			}
+
+			// Each prefix should have exactly 100 records
+			if count != 100 {
+				t.Errorf("Expected 100 records for prefix %s, got %d", prefix, count)
+			}
+		})
+	}
+}
+
+// Test invalid SSTable index
+func TestGetNextForPrefix_InvalidSSTableIndex(t *testing.T) {
+	setupTestDir(t)
+
+	tombstonedKeys := make([]string, 0)
+	record, err := GetNextForPrefix("user", "user", &tombstonedKeys, 999)
+
+	if err == nil {
+		t.Errorf("Expected error for invalid SSTable index, but got nil")
+	}
+
+	if record != nil {
+		t.Errorf("Expected nil record for invalid SSTable index, got: %+v", record)
+	}
+}
+
+// Benchmark prefix iteration
+func BenchmarkGetNextForPrefix_SmallDataset(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedKeys := make([]string, 0)
+		_, err := GetNextForPrefix("user", "user", &tombstonedKeys, 1)
+		if err != nil {
+			b.Fatalf("GetNextForPrefix failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkGetNextForPrefix_LargeDataset(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create large dataset
+	records := make([]record.Record, 1000)
+	for i := 0; i < 1000; i++ {
+		records[i] = *record.NewRecord(
+			fmt.Sprintf("user_%04d", i),
+			[]byte(fmt.Sprintf("value_%04d", i)),
+			uint64(time.Now().Unix())+uint64(i),
+			false,
+		)
+	}
+
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedKeys := make([]string, 0)
+		_, err := GetNextForPrefix("user", "user", &tombstonedKeys, 1)
+		if err != nil {
+			b.Fatalf("GetNextForPrefix failed: %v", err)
+		}
+	}
+}
+
+// Test basic ScanForPrefix functionality
+func TestScanForPrefix_BasicFunctionality(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test scanning "user" prefix
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 10, 0, 1)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed: %v", err)
+	}
+
+	expectedUserKeys := []string{"user_001", "user_002", "user_005", "user_010", "user_015"}
+	if len(bestKeys) != len(expectedUserKeys) {
+		t.Errorf("Expected %d user keys, got %d: %v", len(expectedUserKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expectedKey := range expectedUserKeys {
+		if i >= len(bestKeys) || bestKeys[i] != expectedKey {
+			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(bestKeys) {
+						return bestKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+}
+
+// Test ScanForPrefix with tombstones
+func TestScanForPrefix_WithTombstones(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixTombstones()
+	err := PersistMemtable(records, 2)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test scanning "user" prefix with tombstones
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 10, 0, 2)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed: %v", err)
+	}
+
+	expectedLiveKeys := []string{"user_001", "user_003", "user_005"}
+	expectedTombstones := []string{"user_002", "user_004"}
+
+	// Check live keys
+	if len(bestKeys) != len(expectedLiveKeys) {
+		t.Errorf("Expected %d live keys, got %d: %v", len(expectedLiveKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expectedKey := range expectedLiveKeys {
+		if i >= len(bestKeys) || bestKeys[i] != expectedKey {
+			t.Errorf("Expected live key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(bestKeys) {
+						return bestKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+
+	// Check tombstones were recorded
+	for _, expectedTombstone := range expectedTombstones {
+		found := false
+		for _, tombstone := range tombstonedKeys {
+			if tombstone == expectedTombstone {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected tombstone %s to be recorded, but it wasn't. Got: %v",
+				expectedTombstone, tombstonedKeys)
+		}
+	}
+}
+
+// Test ScanForPrefix with pagination
+func TestScanForPrefix_WithPagination(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create a larger dataset for pagination testing
+	records := make([]record.Record, 0)
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("user_%03d", i)
+		records = append(records, *record.NewRecord(
+			key,
+			[]byte("value_"+key),
+			uint64(time.Now().Unix())+uint64(i),
+			false,
+		))
+	}
+
+	err := PersistMemtable(records, 3)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Test pagination: page size 5, get page 0
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 5, 0, 3)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed for page 0: %v", err)
+	}
+
+	expectedPage0 := []string{"user_000", "user_001", "user_002", "user_003", "user_004"}
+	if len(bestKeys) != len(expectedPage0) {
+		t.Errorf("Page 0: Expected %d keys, got %d: %v", len(expectedPage0), len(bestKeys), bestKeys)
+	}
+
+	for i, expectedKey := range expectedPage0 {
+		if i >= len(bestKeys) || bestKeys[i] != expectedKey {
+			t.Errorf("Page 0: Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(bestKeys) {
+						return bestKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+
+	// Test page 1
+	bestKeys = make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 5, 1, 3)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed for page 1: %v", err)
+	}
+
+	expectedPage1 := []string{"user_005", "user_006", "user_007", "user_008", "user_009"}
+	if len(bestKeys) != len(expectedPage1) {
+		t.Errorf("Page 1: Expected %d keys, got %d: %v", len(expectedPage1), len(bestKeys), bestKeys)
+	}
+
+	// Test last partial page
+	bestKeys = make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 5, 3, 3)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed for page 3: %v", err)
+	}
+
+	expectedPage3 := []string{"user_015", "user_016", "user_017", "user_018", "user_019"}
+	if len(bestKeys) != len(expectedPage3) {
+		t.Errorf("Page 3: Expected %d keys, got %d: %v", len(expectedPage3), len(bestKeys), bestKeys)
+	}
+
+	// Test beyond available pages
+	bestKeys = make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 5, 10, 3)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed for page 10: %v", err)
+	}
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected 0 keys for page beyond available data, got %d: %v", len(bestKeys), bestKeys)
+	}
+}
+
+// Test ScanForPrefix with pre-existing tombstoned keys
+func TestScanForPrefix_WithPreTombstonedKeys(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 4)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	// Pre-tombstone some keys (simulating higher level tombstones)
+	tombstonedKeys := []string{"user_002", "user_010"}
+	bestKeys := make([]string, 0)
+	err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 10, 0, 4)
+	if err != nil {
+		t.Errorf("ScanForPrefix failed: %v", err)
+	}
+
+	expectedKeys := []string{"user_001", "user_005", "user_015"} // Excluding pre-tombstoned keys
+	if len(bestKeys) != len(expectedKeys) {
+		t.Errorf("Expected %d keys (excluding pre-tombstoned), got %d: %v",
+			len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expectedKey := range expectedKeys {
+		if i >= len(bestKeys) || bestKeys[i] != expectedKey {
+			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i,
+				func() string {
+					if i < len(bestKeys) {
+						return bestKeys[i]
+					}
+					return "none"
+				}())
+		}
+	}
+}
+
+// Test ScanForPrefix with non-existent prefix
+func TestScanForPrefix_NonExistentPrefix(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 5)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	nonExistentPrefixes := []string{
+		"xyz",         // No keys start with "xyz"
+		"nonexistent", // No keys start with "nonexistent"
+		"user_999",    // No keys start with "user_999"
+		"z_after_all", // Lexicographically after all keys
+	}
+
+	for _, prefix := range nonExistentPrefixes {
+		tombstonedKeys := make([]string, 0)
+		bestKeys := make([]string, 0)
+		err = ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10, 0, 5)
+
+		if err != nil {
+			t.Errorf("ScanForPrefix should not error for non-existent prefix %s: %v", prefix, err)
+		}
+
+		if len(bestKeys) != 0 {
+			t.Errorf("Expected 0 keys for non-existent prefix %s, got %d: %v", prefix, len(bestKeys), bestKeys)
+		}
+	}
+}
+
+// Test ScanForPrefix with different configurations
+func TestScanForPrefix_DifferentConfigurations(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	configurations := []struct {
+		separateFiles bool
+		compression   bool
+		sparseStep    int
+		name          string
+	}{
+		{true, false, 10, "separate_files_uncompressed"},
+		{false, false, 10, "single_file_uncompressed"},
+		{true, true, 5, "separate_files_compressed"},
+		{false, true, 5, "single_file_compressed"},
+	}
+
+	for i, config := range configurations {
+		t.Run(config.name, func(t *testing.T) {
+			USE_SEPARATE_FILES = config.separateFiles
+			COMPRESSION_ENABLED = config.compression
+			SPARSE_STEP_INDEX = config.sparseStep
+
+			records := createTestRecordsWithPrefixes()
+			tableIndex := 10 + i
+			err := PersistMemtable(records, tableIndex)
+			if err != nil {
+				t.Fatalf("Failed to persist memtable for config %s: %v", config.name, err)
+			}
+
+			// Test scanning with this configuration
+			tombstonedKeys := make([]string, 0)
+			bestKeys := make([]string, 0)
+			err = ScanForPrefix("user", &tombstonedKeys, &bestKeys, 10, 0, tableIndex)
+			if err != nil {
+				t.Errorf("ScanForPrefix failed for config %s: %v", config.name, err)
+				return
+			}
+
+			expectedKeys := []string{"user_001", "user_002", "user_005", "user_010", "user_015"}
+			if len(bestKeys) != len(expectedKeys) {
+				t.Errorf("Config %s: expected %d keys, got %d", config.name, len(expectedKeys), len(bestKeys))
+				return
+			}
+
+			for j, expectedKey := range expectedKeys {
+				if j >= len(bestKeys) || bestKeys[j] != expectedKey {
+					t.Errorf("Config %s: expected key %s at position %d, got %s",
+						config.name, expectedKey, j,
+						func() string {
+							if j < len(bestKeys) {
+								return bestKeys[j]
+							}
+							return "none"
+						}())
+				}
+			}
+		})
+	}
+}
+
+// Test ScanForPrefix with single character prefixes
+func TestScanForPrefix_SingleCharacterPrefix(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 6)
+	if err != nil {
+		t.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	testCases := []struct {
+		prefix       string
+		expectedKeys []string
+	}{
+		{"a", []string{"a_test", "admin_001", "admin_003", "admin_007"}},
+		{"u", []string{"user_001", "user_002", "user_005", "user_010", "user_015"}},
+		{"p", []string{"product_a", "product_b", "product_z"}},
+		{"b", []string{"b_test"}},
+		{"c", []string{"c_test"}},
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("prefix_%s", tc.prefix), func(t *testing.T) {
+			tombstonedKeys := make([]string, 0)
+			bestKeys := make([]string, 0)
+			err = ScanForPrefix(tc.prefix, &tombstonedKeys, &bestKeys, 20, 0, 6)
+			if err != nil {
+				t.Errorf("ScanForPrefix failed for prefix %s: %v", tc.prefix, err)
+				return
+			}
+
+			if len(bestKeys) != len(tc.expectedKeys) {
+				t.Errorf("Prefix %s: expected %d keys, got %d. Expected: %v, Got: %v",
+					tc.prefix, len(tc.expectedKeys), len(bestKeys), tc.expectedKeys, bestKeys)
+				return
+			}
+
+			for i, expectedKey := range tc.expectedKeys {
+				if bestKeys[i] != expectedKey {
+					t.Errorf("Prefix %s: expected key %s at position %d, got %s",
+						tc.prefix, expectedKey, i, bestKeys[i])
+				}
+			}
+		})
+	}
+}
+
+// Test ScanForPrefix with large dataset
+func TestScanForPrefix_LargeDataset(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create large dataset with multiple prefixes
+	records := make([]record.Record, 0)
+	prefixes := []string{"user", "admin", "product"}
+
+	for _, prefix := range prefixes {
+		for i := 0; i < 50; i++ {
+			key := fmt.Sprintf("%s_%03d", prefix, i)
+			records = append(records, *record.NewRecord(
+				key,
+				[]byte("value_"+key),
+				uint64(time.Now().Unix())+uint64(i),
+				false,
+			))
+		}
+	}
+
+	// Sort records
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Key < records[j].Key
+	})
+
+	err := PersistMemtable(records, 7)
+	if err != nil {
+		t.Fatalf("Failed to persist large memtable: %v", err)
+	}
+
+	// Test scanning each prefix
+	for _, prefix := range prefixes {
+		t.Run(fmt.Sprintf("large_prefix_%s", prefix), func(t *testing.T) {
+			tombstonedKeys := make([]string, 0)
+			bestKeys := make([]string, 0)
+			err = ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 100, 0, 7)
+			if err != nil {
+				t.Errorf("ScanForPrefix failed for prefix %s: %v", prefix, err)
+				return
+			}
+
+			// Each prefix should have exactly 50 records
+			if len(bestKeys) != 50 {
+				t.Errorf("Expected 50 records for prefix %s, got %d", prefix, len(bestKeys))
+				return
+			}
+
+			// Verify all keys have the correct prefix and are in order
+			for i, key := range bestKeys {
+				if !strings.HasPrefix(key, prefix) {
+					t.Errorf("Key %s does not have prefix %s", key, prefix)
+				}
+
+				expectedKey := fmt.Sprintf("%s_%03d", prefix, i)
+				if key != expectedKey {
+					t.Errorf("Expected key %s at position %d, got %s", expectedKey, i, key)
+				}
+
+				// Verify keys are in order
+				if i > 0 && key <= bestKeys[i-1] {
+					t.Errorf("Keys not in order: %s <= %s", key, bestKeys[i-1])
+				}
+			}
+		})
+	}
+}
+
+// Test ScanForPrefix with invalid SSTable index
+func TestScanForPrefix_InvalidSSTableIndex(t *testing.T) {
+	setupTestDir(t)
+
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+	err := ScanForPrefix("user", &tombstonedKeys, &bestKeys, 10, 0, 999)
+
+	if err == nil {
+		t.Errorf("Expected error for invalid SSTable index, but got nil")
+	}
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected no keys for invalid SSTable index, got: %v", bestKeys)
+	}
+}
+
+// Benchmark ScanForPrefix
+func BenchmarkScanForPrefix_SmallDataset(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	records := createTestRecordsWithPrefixes()
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedKeys := make([]string, 0)
+		bestKeys := make([]string, 0)
+		err := ScanForPrefix("user", &tombstonedKeys, &bestKeys, 10, 0, 1)
+		if err != nil {
+			b.Fatalf("ScanForPrefix failed: %v", err)
+		}
+	}
+}
+
+func BenchmarkScanForPrefix_LargeDataset(b *testing.B) {
+	testDir := setupTestDir(&testing.T{})
+	defer os.RemoveAll(testDir)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	// Create large dataset
+	records := make([]record.Record, 1000)
+	for i := 0; i < 1000; i++ {
+		records[i] = *record.NewRecord(
+			fmt.Sprintf("user_%04d", i),
+			[]byte(fmt.Sprintf("value_%04d", i)),
+			uint64(time.Now().Unix())+uint64(i),
+			false,
+		)
+	}
+
+	err := PersistMemtable(records, 1)
+	if err != nil {
+		b.Fatalf("Failed to persist memtable: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstonedKeys := make([]string, 0)
+		bestKeys := make([]string, 0)
+		err := ScanForPrefix("user", &tombstonedKeys, &bestKeys, 50, 0, 1)
+		if err != nil {
+			b.Fatalf("ScanForPrefix failed: %v", err)
 		}
 	}
 }

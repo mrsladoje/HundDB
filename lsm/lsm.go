@@ -203,13 +203,13 @@ func (lsm *LSM) IsDataLost() bool {
 }
 
 // Get retrieves a record from the LSM by checking the memtables, cache, and SSTables in order.
-func (lsm *LSM) Get(key string) (*model.Record, bool) {
+func (lsm *LSM) Get(key string) (*model.Record, error, bool) {
 
 	errorEncountered := false
 
 	// 1. Check memtables first
 	if record := lsm.checkMemtables(key); record != nil {
-		return record, false
+		return record, nil, false
 	}
 
 	// 2. Check cache
@@ -218,20 +218,21 @@ func (lsm *LSM) Get(key string) (*model.Record, bool) {
 		errorEncountered = true
 	}
 	if err == nil {
-		return record, false
+		return record, nil, false
 	}
 
 	// 3. Check SSTables
-	record, errorEncounteredInCheck := lsm.checkSSTables(key)
-	if errorEncounteredInCheck {
+	record, errorEncounteredInCheck, errorEncounteredInSSTable := lsm.checkSSTables(key)
+	if errorEncounteredInSSTable {
 		errorEncountered = true
+		err = errorEncounteredInCheck
 	}
 	if record != nil {
 		lsm.cache.Put(key, record)
-		return record, false
+		return record, nil, false
 	}
 
-	return nil, errorEncountered
+	return nil, err, errorEncountered
 }
 
 /*
@@ -250,8 +251,9 @@ func (lsm *LSM) checkMemtables(key string) *model.Record {
 /*
 checkSSTables checks the SSTables in reverse order (newest to oldest) for the given key.
 */
-func (lsm *LSM) checkSSTables(key string) (*model.Record, bool) {
+func (lsm *LSM) checkSSTables(key string) (*model.Record, error, bool) {
 	errorEncountered := false
+	var errorEncounteredInCheck error
 	for i := 0; i < len(lsm.levels); i++ {
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
@@ -259,13 +261,14 @@ func (lsm *LSM) checkSSTables(key string) (*model.Record, bool) {
 			record, err := sstable.Get(key, tableIndex)
 			if err != nil {
 				errorEncountered = true
+				errorEncounteredInCheck = err
 			}
 			if err == nil && record != nil {
-				return record, errorEncountered
+				return record, nil, errorEncountered
 			}
 		}
 	}
-	return nil, errorEncountered
+	return nil, errorEncounteredInCheck, errorEncountered
 }
 
 func (lsm *LSM) Put(key string, value []byte) error {
@@ -291,6 +294,132 @@ func (lsm *LSM) Put(key string, value []byte) error {
 	lsm.cache.Invalidate(key)
 
 	return nil
+}
+
+func (lsm *LSM) Delete(key string) (bool, error) {
+
+	record := model.NewRecord(key, nil, uint64(time.Now().UnixNano()), true)
+
+	// TODO: WAL write ahead logging - I removed it because it was failing for larger values
+	// err := lsm.wal.WriteRecord(record)
+	// if err != nil {
+	// 	return err
+	// }
+
+	keyExists := lsm.memtables[len(lsm.memtables)-1].Delete(record)
+
+	err := lsm.checkIfToFlush(key)
+	if err != nil {
+		return keyExists, err
+	}
+
+	lsm.cache.Invalidate(key)
+
+	return keyExists, nil
+}
+
+/*
+GetNextForPrefix retrieves the next record for a given prefix and start key.
+*/
+func (lsm *LSM) GetNextForPrefix(prefix string, key string) (*model.Record, error) {
+
+	tomstonedKeys := make([]string, 0)
+	nextRecord := lsm.checkMemtablesForPrefixIterate(prefix, key, &tomstonedKeys)
+	nextRecordFromSSTable, err := lsm.checkSSTableForPrefixIterate(prefix, key, &tomstonedKeys)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if nextRecordFromSSTable != nil && (nextRecord == nil || nextRecordFromSSTable.Key < nextRecord.Key) {
+		nextRecord = nextRecordFromSSTable
+	}
+
+	return nextRecord, nil
+}
+
+/*
+checkMemtables checks the memtables in reverse order (newest to oldest) for the given key.
+*/
+func (lsm *LSM) checkMemtablesForPrefixIterate(prefix string, key string, tomstonedKeys *[]string) *model.Record {
+	var smallestRecord *model.Record = nil
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		if record := mt.GetNextForPrefix(prefix, key, tomstonedKeys); record != nil {
+			if smallestRecord == nil || record.Key < smallestRecord.Key {
+				smallestRecord = record
+			}
+		}
+	}
+	return smallestRecord
+}
+
+/*
+checkSSTableForPrefixIterate checks the SSTables in reverse order (newest to oldest) for the given key.
+*/
+func (lsm *LSM) checkSSTableForPrefixIterate(prefix string, key string, tomstonedKeys *[]string) (*model.Record, error) {
+	var err error
+	var nextRecord *model.Record = nil
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			record, err := sstable.GetNextForPrefix(prefix, key, tomstonedKeys, tableIndex)
+			if err != nil {
+				return nil, err
+			}
+			if record != nil && (nextRecord == nil || record.Key < nextRecord.Key) {
+				nextRecord = record
+			}
+		}
+	}
+	return nextRecord, err
+}
+
+/*
+PrefixScan scans all memtables and SSTables for keys with the given prefix.
+Returns a slice of keys for the specified page.
+Parameters:
+- prefix: the key prefix to search for
+- pageSize: maximum number of results per page
+- pageNumber: which page to return (0-based)
+*/
+func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string, error) {
+	tombstonedKeys := make([]string, 0)
+	bestKeys := make([]string, 0)
+
+	// Check memtables first (newest to oldest)
+	// We use a large page size initially to collect all relevant keys
+	for i := len(lsm.memtables) - 1; i >= 0; i-- {
+		mt := lsm.memtables[i]
+		mt.ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10000, 0) // Large page size to get all keys
+	}
+
+	// Check SSTables (newest to oldest)
+	for i := 0; i < len(lsm.levels); i++ {
+		levelIndexes := lsm.levels[i]
+		for index := len(levelIndexes) - 1; index >= 0; index-- {
+			tableIndex := levelIndexes[index]
+			err := sstable.ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10000, 0, tableIndex)
+			if err != nil {
+				return nil, fmt.Errorf("failed to scan SSTable %d: %v", tableIndex, err)
+			}
+		}
+	}
+
+	// Apply pagination to final results
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(bestKeys) {
+		return []string{}, nil // Return empty slice for pages beyond available data
+	}
+
+	if endIndex > len(bestKeys) {
+		endIndex = len(bestKeys)
+	}
+
+	return bestKeys[startIndex:endIndex], nil
 }
 
 func (lsm *LSM) checkIfToFlush(key string) error {

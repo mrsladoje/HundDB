@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hunddb/lsm"
 	model "hunddb/model/record"
+	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+var (
+	ErrKeyNotFound = errors.New("key not found")
 )
 
 // App struct - application layer wrapper for LSM
@@ -51,11 +57,16 @@ func (a *App) recordToMap(record *model.Record) map[string]interface{} {
 
 // Get retrieves a record by key from the LSM
 func (a *App) Get(key string) (map[string]interface{}, error) {
-	record, errorEncountered := a.lsm.Get(key)
+	record, errorEncounteredInCheck, isErrorEncountered := a.lsm.Get(key)
 	var err error
 	err = nil
-	if errorEncountered {
-		err = fmt.Errorf("error retrieving record")
+	if isErrorEncountered {
+		if isKeyNotFoundError(errorEncounteredInCheck) {
+			// Key not found is not considered an error in this context
+			return nil, nil
+		}
+
+		err = errorEncounteredInCheck
 	}
 	if record == nil {
 		return nil, err
@@ -76,6 +87,19 @@ func (a *App) Put(key string, value string) error {
 	return nil
 }
 
+// Delete deletes a key in the LSM
+func (a *App) Delete(key string) (bool, error) {
+	record, err := a.Get(key)
+	if (err == nil && record == nil) || record["deleted"] == true {
+		return false, nil
+	}
+	keyExists, err := a.lsm.Delete(key)
+	if err != nil {
+		return false, fmt.Errorf("error deleting record: %v", err)
+	}
+	return keyExists, nil
+}
+
 // IsDataLost checks if data was lost during LSM loading
 func (a *App) IsDataLost() bool {
 	return a.lsm.IsDataLost()
@@ -86,18 +110,52 @@ func (a *App) PersistLSM() error {
 	return a.lsm.PersistLSM()
 }
 
-func (a *App) Delete() string {
-	return "Not implemented yet"
+// PrefixScan scans for keys with the given prefix using pagination
+func (a *App) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string, error) {
+	if pageSize <= 0 {
+		pageSize = 5 // Default page size
+	}
+	if pageNumber < 0 {
+		pageNumber = 0 // Default to first page
+	}
+
+	keys, err := a.lsm.PrefixScan(prefix, pageSize, pageNumber)
+	if err != nil {
+		return nil, fmt.Errorf("error scanning prefix '%s': %v", prefix, err)
+	}
+
+	return keys, nil
 }
-func (a *App) PrefixScan() string {
-	return "Not implemented yet"
-}
+
 func (a *App) RangeScan() string {
 	return "Not implemented yet"
 }
-func (a *App) PrefixIterate() string {
-	return "Not implemented yet"
+
+// PrefixIterate retrieves the next record for a given prefix and key
+func (a *App) PrefixIterate(prefix string, key string) (map[string]interface{}, error) {
+	record, err := a.lsm.GetNextForPrefix(prefix, key)
+	if err != nil {
+		return nil, err
+	}
+	return a.recordToMap(record), nil
 }
+
 func (a *App) RangeIterate() string {
 	return "Not implemented yet"
+}
+
+// Helper function to check if an error is or contains ErrKeyNotFound
+func isKeyNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Direct comparison
+	if errors.Is(err, ErrKeyNotFound) {
+		return true
+	}
+
+	// Check if the error message contains the ErrKeyNotFound message
+	// This handles cases like "some context: key not found"
+	return strings.Contains(err.Error(), ErrKeyNotFound.Error())
 }

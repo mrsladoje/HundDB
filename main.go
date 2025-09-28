@@ -23,7 +23,7 @@ func main() {
 		log.Println("LSM loaded successfully.")
 	}
 
-	// Run the Wails application
+	// Run the Wails applicationl
 	err := wails.Run(&options.App{
 		Title:     "HundDB",
 		Width:     800,

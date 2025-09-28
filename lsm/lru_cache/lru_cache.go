@@ -56,7 +56,7 @@ func (lru *LRUCache[K, V]) Get(key K) (V, error) {
 	node, exists := lru.cache_map[key]
 	if !exists {
 		var emptyVal V
-		return emptyVal, nil
+		return emptyVal, ErrKeyNotFound
 	}
 	lru.cache_list.MoveToFront(node)
 	return node.Value.(*listItem[K, V]).value, nil
@@ -195,4 +195,13 @@ func (lru *LRUCache[K, V]) SetCapacity(newCapacity uint32) {
 	lru.mutex.Lock()
 	defer lru.mutex.Unlock()
 	lru.capacity = newCapacity
+}
+
+func (lru *LRUCache[K, V]) Clear() {
+	lru.mutex.Lock()
+	defer lru.mutex.Unlock()
+
+	lru.cache_map = make(map[K]*list.Element)
+	lru.cache_list = list.New()
+	lru.size = 0
 }

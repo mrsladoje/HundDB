@@ -87,6 +87,17 @@ func (bt *BTree) Get(key string) *model.Record {
 	return nil
 }
 
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (bt *BTree) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
+	if bt.root == nil {
+		return nil
+	}
+
+	return bt.findNextPrefixMatchAfterKey(prefix, key, bt.root, tombstonedKeys)
+}
+
 // Put inserts or updates a record in the B-tree.
 //
 // Parameters:
@@ -151,7 +162,7 @@ func (bt *BTree) IsFull() bool {
 // Delete marks the key as tombstoned.
 // Behavior:
 //   - If key exists: replace the record with a tombstone and update stats; return true.
-//   - If key does not exist: insert a tombstone via Add() (capacity-checked); return false.
+//   - If key does not exist: insert a tombstone via Put() (capacity-checked); return false.
 func (bt *BTree) Delete(record *model.Record) bool {
 	if record == nil || record.Key == "" {
 		return false
@@ -216,6 +227,114 @@ func (bt *BTree) search(key string, node *Node) (*Node, int) {
 	return nil, -1
 }
 
+// isKeyTombstoned checks if a key is in the tombstoned keys slice
+func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
+	if tombstonedKeys == nil {
+		return false
+	}
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// addToTombstoned adds a key to the tombstoned keys slice if it's not already there
+func addToTombstoned(key string, tombstonedKeys *[]string) {
+	if tombstonedKeys == nil {
+		return
+	}
+	// Check if already exists to avoid duplicates
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return
+		}
+	}
+	*tombstonedKeys = append(*tombstonedKeys, key)
+}
+
+// findNextPrefixMatchAfterKey finds the first non-tombstoned record with the given prefix
+// that comes lexicographically after the given key.
+func (bt *BTree) findNextPrefixMatchAfterKey(prefix string, afterKey string, node *Node, tombstonedKeys *[]string) *model.Record {
+	if node == nil {
+		return nil
+	}
+
+	if node.isLeaf {
+		// Find the first record > afterKey that matches prefix
+		startIndex := sort.Search(len(node.records), func(i int) bool {
+			return node.records[i].Key > afterKey
+		})
+
+		// Check each record from startIndex onwards
+		for i := startIndex; i < len(node.records); i++ {
+			record := node.records[i]
+			// If key doesn't start with prefix, we've gone too far
+			if len(record.Key) < len(prefix) || record.Key[:len(prefix)] != prefix {
+				return nil
+			}
+
+			// Check if this record is tombstoned locally
+			if record.IsDeleted() {
+				addToTombstoned(record.Key, tombstonedKeys)
+				continue
+			}
+
+			// Check if key is tombstoned in more recent structures
+			if isKeyTombstoned(record.Key, tombstonedKeys) {
+				continue
+			}
+
+			// Found a valid, non-tombstoned record
+			return record
+		}
+		return nil
+	}
+
+	// For internal nodes, find the appropriate child to start searching from
+	startChildIndex := sort.Search(len(node.records), func(i int) bool {
+		return node.records[i].Key > afterKey
+	})
+
+	// Search the appropriate child subtree first
+	if startChildIndex < len(node.children) {
+		if result := bt.findNextPrefixMatchAfterKey(prefix, afterKey, node.children[startChildIndex], tombstonedKeys); result != nil {
+			return result
+		}
+	}
+
+	// Check records in this internal node and their right subtrees
+	for i := startChildIndex; i < len(node.records); i++ {
+		record := node.records[i]
+
+		// Only consider records that come after afterKey and match prefix
+		if record.Key > afterKey && len(record.Key) >= len(prefix) && record.Key[:len(prefix)] == prefix {
+			// Check if this record is tombstoned locally
+			if record.IsDeleted() {
+				addToTombstoned(record.Key, tombstonedKeys)
+			} else if !isKeyTombstoned(record.Key, tombstonedKeys) {
+				// Found a valid, non-tombstoned record
+				return record
+			}
+		}
+
+		// If record key doesn't start with prefix and is > prefix, we've gone too far
+		if record.Key > prefix && (len(record.Key) < len(prefix) || record.Key[:len(prefix)] != prefix) {
+			return nil
+		}
+
+		// Search right subtree of this record
+		if i+1 < len(node.children) {
+			if result := bt.findNextPrefixMatchAfterKey(prefix, afterKey, node.children[i+1], tombstonedKeys); result != nil {
+				return result
+			}
+		}
+	}
+
+	return nil
+}
+
 // findKeyIndex finds the appropriate index for a key in a node using binary search.
 func (bt *BTree) findKeyIndex(node *Node, key string) int {
 	return sort.Search(len(node.records), func(i int) bool {
@@ -230,6 +349,137 @@ func (bt *BTree) insertRecord(node *Node, record *model.Record) {
 	} else {
 		bt.insertIntoInternal(node, record)
 	}
+}
+
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (bt *BTree) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if bt.root == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Collect all matching keys from this memtable
+	bt.scanForPrefixRecursive(bt.root, prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+}
+
+// scanForPrefixRecursive performs the actual recursive scan of the B-tree
+func (bt *BTree) scanForPrefixRecursive(
+	node *Node,
+	prefix string,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	if node == nil {
+		return
+	}
+
+	if node.isLeaf {
+		// Scan all records in this leaf node
+		for _, record := range node.records {
+			bt.processRecordForScan(record, prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+		}
+		return
+	}
+
+	// For internal nodes, we need to traverse both records and children
+	for i := 0; i < len(node.records); i++ {
+		// Visit left child first
+		if i < len(node.children) {
+			bt.scanForPrefixRecursive(node.children[i], prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+		}
+
+		// Process the record at this position
+		bt.processRecordForScan(node.records[i], prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+	}
+
+	// Visit the rightmost child if it exists
+	if len(node.children) > len(node.records) {
+		bt.scanForPrefixRecursive(node.children[len(node.records)], prefix, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+	}
+}
+
+// processRecordForScan processes a single record during the scan operation
+func (bt *BTree) processRecordForScan(
+	record *model.Record,
+	prefix string,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	// Check if key matches prefix
+	if len(record.Key) < len(prefix) || record.Key[:len(prefix)] != prefix {
+		return
+	}
+
+	// Skip if already tombstoned in newer structures
+	if tombstonedSet[record.Key] {
+		return
+	}
+
+	// Skip if already found in newer memtables
+	if bestKeysSet[record.Key] {
+		return
+	}
+
+	// If this record is a tombstone, add to tombstoned set
+	if record.IsDeleted() {
+		if tombstonedKeys != nil {
+			*tombstonedKeys = append(*tombstonedKeys, record.Key)
+			tombstonedSet[record.Key] = true
+		}
+		return
+	}
+
+	// Add to best keys (maintaining sorted order)
+	if bestKeys != nil {
+		*bestKeys = insertKeySorted(*bestKeys, record.Key)
+		bestKeysSet[record.Key] = true
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
 }
 
 // insertIntoLeaf inserts a record into a leaf node.

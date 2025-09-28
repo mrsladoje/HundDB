@@ -186,6 +186,181 @@ func (s *SkipList) Get(key string) *model.Record {
 	return n.rec
 }
 
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (s *SkipList) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
+
+	// Start from head and traverse level 0 (bottom level) which has all nodes in sorted order
+	current := s.head.nextNodes[0]
+
+	// Find the first node with key > afterKey
+	for current != nil && current.key <= key {
+		current = current.nextNodes[0]
+	}
+
+	// Now search for the first matching record that isn't tombstoned
+	for current != nil {
+		// Check if key matches prefix
+		if len(current.key) < len(prefix) || current.key[:len(prefix)] != prefix {
+			// If key > prefix and doesn't match prefix, we've gone too far
+			if current.key > prefix {
+				break
+			}
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Key matches prefix, check if record is valid
+		if current.rec == nil {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if record is tombstoned locally
+		if current.rec.IsDeleted() {
+			addToTombstoned(current.key, tombstonedKeys)
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if key is tombstoned in more recent structures
+		if isKeyTombstoned(current.key, tombstonedKeys) {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Found a valid, non-tombstoned record
+		return current.rec
+	}
+
+	return nil
+}
+
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (s *SkipList) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if s.head == nil || s.head.nextNodes[0] == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		// Check if key matches prefix
+		if len(current.key) >= len(prefix) && current.key[:len(prefix)] == prefix {
+			if current.rec != nil {
+				s.processRecordForScan(current.rec, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+			}
+		}
+		current = current.nextNodes[0]
+	}
+}
+
+// processRecordForScan processes a single record during the scan operation
+func (s *SkipList) processRecordForScan(
+	record *model.Record,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	// Skip if already tombstoned in newer structures
+	if tombstonedSet[record.Key] {
+		return
+	}
+
+	// Skip if already found in newer memtables
+	if bestKeysSet[record.Key] {
+		return
+	}
+
+	// If this record is a tombstone, add to tombstoned set
+	if record.IsDeleted() {
+		if tombstonedKeys != nil {
+			*tombstonedKeys = append(*tombstonedKeys, record.Key)
+			tombstonedSet[record.Key] = true
+		}
+		return
+	}
+
+	// Add to best keys (maintaining sorted order)
+	if bestKeys != nil {
+		*bestKeys = insertKeySorted(*bestKeys, record.Key)
+		bestKeysSet[record.Key] = true
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
+}
+
+// isKeyTombstoned checks if a key is in the tombstoned keys slice
+func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
+	if tombstonedKeys == nil {
+		return false
+	}
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// addToTombstoned adds a key to the tombstoned keys slice if it's not already there
+func addToTombstoned(key string, tombstonedKeys *[]string) {
+	if tombstonedKeys == nil {
+		return
+	}
+	// Check if already exists to avoid duplicates
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return
+		}
+	}
+	*tombstonedKeys = append(*tombstonedKeys, key)
+}
+
 func (s *SkipList) Size() int         { return s.activeCount }
 func (s *SkipList) Capacity() int     { return s.capacity }
 func (s *SkipList) TotalEntries() int { return s.totalCount }

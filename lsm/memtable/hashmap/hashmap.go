@@ -84,6 +84,177 @@ func (hm *HashMap) Get(key string) *model.Record {
 	return rec
 }
 
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (hm *HashMap) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
+
+	// Get all keys and sort them
+	keys := make([]string, 0, len(hm.data))
+	for k := range hm.data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Find the first key > afterKey that matches the prefix
+	for _, k := range keys {
+		// Skip keys that are <= afterKey
+		if k <= key {
+			continue
+		}
+
+		// Skip keys that don't match the prefix
+		if len(k) < len(prefix) || k[:len(prefix)] != prefix {
+			// If key > prefix and doesn't match prefix, we've gone too far
+			if k > prefix {
+				break
+			}
+			continue
+		}
+
+		record := hm.data[k]
+		if record == nil {
+			continue
+		}
+
+		// Check if record is tombstoned locally
+		if record.IsDeleted() {
+			addToTombstoned(k, tombstonedKeys)
+			continue
+		}
+
+		// Check if key is tombstoned in more recent structures
+		if isKeyTombstoned(k, tombstonedKeys) {
+			continue
+		}
+
+		// Found a valid, non-tombstoned record
+		return record
+	}
+
+	return nil
+}
+
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (hm *HashMap) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if len(hm.data) == 0 {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Get all keys with matching prefix and sort them
+	var matchingKeys []string
+	for key := range hm.data {
+		// Check if key matches prefix
+		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
+			matchingKeys = append(matchingKeys, key)
+		}
+	}
+	sort.Strings(matchingKeys)
+
+	// Process each matching key
+	for _, key := range matchingKeys {
+		record := hm.data[key]
+		if record == nil {
+			continue
+		}
+
+		// Skip if already tombstoned in newer structures
+		if tombstonedSet[key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[key] {
+			continue
+		}
+
+		// If this record is a tombstone, add to tombstoned set
+		if record.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, key)
+				tombstonedSet[key] = true
+			}
+			continue
+		}
+
+		// Add to best keys (maintaining sorted order)
+		if bestKeys != nil {
+			*bestKeys = insertKeySorted(*bestKeys, key)
+			bestKeysSet[key] = true
+		}
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
+}
+
+// isKeyTombstoned checks if a key is in the tombstoned keys slice
+func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
+	if tombstonedKeys == nil {
+		return false
+	}
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// addToTombstoned adds a key to the tombstoned keys slice if it's not already there
+func addToTombstoned(key string, tombstonedKeys *[]string) {
+	if tombstonedKeys == nil {
+		return
+	}
+	// Check if already exists to avoid duplicates
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return
+		}
+	}
+	*tombstonedKeys = append(*tombstonedKeys, key)
+}
+
 // Size returns the number of active (non-tombstoned) keys.
 // Minimal implementation: compute on the fly.
 func (hm *HashMap) Size() int {

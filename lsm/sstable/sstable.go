@@ -12,8 +12,10 @@ import (
 	record "hunddb/model/record"
 	byte_util "hunddb/utils/byte_util"
 	crc_util "hunddb/utils/crc"
+	string_util "hunddb/utils/string_util"
 	"io"
 	"os"
+	"strings"
 )
 
 /*
@@ -419,7 +421,22 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	bloomFilter := bloom_filter.NewBloomFilter(len(sortedRecords), BLOOM_FILTER_FALSE_POSITIVE_RATE)
 	for _, rec := range sortedRecords {
 		bloomFilter.Add([]byte(rec.Key))
+
+		// Add all prefixes of length 1 to 10 (or maximum key length) with a special prefix marker
+		keyLen := len(rec.Key)
+		maxPrefixLen := 10
+		if keyLen < maxPrefixLen {
+			maxPrefixLen = keyLen
+		}
+
+		for prefixLen := 1; prefixLen <= maxPrefixLen; prefixLen++ {
+			prefix := rec.Key[:prefixLen]
+			prefixWithMarker := prependPrefixPrefix(prefix)
+			bloomFilter.Add([]byte(prefixWithMarker))
+		}
 	}
+	bloomFilter.Add([]byte(prependPrefixPrefix("")))
+
 	filterComp := &FilterComp{
 		FilePath:    filterFilePath,
 		StartOffset: filterStartOffset,
@@ -758,6 +775,15 @@ func prependSizePrefix(serializedData *[]byte) {
 }
 
 /*
+Helper function to prepend the prefix marker to a prefix
+*/
+func prependPrefixPrefix(prefix string) string {
+	// Use non-printable characters that users cannot type
+	const PREFIX_MARKER = "\x00\x01\x02"
+	return PREFIX_MARKER + prefix
+}
+
+/*
 Used to add the size and offsets data of components to the config, to allow for easier reading.
 */
 func (config *SSTableConfig) addSizeDataToConfig(sizes []uint64, offsets []uint64, index int) error {
@@ -861,6 +887,9 @@ func Get(key string, index int) (record *record.Record, err error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to retrieve record from data component (one of bounds): %v", err)
 		}
+		if record.IsDeleted() {
+			return nil, nil
+		}
 		return record, nil
 	}
 	if !config.UseSeparateFiles {
@@ -884,6 +913,98 @@ func Get(key string, index int) (record *record.Record, err error) {
 		}
 		return record, nil
 	}
+}
+
+/*
+GetNextForPrefix retrieves the next record for a given prefix from the SSTable
+*/
+func GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string, index int) (record *record.Record, err error) {
+
+	// 0. Deserialize SSTable Config
+	config, sizes, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1. Bloom Filter Check
+	if config.UseSeparateFiles {
+		filterPath := fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index)
+		filterSize, err := getComponentSize(filterPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get filter component size: %v", err)
+		}
+		filter, err := deserializeFilter(filterPath, 0, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to deserialize filter: %v", err)
+		}
+		if !filter.Contains([]byte(prependPrefixPrefix(prefix))) {
+			return nil, nil
+		}
+	} else {
+		filterPath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+		filterOffset := offsets[3]
+		filterSize := sizes[3]
+		filter, err := deserializeFilter(filterPath, filterOffset, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return nil, fmt.Errorf("failed to deserialize filter (single file): %v", err)
+		}
+
+		maxPrefixLen := len(prefix)
+		if maxPrefixLen > 10 {
+			maxPrefixLen = 10
+		}
+		for prefixLen := 1; prefixLen <= maxPrefixLen; prefixLen++ {
+			checkPrefix := prefix[:prefixLen]
+			if !filter.Contains([]byte(prependPrefixPrefix(checkPrefix))) {
+				return nil, nil
+			}
+		}
+	}
+
+	// 1.5. Data, Index and Summary preparation
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check
+	inIndexBounds, _, _, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForPrefix(indexPath, indexFileOffset, key, config.SparseStepIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check index bounds: %v", err)
+	}
+	if !inIndexBounds {
+		return nil, nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position - use binary search to get close, then iterate sequentially
+	var searchKey string = key
+
+	// Use existing binary search to find the starting position (approximate)
+	offset, _, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	var startingDataOffset uint64 = offset
+
+	// 4. Sequential iteration from the starting position
+	return iterateSequentiallyForPrefix(dataPath, startingDataOffset, prefix, tombstonedKeys, config.CompressionEnabled)
+
 }
 
 /*
@@ -989,11 +1110,60 @@ func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int
 	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
 
 	lastEntryKey, lastEntryDataOffset, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+
 	if err != nil {
 		return false, false, 0, 0, 0, err
 	}
 	if lastEntryKey == key {
 		return true, true, lastEntryDataOffset, 0, 0, nil
+	}
+
+	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
+	crcsFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsFirst*CRC_SIZE
+	physicalOffsetLast := lastEntryOffset
+	crcsLast := (physicalOffsetLast / BLOCK_SIZE) + 1
+	logicalOffsetLast := physicalOffsetLast - crcsLast*CRC_SIZE
+
+	indexOfLastIndexEntry := (logicalOffsetLast - logicalOffsetFirst) / INDEX_ENTRY_METADATA_SIZE
+	indexOfLastSummaryEntry := indexOfLastIndexEntry / uint64(sparseStep)
+
+	return lastEntryKey > key, false, 0, indexOfLastSummaryEntry, indexOfLastIndexEntry, nil
+}
+
+/*
+Returns if the key is within the bounds of the Index Component, (doesn't have to exactly be there due to prefix constraints).
+
+If the key is in the bounds, the function returns true along with the index (ex. 645. or 7328.) of the last entry.
+
+If the key happens to be one of the bounds, we return the offset in Data component of that bound's key.
+
+If the key is not in the bounds, there is no point in searching further.
+*/
+func checkIndexBoundsForPrefix(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
+
+	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+
+	if err != nil {
+		return false, false, 0, 0, 0, err
+	}
+	if key < firstEntryKey {
+		if !strings.HasPrefix(firstEntryKey, key) {
+			return false, false, 0, 0, 0, nil
+		}
+	}
+
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, false, 0, 0, 0, err
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+
+	lastEntryKey, _, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+
+	if err != nil {
+		return false, false, 0, 0, 0, err
 	}
 
 	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
@@ -1040,6 +1210,10 @@ When we reach recursion base case, we do binary search of the index component.
 */
 func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
 	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
+
+	if indexFirst > indexLast {
+		return 0, false, nil // Key not found, terminate gracefully
+	}
 
 	if indexFirst+1 >= indexLast {
 		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
@@ -1093,6 +1267,10 @@ Binary search the index entries for the given key, between the specified indexes
 */
 func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
 
+	if indexFirst > indexLast {
+		return 0, false, nil // Key not found, terminate gracefully
+	}
+
 	if indexFirst == indexLast {
 		finalKey, finalOffset, err := readIndexMetadataEntry(filepath, offsetFirst+uint64(indexFirst)*INDEX_ENTRY_METADATA_SIZE)
 		if err != nil {
@@ -1124,6 +1302,436 @@ func binarySearchIndexes(filepath string, key string, offsetFirst uint64, indexF
 	} else {
 		return binarySearchIndexes(filepath, key, offsetFirst, indexFirst, mid-1)
 	}
+}
+
+/*
+lowerBoundSearchSummaryForPrefix performs a lower-bound search in the summary component for the first key >= startingKey.
+If found, it then performs a more precise lower-bound search in the index component to find the exact offset.
+*/
+func lowerBoundSearchSummary(summaryPath string, offsetFirst uint64, indexFirst uint64,
+	indexLast uint64, startingKey string, sparseIndex int, indexFileOffset uint64,
+	useSeparateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
+
+	low := indexFirst
+	high := indexLast
+
+	for low < high {
+		mid := low + (high-low)/2
+
+		physicalOffsetFirst := offsetFirst
+		crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+		logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
+		logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
+		crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
+		physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
+
+		midKey, _, err := readIndexMetadataEntry(summaryPath, physicalOffsetMid)
+		if err != nil {
+			return 0, false, err
+		}
+
+		if midKey >= startingKey {
+			if mid == 0 {
+				high = 0
+
+			} else {
+				high = mid - 1
+			}
+		} else {
+			low = mid + 1
+		}
+	}
+
+	indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+	if useSeparateFiles {
+		indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// Find the index range to search in the IndexComp
+	if low > 0 {
+		low -= 1
+	}
+	startIndex := low * uint64(sparseIndex)
+	endIndex := (high + 2) * uint64(sparseIndex)
+	if endIndex > originalIndexLast {
+		endIndex = originalIndexLast
+	}
+	if endIndex > originalIndexLast {
+		endIndex = originalIndexLast
+	}
+
+	return lowerBoundSearchIndexes(indexFilePath, startingKey, indexFileOffset, startIndex, endIndex)
+}
+
+/*
+lowerBoundSearchIndexes performs a lower-bound search in the index entries to find the first key >= startingKey.
+*/
+func lowerBoundSearchIndexes(filepath string, startingKey string, offsetFirst uint64, indexFirst uint64, indexLast uint64) (uint64, bool, error) {
+	low := indexFirst
+	high := indexLast
+	var bestOffset uint64 = 0
+
+	for low <= high {
+		mid := low + (high-low)/2
+
+		// Calculate the physical offset of the mid-entry in the index file
+		physicalOffsetFirst := offsetFirst
+		crcsTillFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+		logicalOffsetFirst := physicalOffsetFirst - crcsTillFirst*CRC_SIZE
+		logicalOffsetMid := logicalOffsetFirst + uint64(mid)*INDEX_ENTRY_METADATA_SIZE
+		crcsTillMid := ((logicalOffsetMid / (BLOCK_SIZE - CRC_SIZE)) + 1)
+		physicalOffsetMid := logicalOffsetMid + crcsTillMid*CRC_SIZE
+
+		midKey, midOffset, err := readIndexMetadataEntry(filepath, physicalOffsetMid)
+		if err != nil {
+			return 0, false, err
+		}
+
+		if midKey > startingKey {
+			// This is a potential answer. Store it and try to find an even
+			// better (smaller) key in the left half.
+			bestOffset = midOffset
+			if mid == 0 {
+				high = 0
+				break
+			} else {
+				high = mid - 1
+			}
+		} else { // midKey < startingKey
+			// The answer must be in the right half.
+			low = mid + 1
+		}
+	}
+
+	return bestOffset, bestOffset != 0, nil
+}
+
+/*
+Helper function for sequential iteration.
+*/
+func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix string, tombstonedKeys *[]string, compressionEnabled bool) (*record.Record, error) {
+	blockManager := block_manager.GetBlockManager()
+	currentOffset := startOffset
+
+	// Read the data file sequentially to find the next valid record
+	for {
+		// Read record size
+		recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			if err == io.EOF {
+				return nil, nil // No more records
+			}
+			return nil, err
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+		if recordSize == 0 {
+			return nil, nil // Invalid record size indicates end
+		}
+		currentOffset = newOffset
+
+		// Read record data
+		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			if err == io.EOF {
+				return nil, nil // No more records
+			}
+			return nil, err
+		}
+		currentOffset = newOffset
+
+		// Deserialize record
+		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+		// Check if record still has the prefix (if not, we're done)
+		if !strings.HasPrefix(rec.Key, prefix) {
+			return nil, nil
+		}
+
+		// Handle tombstones
+		if rec.IsDeleted() {
+
+			isTomstonedAlready := false
+			for _, tombstonedKey := range *tombstonedKeys {
+				if tombstonedKey == rec.Key {
+					isTomstonedAlready = true
+					break
+				}
+			}
+			if isTomstonedAlready {
+				continue
+			}
+
+			// Add to tombstoned list and continue
+			*tombstonedKeys = append(*tombstonedKeys, rec.Key)
+			continue
+		}
+
+		// Check if already tombstoned by higher levels
+		isTombstoned := false
+		for _, tombstonedKey := range *tombstonedKeys {
+			if tombstonedKey == rec.Key {
+				isTombstoned = true
+				break
+			}
+		}
+
+		if isTombstoned {
+			continue // Skip tombstoned record
+		}
+
+		// Found a valid record!
+		return rec, nil
+	}
+}
+
+/*
+ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+Only keys are added for memory efficiency - use Get() to retrieve full records.
+Parameters:
+- prefix: the key prefix to search for
+- tombstonedKeys: keys that have been tombstoned in more recent structures
+- bestKeys: best keys found so far from previous memtables (will be modified)
+- pageSize: maximum number of results per page (typically <= 50)
+- pageNumber: which page to return (0-based)
+- index: SSTable index to scan
+*/
+func ScanForPrefix(prefix string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, index int) error {
+	// 0. Deserialize SSTable Config
+	config, sizes, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1. Bloom Filter Check
+	if config.UseSeparateFiles {
+		filterPath := fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index)
+		filterSize, err := getComponentSize(filterPath)
+		if err != nil {
+			return fmt.Errorf("failed to get filter component size: %v", err)
+		}
+		filter, err := deserializeFilter(filterPath, 0, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize filter: %v", err)
+		}
+		if !filter.Contains([]byte(prependPrefixPrefix(prefix))) {
+			return nil // No records with this prefix
+		}
+	} else {
+		filterPath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+		filterOffset := offsets[3]
+		filterSize := sizes[3]
+		filter, err := deserializeFilter(filterPath, filterOffset, filterSize, config.UseSeparateFiles)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize filter (single file): %v", err)
+		}
+
+		// Check multiple prefix lengths up to 10 characters
+		maxPrefixLen := len(prefix)
+		if maxPrefixLen > 10 {
+			maxPrefixLen = 10
+		}
+		for prefixLen := 1; prefixLen <= maxPrefixLen; prefixLen++ {
+			checkPrefix := prefix[:prefixLen]
+			if !filter.Contains([]byte(prependPrefixPrefix(checkPrefix))) {
+				return nil
+			}
+		}
+	}
+
+	// 1.5. Data, Index and Summary preparation
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check
+	inIndexBounds, _, _, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForPrefix(indexPath, indexFileOffset, prefix, config.SparseStepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to check index bounds: %v", err)
+	}
+	if !inIndexBounds {
+		return nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position using lexicographically smaller string
+	searchKey := string_util.FindLexicographicallySmaller(prefix)
+
+	// Use existing binary search to find the starting position
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	var startingDataOffset uint64
+	if found {
+		startingDataOffset = offset
+	} else {
+		// If not found, start from the beginning of data
+		startingDataOffset = uint64(CRC_SIZE)
+		if config.UseSeparateFiles {
+			startingDataOffset += STANDARD_FLAG_SIZE
+		} else {
+			startingDataOffset = offsets[0] + CRC_SIZE
+		}
+	}
+
+	// 4. Sequential scan from the starting position
+	return scanSequentiallyForPrefixRange(dataPath, startingDataOffset, prefix, tombstonedKeys, bestKeys, pageSize, pageNumber, config.CompressionEnabled)
+}
+
+/*
+scanSequentiallyForPrefixRange scans records sequentially starting from the given offset,
+looking for records with the specified prefix. It handles tombstones and maintains bestKeys with pagination.
+*/
+func scanSequentiallyForPrefixRange(dataPath string, startOffset uint64, prefix string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, compressionEnabled bool) error {
+	blockManager := block_manager.GetBlockManager()
+	currentOffset := startOffset
+
+	// Create sets for efficient lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	var candidateKeys []string
+	foundPrefixRange := false
+
+	// Read records sequentially
+	for {
+		// Read record size
+		recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+		if recordSize == 0 {
+			break // Invalid record size indicates end
+		}
+		currentOffset = newOffset
+
+		// Read record data
+		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		currentOffset = newOffset
+
+		// Deserialize record
+		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+		// Check if we've found the prefix range
+		if strings.HasPrefix(rec.Key, prefix) {
+			foundPrefixRange = true
+		} else if foundPrefixRange {
+			// We've moved past the prefix range, stop scanning
+			break
+		} else {
+			// We haven't reached the prefix range yet, continue scanning
+			continue
+		}
+
+		// Skip if already tombstoned by higher levels
+		if tombstonedSet[rec.Key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[rec.Key] {
+			continue
+		}
+
+		// Handle tombstones
+		if rec.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
+				tombstonedSet[rec.Key] = true
+			}
+			continue
+		}
+
+		// Add to candidate keys
+		candidateKeys = append(candidateKeys, rec.Key)
+		bestKeysSet[rec.Key] = true
+	}
+
+	// Handle pagination
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(candidateKeys) {
+		return nil // No keys for this page
+	}
+
+	if endIndex > len(candidateKeys) {
+		endIndex = len(candidateKeys)
+	}
+
+	// Add paginated keys to bestKeys in sorted order
+	if bestKeys != nil {
+		for i := startIndex; i < endIndex; i++ {
+			*bestKeys = insertKeySortedIfNotExists(*bestKeys, candidateKeys[i])
+		}
+	}
+
+	return nil
+}
+
+// insertKeySortedIfNotExists inserts a key in sorted order into the slice if it doesn't already exist
+func insertKeySortedIfNotExists(keys []string, newKey string) []string {
+	// Check if key already exists
+	for _, key := range keys {
+		if key == newKey {
+			return keys // Key already exists, don't add
+		}
+	}
+
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
 }
 
 /*
