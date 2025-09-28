@@ -22,8 +22,22 @@ type BloomFilter struct {
 // expectedElements: the number of elements expected to be added to the filter.
 // falsePositiveRate: the desired false positive rate.
 func NewBloomFilter(expectedElements int, falsePositiveRate float64) *BloomFilter {
+	// Defensive guards to avoid divide-by-zero and invalid parameters
+	if expectedElements <= 0 {
+		expectedElements = 1
+	}
+	if !(falsePositiveRate > 0 && falsePositiveRate < 1) {
+		falsePositiveRate = 0.01
+	}
+
 	m := CalculateM(expectedElements, falsePositiveRate)
+	if m == 0 {
+		m = 8 // ensure at least one byte of bit array
+	}
 	k := CalculateK(expectedElements, m)
+	if k == 0 {
+		k = 1 // at least one hash function
+	}
 	return &BloomFilter{
 		m: uint32(m),
 		k: uint32(k),
@@ -34,12 +48,29 @@ func NewBloomFilter(expectedElements int, falsePositiveRate float64) *BloomFilte
 
 // Calculates m value
 func CalculateM(expectedElements int, falsePositiveRate float64) uint {
-	return uint(math.Ceil(float64(expectedElements) * math.Abs(math.Log(falsePositiveRate)) / math.Pow(math.Log(2), float64(2))))
+	if expectedElements <= 0 {
+		expectedElements = 1
+	}
+	if !(falsePositiveRate > 0 && falsePositiveRate < 1) {
+		falsePositiveRate = 0.01
+	}
+	m := uint(math.Ceil(float64(expectedElements) * math.Abs(math.Log(falsePositiveRate)) / math.Pow(math.Log(2), float64(2))))
+	if m == 0 {
+		m = 8
+	}
+	return m
 }
 
 // Calculates k value
 func CalculateK(expectedElements int, m uint) uint {
-	return uint(math.Ceil((float64(m) / float64(expectedElements)) * math.Log(2)))
+	if expectedElements <= 0 || m == 0 {
+		return 1
+	}
+	k := uint(math.Ceil((float64(m) / float64(expectedElements)) * math.Log(2)))
+	if k == 0 {
+		k = 1
+	}
+	return k
 }
 
 // Add inserts an element into the Bloom Filter by setting the corresponding bits to 1.
