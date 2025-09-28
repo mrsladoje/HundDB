@@ -7,16 +7,25 @@ import (
 	bm "hunddb/lsm/block_manager"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
+	"hunddb/utils/config"
 	"math"
 	"os"
 )
 
 // TODO: Create tests for WAL when all dependencies are complete.
-// TODO: These const values should be imported from user config
-const (
-	BLOCK_SIZE = 4096
-	LOG_SIZE   = 16
+// Configuration variables loaded from config file - no hardcoded defaults
+var (
+	BLOCK_SIZE uint16 
+	LOG_SIZE   uint16 
 )
+
+// init loads WAL configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	// Always use config - no fallbacks here
+	BLOCK_SIZE = uint16(cfg.WAL.BlockSize)
+	LOG_SIZE = uint16(cfg.WAL.LogSize)
+}
 
 // WAL represents a Write-Ahead Log implementation for database persistence.
 // It manages record writing, fragmentation across blocks, and crash recovery.
@@ -207,7 +216,7 @@ func (wal *WAL) ReconstructMemtable() error {
 	endLogIndex := wal.lastLogIndex
 
 	for logIndex := startLogIndex; logIndex <= endLogIndex; logIndex++ {
-		for blockIndex := uint64(0); blockIndex < LOG_SIZE; blockIndex++ {
+		for blockIndex := uint64(0); blockIndex < uint64(LOG_SIZE); blockIndex++ {
 			location := block_location.BlockLocation{
 				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, logIndex),
 				BlockIndex: blockIndex,
