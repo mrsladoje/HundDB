@@ -227,8 +227,8 @@ export const Home = () => {
     currentKey = null,
     ended = false,
     currentRecord = null,
-  prefix = null,
-  extra = null
+    prefix = null,
+    extra = null
   ) => {
     const operation = {
       id: Date.now(),
@@ -244,9 +244,12 @@ export const Home = () => {
       prefix,
       timestamp: new Date().toLocaleTimeString(),
     };
-  const opWithExtras = extra && typeof extra === "object" ? { ...operation, ...extra } : operation;
-  setOperations((prev) => [opWithExtras, ...prev.slice(0, 14)]); // Keep only last 15 operations
-  setActiveOperationId(operation.id);
+    const opWithExtras =
+      extra && typeof extra === "object"
+        ? { ...operation, ...extra }
+        : operation;
+    setOperations((prev) => [opWithExtras, ...prev.slice(0, 14)]); // Keep only last 15 operations
+    setActiveOperationId(operation.id);
   };
 
   const validateOperation = () => {
@@ -281,6 +284,12 @@ export const Home = () => {
           }
         }
         break;
+      case "RANGE_ITERATE":
+      case "RANGE_SCAN":
+        if (maxKey < minKey) {
+          return "Range end must be greater than or equal to range start!";
+        }
+        break;
     }
     return null;
   };
@@ -296,6 +305,8 @@ export const Home = () => {
       if (record) {
         const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
         setResult(resultText);
+        setNotFoundMessage(null);
+        setError(null);
         addOperation("GET", key, true, "Record found", null, resultText);
         setStats((prev) => ({ ...prev, gets: prev.gets + 1 }));
       } else {
@@ -419,9 +430,7 @@ export const Home = () => {
       const keys = await PrefixScan(prefix, pageSize, pn - 1);
 
       const isEmpty = !keys || keys.length === 0;
-      const notFoundMsg = isEmpty
-        ? getRandomDogNotFound("SCAN")
-        : null;
+      const notFoundMsg = isEmpty ? getRandomDogNotFound("SCAN") : null;
 
       // If nothing found on initial scan: mark as notFound (yellow UI)
       if (isEmpty) {
@@ -432,9 +441,7 @@ export const Home = () => {
         "PREFIX_SCAN",
         prefix,
         !isEmpty,
-        isEmpty
-          ? null
-          : `Found ${keys.length} records on page ${pn}`,
+        isEmpty ? null : `Found ${keys.length} records on page ${pn}`,
         isEmpty ? notFoundMsg : null,
         null,
         null,
@@ -469,14 +476,20 @@ export const Home = () => {
 
     try {
       const effectivePageSize = newPageSize || currentOperation.pageSize;
-      const keys = await PrefixScan(prefix, effectivePageSize, Math.max(0, newPage - 1));
+      const keys = await PrefixScan(
+        prefix,
+        effectivePageSize,
+        Math.max(0, newPage - 1)
+      );
 
-  // Update the existing operation instead of creating a new one
+      // Update the existing operation instead of creating a new one
       setOperations((prev) =>
         prev.map((op) => {
           if (op.id === currentOperation.id) {
-    const hadResultsBefore = Array.isArray(currentOperation.keys) && currentOperation.keys.length > 0;
-    const paginationError = hadResultsBefore && keys.length === 0;
+            const hadResultsBefore =
+              Array.isArray(currentOperation.keys) &&
+              currentOperation.keys.length > 0;
+            const paginationError = hadResultsBefore && keys.length === 0;
             return {
               ...op,
               currentPage: newPage,
@@ -491,9 +504,9 @@ export const Home = () => {
         })
       );
 
-  // Pagination empties should NOT turn the whole card yellow
-  setNotFoundMessage(null);
-  setResult(`Prefix scan completed: ${keys.length} records found`);
+      // Pagination empties should NOT turn the whole card yellow
+      setNotFoundMessage(null);
+      setResult(`Prefix scan completed: ${keys.length} records found`);
     } catch (err) {
       console.error("Error changing page:", err);
     }
@@ -506,9 +519,9 @@ export const Home = () => {
     setNotFoundMessage(null);
 
     try {
-  const pn = Number(pageNumber) || 1;
-  const records = await RangeScan(minKey, maxKey, pn, pageSize);
-  const resultText = `Range scan results (page ${pn}):\n${JSON.stringify(
+      const pn = Number(pageNumber) || 1;
+      const records = await RangeScan(minKey, maxKey, pn, pageSize);
+      const resultText = `Range scan results (page ${pn}):\n${JSON.stringify(
         records,
         null,
         2
@@ -600,6 +613,8 @@ export const Home = () => {
       if (record) {
         const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
         setResult(resultText);
+        setNotFoundMessage(null);
+        setError(null);
         addOperation(
           "PREFIX_ITERATE",
           prefix,
@@ -728,24 +743,166 @@ export const Home = () => {
     setIsLoading(true);
 
     try {
-      const iterator = await RangeIterate(minKey, maxKey);
-      setResult(
-        `Created range iterator for: ${minKey} to ${maxKey}\nUse next() and stop() methods to control iteration.`
+      const record = await RangeIterate(
+        minKey,
+        maxKey,
+        findLexicographicallySmaller(minKey)
       );
-      addOperation(
-        "RANGE_ITERATE",
-        `${minKey}-${maxKey}`,
-        true,
-        "Iterator created"
-      );
+
+      const minDisplay =
+        (minKey || '""').length > 12
+          ? (minKey || '""').substring(0, 9) + "..."
+          : minKey || '""';
+      const maxDisplay =
+        (maxKey || '""').length > 12
+          ? (maxKey || '""').substring(0, 9) + "..."
+          : maxKey || '""';
+      const rangeDisplay = `${minDisplay} → ${maxDisplay}`;
+
+      if (record) {
+        const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
+        setResult(resultText);
+        setNotFoundMessage(null);
+        setError(null);
+        addOperation(
+          "RANGE_ITERATE",
+          rangeDisplay,
+          true,
+          "Iterator created",
+          null,
+          resultText,
+          record.key,
+          false,
+          record,
+          null,
+          { rangeMin: minKey, rangeMax: maxKey }
+        );
+      } else {
+        const notFoundMessage = getRandomDogNotFound("ITERATE");
+        setNotFoundMessage(notFoundMessage);
+
+        addOperation(
+          "RANGE_ITERATE",
+          rangeDisplay,
+          false,
+          null,
+          notFoundMessage,
+          notFoundMessage,
+          rangeDisplay,
+          true,
+          null,
+          null,
+          { rangeMin: minKey, rangeMax: maxKey }
+        );
+      }
       setStats((prev) => ({ ...prev, iterates: prev.iterates + 1 }));
     } catch (err) {
       const dogError = getRandomDogError("ITERATE");
       setError(dogError);
-      addOperation("ITERATE", `${minKey}-${maxKey}`, false, dogError);
+      addOperation(
+        "RANGE_ITERATE",
+        rangeDisplay,
+        false,
+        dogError,
+        null,
+        dogError,
+        rangeDisplay,
+        true,
+        null,
+        null,
+        { rangeMin: minKey, rangeMax: maxKey }
+      );
       setStats((prev) => ({ ...prev, errors: prev.errors + 1 }));
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Unified iterator next handler that supports both PREFIX_ and RANGE_ iterators
+  const handleIteratorNext = async (operation) => {
+    if (!operation || operation.ended) return;
+    if (operation.type === "PREFIX_ITERATE") {
+      await handlePrefixIteratorNext(operation);
+      return;
+    }
+    if (operation.type === "RANGE_ITERATE") {
+      try {
+        const rangeMin =
+          operation.rangeMin ?? operation.key.split("-")[0] ?? "";
+        const rangeMax =
+          operation.rangeMax ??
+          operation.key.split("-").slice(1).join("-") ??
+          "";
+        const record = await RangeIterate(
+          rangeMin,
+          rangeMax,
+          operation.currentKey
+        );
+
+        // Update the operation in the operations array
+        setOperations((prev) =>
+          prev.map((op) => {
+            if (op.id === operation.id) {
+              if (record) {
+                const resultText = `Found record: ${JSON.stringify(
+                  record,
+                  null,
+                  2
+                )}`;
+                return {
+                  ...op,
+                  resultData: resultText,
+                  currentKey: record.key,
+                  currentRecord: record,
+                  success: true,
+                  notFoundMessage: null,
+                  message: "Next record found",
+                };
+              } else {
+                return {
+                  ...op,
+                  ended: true,
+                  success: false,
+                  notFoundMessage: "🐾Iterator has reached the end",
+                  message: null,
+                  currentRecord: null,
+                };
+              }
+            }
+            return op;
+          })
+        );
+
+        // Update the current result display
+        if (record) {
+          const resultText = `Found record: ${JSON.stringify(record, null, 2)}`;
+          setResult(resultText);
+          setError(null);
+          setNotFoundMessage(null);
+        } else {
+          setResult(null);
+          setError(null);
+          setNotFoundMessage("🐾Iterator has reached the end");
+        }
+      } catch (err) {
+        const dogError = getRandomDogError("ITERATE");
+        setError(dogError);
+
+        // Mark operation as ended due to error
+        setOperations((prev) =>
+          prev.map((op) => {
+            if (op.id === operation.id) {
+              return {
+                ...op,
+                ended: true,
+                success: false,
+                message: dogError,
+              };
+            }
+            return op;
+          })
+        );
+      }
     }
   };
 
@@ -788,7 +945,7 @@ export const Home = () => {
   const handleOperationClick = (operation) => {
     // Set the operation type and restore the input values
     setSelectedOperation(operation.type);
-  setActiveOperationId(operation.id);
+    setActiveOperationId(operation.id);
 
     // Clear any existing errors/validation
     setError(null);
@@ -1174,7 +1331,7 @@ export const Home = () => {
                 error={error}
                 notFoundMessage={notFoundMessage}
                 isSuccess={!error && !notFoundMessage && !!result}
-                onIteratorNext={handlePrefixIteratorNext}
+                onIteratorNext={handleIteratorNext}
                 operations={operations}
                 onPrefixScanPageChange={handlePrefixScanPageChange}
                 currentPrefix={prefix}

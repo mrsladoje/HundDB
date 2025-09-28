@@ -321,9 +321,12 @@ const NoResultsFoundCard = ({
                 </h2>
                 <p className={`${themeColors.accent} text-sm md:text-base`}>
                   {splitText(messagePrefix, 0)}
-                  <span className="font-semibold">
+                  <span 
+                    className={`font-semibold inline-block ${searchQuery.length > 30 ? 'cursor-help' : ''}`} 
+                    title={searchQuery.length > 30 ? searchQuery : undefined}
+                  >
                     {splitText(
-                      `"${searchQuery}"`,
+                      `"${searchQuery.length > 30 ? searchQuery.slice(0, 30) + '...' : searchQuery}"`,
                       messagePrefixLength
                     )}
                   </span>

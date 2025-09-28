@@ -1,7 +1,7 @@
-import Record from "@/components/home/Record";
+import { FaDog, FaBone, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
 import PrefixScanTable from "@/components/table/PrefixScanTable";
+import Record from "@/components/home/Record";
 import { Get } from "@wails/main/App.js";
-import { FaBone, FaDog, FaRegSave, FaRegTrashAlt } from "react-icons/fa";
 
 const Result = ({
   operation,
@@ -18,9 +18,7 @@ const Result = ({
 }) => {
   // Helper function to truncate text with hover tooltip
   const TruncatedText = ({ text, maxLength = 30, className = "" }) => {
-    if (!text || !text.trim()) {
-      return <span className={`${className} text-gray-400`}>{'""'}</span>;
-    }
+    if (!text) return null;
 
     const shouldTruncate = text.length > maxLength;
     const displayText = shouldTruncate
@@ -29,9 +27,7 @@ const Result = ({
 
     return (
       <span
-        className={`${className} ${
-          shouldTruncate ? "cursor-help" : ""
-        } !select-text text-left`}
+        className={`${className} ${shouldTruncate ? "cursor-help" : ""} !select-text text-left`}
         title={shouldTruncate ? text : undefined}
       >
         {displayText}
@@ -114,7 +110,7 @@ const Result = ({
           </div>
         )}
 
-        <div className="flex justify-between items-end pt-[0.4rem]">
+        <div className="flex justify-between pt-[0.4rem]">
           {op.type === "PREFIX_ITERATE" ? (
             <div className="mt-2 flex items-center gap-2">
               <span
@@ -153,7 +149,7 @@ const Result = ({
               >
                 Range:
               </span>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2">
                 <TruncatedText
                   text={op.rangeMin ?? op.key?.split("-")[0] ?? ""}
                   className={`font-mono ${
@@ -165,21 +161,15 @@ const Result = ({
                   }  px-2 py-1 rounded text-md`}
                   maxLength={40}
                 />
-                <span
-                  className={`${
-                    op.notFoundMessage
-                      ? "text-yellow-700"
-                      : !op.success
-                      ? "text-red-700"
-                      : "text-green-700"
-                  } font-bold`}
-                >
-                  →
-                </span>
+                <span className={`${
+                  op.notFoundMessage
+                    ? "text-yellow-700"
+                    : !op.success
+                    ? "text-red-700"
+                    : "text-green-700"
+                } font-bold`}>→</span>
                 <TruncatedText
-                  text={
-                    op.rangeMax ?? op.key?.split("-")?.slice(1).join("-") ?? ""
-                  }
+                  text={op.rangeMax ?? op.key?.split("-")?.slice(1).join("-") ?? ""}
                   className={`font-mono ${
                     op.notFoundMessage
                       ? "text-yellow-700 bg-yellow-100"
@@ -195,7 +185,7 @@ const Result = ({
           <button
             onClick={() => onIteratorNext && onIteratorNext(op)}
             disabled={op.ended}
-            className={`px-4 py-2 max-h-fit rounded-lg font-bold text-sm border-2 transition-all duration-200 whitespace-nowrap ${
+            className={`px-4 py-2 rounded-lg font-bold text-sm border-2 transition-all duration-200 ${
               op.ended
                 ? "bg-gray-300 text-gray-500 border-gray-400 cursor-not-allowed"
                 : "bg-blue-500 text-white border-blue-700 hover:bg-blue-600 shadow-[2px_2px_0px_0px_rgba(29,78,216,1)] hover:shadow-[3px_3px_0px_0px_rgba(29,78,216,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
@@ -289,12 +279,11 @@ const Result = ({
       case "PREFIX_ITERATE": {
         // Prefer the active op (e.g., when a RecentOperations item is clicked),
         // otherwise fall back to the most recent executed iterator op
-        const op =
-          (activeOperationId
-            ? operations.find(
-                (o) => o.id === activeOperationId && o.type === "PREFIX_ITERATE"
-              )
-            : operations.find((o) => o.type === "PREFIX_ITERATE")) || null;
+        const op = (activeOperationId
+          ? operations.find(
+              (o) => o.id === activeOperationId && o.type === "PREFIX_ITERATE"
+            )
+          : operations.find((o) => o.type === "PREFIX_ITERATE")) || null;
         if (op) {
           return renderIteratorContent(op);
         }
@@ -306,12 +295,11 @@ const Result = ({
       }
 
       case "RANGE_ITERATE": {
-        const op =
-          (activeOperationId
-            ? operations.find(
-                (o) => o.id === activeOperationId && o.type === "RANGE_ITERATE"
-              )
-            : operations.find((o) => o.type === "RANGE_ITERATE")) || null;
+        const op = (activeOperationId
+          ? operations.find(
+              (o) => o.id === activeOperationId && o.type === "RANGE_ITERATE"
+            )
+          : operations.find((o) => o.type === "RANGE_ITERATE")) || null;
         if (op) {
           return renderIteratorContent(op);
         }
@@ -326,13 +314,11 @@ const Result = ({
         if (!error) {
           // Prefer the active op (e.g., when a RecentOperations item is clicked),
           // otherwise fall back to the most recent executed PREFIX_SCAN op
-          const currentOperation =
-            (activeOperationId
-              ? operations.find(
-                  (op) =>
-                    op.id === activeOperationId && op.type === "PREFIX_SCAN"
-                )
-              : operations.find((op) => op.type === "PREFIX_SCAN")) || null;
+          const currentOperation = (activeOperationId
+            ? operations.find(
+                (op) => op.id === activeOperationId && op.type === "PREFIX_SCAN"
+              )
+            : operations.find((op) => op.type === "PREFIX_SCAN")) || null;
           if (currentOperation) {
             return (
               <div className="flex flex-col gap-4">
