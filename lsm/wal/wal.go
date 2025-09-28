@@ -73,19 +73,6 @@ func (wal *WAL) writeFragmentedRecord(payload []byte) error {
 	maxPayloadSize := int(BLOCK_SIZE) - HEADER_TOTAL_SIZE - crc.CRC_SIZE
 	numberOfFragments := int(math.Ceil(float64(len(payload)) / float64(maxPayloadSize)))
 
-	// Ensure all fragments fit in the current log
-	if numberOfFragments > int(LOG_SIZE-wal.blocksInCurrentLog) {
-		// Force flush current block if it has data and start a new log
-		if wal.offsetInBlock > 0 {
-			err := wal.flushCurrentAndMakeNewBlock()
-			if err != nil {
-				return err
-			}
-		}
-		wal.lastLogIndex++
-		wal.blocksInCurrentLog = 0
-	}
-
 	// Writes the fragments. Each fragment takes up a full block.
 	// For example if a record is 1.5 blocks large, the first fragment
 	// will be the size of maxPayloadSize, the second fragment will be the remaining data.
