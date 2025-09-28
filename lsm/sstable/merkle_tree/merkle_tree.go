@@ -3,11 +3,8 @@ package merkle_tree
 import (
 	"container/list"
 	"crypto/md5"
-	"errors"
 	"math"
 )
-
-var ErrEmptyTree = errors.New("cannot create Merkle tree from empty data")
 
 // MerkleNode represents a node in the Merkle tree.
 // Each node contains a hashed value and pointers to its left and right children.
@@ -40,7 +37,7 @@ type Hashable interface {
 // returns: Merkle tree instance and an error if there was no blocks to construct the tree.
 func NewMerkleTree[T Hashable](blocks []T, hashedAlredy bool) (*MerkleTree, error) {
 	if len(blocks) == 0 {
-		return nil, ErrEmptyTree
+		return &MerkleTree{merkleRoot: &MerkleNode{hashedValue: md5.Sum([]byte{})}}, nil
 	}
 
 	// Create leaf nodes

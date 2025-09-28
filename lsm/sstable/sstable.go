@@ -2312,6 +2312,11 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 		i++
 	}
 
+	if len(recordHashes) == 0 {
+		emptyLeaf := md5.Sum([]byte{})
+		recordHashes = append(recordHashes, emptyLeaf[:])
+	}
+
 	merkleTree, err := merkle_tree.NewMerkleTree(recordHashes, true)
 	if err != nil {
 		return false, corruptDataBlocks, true, fmt.Errorf("failed to create Merkle tree: %v", err)
@@ -2554,6 +2559,7 @@ func performStreamingDataCompaction(state *CompactionState) error {
 		if err != nil {
 			return fmt.Errorf("failed to write data to disk: %v", err)
 		}
+		state.newDataOffset += uint64(len(finalBytes))
 	}
 
 	// If separate files, patch the size prefix with the actual logical size and fix CRC of first block
@@ -2569,8 +2575,8 @@ func performStreamingDataCompaction(state *CompactionState) error {
 		}
 		dataPart := make([]byte, BLOCK_SIZE-CRC_SIZE)
 		copy(dataPart, blk[CRC_SIZE:CRC_SIZE+int(BLOCK_SIZE-CRC_SIZE)])
-		// Set size prefix = STANDARD_FLAG_SIZE + total logical bytes
-		sizeVal := state.totalLogical + STANDARD_FLAG_SIZE
+		// Set size prefix = total logical bytes. The prefix stores the length of the data *following* it.
+		sizeVal := state.totalLogical
 		binary.LittleEndian.PutUint64(dataPart[0:STANDARD_FLAG_SIZE], sizeVal)
 		// Recompute CRC for this block and write it back
 		newBlk := crc_util.AddCRCToBlockData(dataPart)
@@ -2627,72 +2633,81 @@ func createCompactedComponentsFromState(state *CompactionState, newIndex int, co
 			}
 		}
 
-		// Index component: empty
-		idxPath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
-		if USE_SEPARATE_FILES {
-			idxPath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, newIndex)
+		// Calculate component start offsets similar to non-empty
+		indexStartOffset := dataStartOffset
+		if !USE_SEPARATE_FILES {
+			// No data written; start right after dataStartOffset
+			indexStartOffset = state.newDataOffset
 		}
-		emptyIndex := &IndexComp{FilePath: idxPath, StartOffset: 0, IndexEntries: []IndexEntry{}}
-		idxBytes, idxSize, err := emptyIndex.serialize(0)
+		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		if USE_SEPARATE_FILES {
+			indexStartOffset = 0
+			indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, newIndex)
+		}
+		emptyIndex := &IndexComp{FilePath: indexFilePath, StartOffset: indexStartOffset, IndexEntries: []IndexEntry{}}
+		idxBytes, idxSize, err := emptyIndex.serialize(indexStartOffset)
 		if err != nil {
 			return err
 		}
-		if err := blockManager.WriteToDisk(idxBytes, idxPath, 0); err != nil {
+		if err := blockManager.WriteToDisk(idxBytes, indexFilePath, indexStartOffset); err != nil {
 			return err
 		}
 
-		// Summary component: empty with min/max empty
-		sumPath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		summaryStartOffset := indexStartOffset + uint64(len(idxBytes))
+		summaryFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
 		if USE_SEPARATE_FILES {
-			sumPath = fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, newIndex)
+			summaryStartOffset = 0
+			summaryFilePath = fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, newIndex)
 		}
-		emptySummary := &SummaryComp{FilePath: sumPath, StartOffset: 0, MinKey: "", MaxKey: "", IndexEntries: []IndexEntry{}}
-		sumBytes, sumSize, err := emptySummary.serialize(0)
+		emptySummary := &SummaryComp{FilePath: summaryFilePath, StartOffset: summaryStartOffset, MinKey: "", MaxKey: "", IndexEntries: []IndexEntry{}}
+		sumBytes, sumSize, err := emptySummary.serialize(summaryStartOffset)
 		if err != nil {
 			return err
 		}
-		if err := blockManager.WriteToDisk(sumBytes, sumPath, 0); err != nil {
+		if err := blockManager.WriteToDisk(sumBytes, summaryFilePath, summaryStartOffset); err != nil {
 			return err
 		}
 
-		// Filter component: minimal filter
-		filterPath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		filterStartOffset := summaryStartOffset + uint64(len(sumBytes))
+		filterFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
 		if USE_SEPARATE_FILES {
-			filterPath = fmt.Sprintf(FILTER_FILE_NAME_FORMAT, newIndex)
+			filterFilePath = fmt.Sprintf(FILTER_FILE_NAME_FORMAT, newIndex)
+			filterStartOffset = 0
 		}
 		bf := bloom_filter.NewBloomFilter(1, BLOOM_FILTER_FALSE_POSITIVE_RATE)
-		filterComp := &FilterComp{FilePath: filterPath, StartOffset: 0, BloomFilter: bf}
+		filterComp := &FilterComp{FilePath: filterFilePath, StartOffset: filterStartOffset, BloomFilter: bf}
 		filterBytes, filterSize, err := filterComp.serialize()
 		if err != nil {
 			return err
 		}
-		if err := blockManager.WriteToDisk(filterBytes, filterPath, 0); err != nil {
+		if err := blockManager.WriteToDisk(filterBytes, filterFilePath, filterStartOffset); err != nil {
 			return err
 		}
 
-		// Metadata component: create Merkle tree with one empty leaf
-		metaPath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		metaDataStartOffset := filterStartOffset + uint64(len(filterBytes))
+		metaDataFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
 		if USE_SEPARATE_FILES {
-			metaPath = fmt.Sprintf(METADATA_FILE_NAME_FORMAT, newIndex)
+			metaDataStartOffset = 0
+			metaDataFilePath = fmt.Sprintf(METADATA_FILE_NAME_FORMAT, newIndex)
 		}
 		emptyLeaf := md5.Sum([]byte{})
 		mt, err := merkle_tree.NewMerkleTree([][]byte{emptyLeaf[:]}, true)
 		if err != nil {
 			return err
 		}
-		metaComp := &MetadataComp{FilePath: metaPath, StartOffset: 0, MerkleTree: mt}
+		metaComp := &MetadataComp{FilePath: metaDataFilePath, StartOffset: metaDataStartOffset, MerkleTree: mt}
 		metaBytes, metaSize, err := metaComp.serialize()
 		if err != nil {
 			return err
 		}
-		if err := blockManager.WriteToDisk(metaBytes, metaPath, 0); err != nil {
+		if err := blockManager.WriteToDisk(metaBytes, metaDataFilePath, metaDataStartOffset); err != nil {
 			return err
 		}
 
-		// Update main config if single-file mode with zeros
+		// Update main config if single-file mode
 		if !USE_SEPARATE_FILES {
 			sizes := []uint64{0, idxSize, sumSize, filterSize, metaSize}
-			offsets := []uint64{dataStartOffset, 0, 0, 0, 0}
+			offsets := []uint64{dataStartOffset, indexStartOffset, summaryStartOffset, filterStartOffset, metaDataStartOffset}
 			if err := config.addSizeDataToConfig(sizes, offsets, newIndex); err != nil {
 				return err
 			}
@@ -2703,8 +2718,8 @@ func createCompactedComponentsFromState(state *CompactionState, newIndex int, co
 	// Calculate data size (logical, without CRCs). In single-file mode this is needed for index offset.
 	dataSize := state.totalLogical
 
-	// 1. Create Index Component
-	indexStartOffset := dataStartOffset + crc_util.SizeAfterAddingCRCs(dataSize)
+	// 1. Create Index Component — in single-file mode, place right after last written data chunk (aligned)
+	indexStartOffset := state.newDataOffset
 	indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
 	if USE_SEPARATE_FILES {
 		indexStartOffset = 0

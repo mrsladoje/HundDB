@@ -4376,18 +4376,10 @@ func TestCompact_MultiSSTables_OverlapAndTombstones(t *testing.T) {
 
 			// Newest: tombstone key_004, override key_002, add key_020
 			var records1 []record.Record
-			for i := 0; i < 10; i++ {
-				k := fmt.Sprintf("key_%03d", i)
-				if k == "key_004" {
-					records1 = append(records1, *record.NewRecord(k, nil, now-1, true))
-					continue
-				}
-				v := []byte(fmt.Sprintf("v1_%03d", i))
-				if k == "key_002" {
-					v = []byte("newest")
-				}
-				records1 = append(records1, *record.NewRecord(k, v, now-1, false))
-			}
+			// Only add specific keys, not all 0-9
+			records1 = append(records1, *record.NewRecord("key_001", []byte("v1_001"), now-1, false))
+			records1 = append(records1, *record.NewRecord("key_002", []byte("newest"), now-1, false))
+			records1 = append(records1, *record.NewRecord("key_004", nil, now-1, true))
 			records1 = append(records1, *record.NewRecord("key_020", []byte("v1_020"), now-1, false))
 			sort.Slice(records1, func(i, j int) bool { return records1[i].Key < records1[j].Key })
 			if err := PersistMemtable(records1, 1); err != nil {
