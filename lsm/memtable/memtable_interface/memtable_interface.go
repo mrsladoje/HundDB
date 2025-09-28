@@ -39,6 +39,23 @@ type MemtableInterface interface {
 		pageNumber int,
 	)
 
+	// Only keys are returned for memory efficiency - use Get() to retrieve full records.
+	// Parameters:
+	// - rangeStart: start of the key range (inclusive)
+	// - rangeEnd: end of the key range (inclusive)
+	// - tombstonedKeys: keys that have been tombstoned in more recent structures
+	// - bestKeys: best keys found so far from previous memtables (will be modified)
+	// - pageSize: maximum number of results per page (typically <= 50)
+	// - pageNumber: which page to return (0-based)
+	ScanForRange(
+		rangeStart string,
+		rangeEnd string,
+		tombstonedKeys *[]string,
+		bestKeys *[]string,
+		pageSize int,
+		pageNumber int,
+	)
+
 	// Size returns the number of active (non-tombstoned) keys currently stored.
 	Size() int
 

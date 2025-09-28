@@ -93,16 +93,28 @@ func (mt *MemTable) GetNextForRange(rangeStart string, rangeEnd string, key stri
 	return mt.impl.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys)
 }
 
-func (mt *MemTable) Size() int {
+func (mt *MemTable) ScanForRange(
+	rangeStart string,
+	rangeEnd string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int) {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	return mt.impl.Size()
+	mt.impl.ScanForRange(rangeStart, rangeEnd, tombstonedKeys, bestKeys, pageSize, pageNumber)
 }
 
 func (mt *MemTable) Capacity() int {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.impl.Capacity()
+}
+
+func (mt *MemTable) Size() int {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.Size()
 }
 
 func (mt *MemTable) TotalEntries() int {

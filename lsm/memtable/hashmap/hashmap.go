@@ -379,3 +379,77 @@ func (hm *HashMap) Flush(index int) error {
 
 	return nil
 }
+
+// ScanForRange scans records within the given range and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (hm *HashMap) ScanForRange(
+	rangeStart string,
+	rangeEnd string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if len(hm.data) == 0 {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Get all keys within range and sort them
+	var matchingKeys []string
+	for key := range hm.data {
+		// Check if key is within range [rangeStart, rangeEnd]
+		if key >= rangeStart && key <= rangeEnd {
+			matchingKeys = append(matchingKeys, key)
+		}
+	}
+	sort.Strings(matchingKeys)
+
+	// Process each matching key
+	for _, key := range matchingKeys {
+		record := hm.data[key]
+		if record == nil {
+			continue
+		}
+
+		// Skip if already tombstoned in newer structures
+		if tombstonedSet[key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[key] {
+			continue
+		}
+
+		// If this record is a tombstone, add to tombstoned set
+		if record.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, key)
+				tombstonedSet[key] = true
+			}
+			continue
+		}
+
+		// Add to best keys (maintaining sorted order)
+		if bestKeys != nil {
+			*bestKeys = insertKeySorted(*bestKeys, key)
+			bestKeysSet[key] = true
+		}
+	}
+}

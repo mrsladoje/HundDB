@@ -455,3 +455,51 @@ func (s *SkipList) Flush(index int) error {
 
 	return nil
 }
+
+// ScanForRange scans records within the given range and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (s *SkipList) ScanForRange(
+	rangeStart string,
+	rangeEnd string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if s.head == nil || s.head.nextNodes[0] == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		// Check if key is within range [rangeStart, rangeEnd] (inclusive)
+		if current.key >= rangeStart && current.key <= rangeEnd {
+			if current.rec != nil {
+				s.processRecordForScan(current.rec, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+			}
+		}
+		// If we've gone past the end of the range, we can stop
+		if current.key > rangeEnd {
+			break
+		}
+		current = current.nextNodes[0]
+	}
+}

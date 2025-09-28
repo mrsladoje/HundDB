@@ -1325,3 +1325,429 @@ func BenchmarkHashMap_ScanForPrefix(b *testing.B) {
 		hm.ScanForPrefix("user", &tombstoned, &bestKeys, 50, 0)
 	}
 }
+
+func TestHashMap_ScanForRange_EmptyHashMap(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key900", &tombstoned, &bestKeys, 10, 0)
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected no keys from empty hashmap, got %d keys", len(bestKeys))
+	}
+}
+
+func TestHashMap_ScanForRange_BasicScan(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	// Add records within and outside the range
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+	// Outside range
+	_ = hm.Put(makeRec("key999", "value4"))
+	_ = hm.Put(makeRec("key001", "value5"))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key800", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys := []string{"key123", "key456", "key789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestHashMap_ScanForRange_InclusiveRange(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	// Add records at exact boundaries
+	_ = hm.Put(makeRec("key100", "value1"))
+	_ = hm.Put(makeRec("key200", "value2"))
+	_ = hm.Put(makeRec("key300", "value3"))
+	_ = hm.Put(makeRec("key400", "value4"))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key200", "key300", &tombstoned, &bestKeys, 10, 0)
+
+	// Should include both boundaries
+	expectedKeys := []string{"key200", "key300"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestHashMap_ScanForRange_SkipLocalTombstones(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	// Mark key456 as tombstoned locally
+	_ = hm.Delete(makeTomb("key456"))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key800", &tombstoned, &bestKeys, 10, 0)
+
+	// Should only get non-tombstoned keys
+	expectedKeys := []string{"key123", "key789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	// Should have added tombstoned key to the slice
+	if len(tombstoned) != 1 || tombstoned[0] != "key456" {
+		t.Errorf("Expected tombstoned slice to contain 'key456', got %v", tombstoned)
+	}
+}
+
+func TestHashMap_ScanForRange_SkipExternalTombstones(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	// Simulate external tombstones
+	tombstoned := []string{"key456"}
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key800", &tombstoned, &bestKeys, 10, 0)
+
+	// Should skip externally tombstoned keys
+	expectedKeys := []string{"key123", "key789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+}
+
+func TestHashMap_ScanForRange_AvoidDuplicates(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+	_ = hm.Put(makeRec("key789", "value3"))
+
+	// Simulate existing best keys from previous memtables
+	tombstoned := []string{}
+	bestKeys := []string{"key123", "key555"}
+	hm.ScanForRange("key100", "key800", &tombstoned, &bestKeys, 10, 0)
+
+	// Should maintain sorted order and avoid duplicates
+	expectedKeys := []string{"key123", "key456", "key555", "key789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestHashMap_ScanForRange_MaintainsSortedOrder(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	// Insert keys in random order to HashMap
+	keys := []string{"key789", "key123", "key456", "key001", "key999"}
+	for _, key := range keys {
+		_ = hm.Put(makeRec(key, "value"))
+	}
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key800", &tombstoned, &bestKeys, 10, 0)
+
+	// Should be returned in sorted order
+	expectedKeys := []string{"key123", "key456", "key789"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestHashMap_ScanForRange_NoMatches(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("key001", "value1"))
+	_ = hm.Put(makeRec("key999", "value2"))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key800", &tombstoned, &bestKeys, 10, 0)
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected no keys for non-matching range, got %d keys: %v", len(bestKeys), bestKeys)
+	}
+}
+
+func TestHashMap_ScanForRange_NilParameters(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("key123", "value1"))
+	_ = hm.Put(makeRec("key456", "value2"))
+
+	// Test with nil parameters (should not panic)
+	hm.ScanForRange("key100", "key800", nil, nil, 10, 0)
+
+	// Test with nil tombstoned only
+	bestKeys := []string{}
+	hm.ScanForRange("key100", "key800", nil, &bestKeys, 10, 0)
+
+	expectedKeys := []string{"key123", "key456"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+}
+
+func TestHashMap_ScanForRange_MixedOperations(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	// Mixed operations: inserts, updates, deletes
+	_ = hm.Put(makeRec("key003", "value3"))
+	_ = hm.Put(makeRec("key001", "value1"))
+	_ = hm.Put(makeRec("key002", "value2"))
+	_ = hm.Put(makeRec("key001", "updated1")) // update existing
+	_ = hm.Delete(makeTomb("key002"))         // delete existing
+	_ = hm.Put(makeRec("key004", "value4"))
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key001", "key004", &tombstoned, &bestKeys, 10, 0)
+
+	// Should only get non-tombstoned keys in sorted order
+	expectedKeys := []string{"key001", "key003", "key004"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+
+	// Should have added tombstoned key to the slice
+	if len(tombstoned) != 1 || tombstoned[0] != "key002" {
+		t.Errorf("Expected tombstoned slice to contain 'key002', got %v", tombstoned)
+	}
+}
+
+func TestHashMap_ScanForRange_CombinedWithPreviousResults(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("key003", "value3"))
+	_ = hm.Put(makeRec("key007", "value7"))
+	_ = hm.Put(makeRec("key009", "value9"))
+
+	// Simulate previous results from newer memtables
+	tombstoned := []string{"key005"}                   // tombstoned in newer memtable
+	bestKeys := []string{"key001", "key005", "key011"} // from newer memtables
+	hm.ScanForRange("key001", "key011", &tombstoned, &bestKeys, 10, 0)
+
+	// Should merge and maintain sorted order
+	expectedKeys := []string{"key001", "key003", "key005", "key007", "key009", "key011"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestHashMap_ScanForRange_EdgeCaseRanges(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("a", "value"))
+	_ = hm.Put(makeRec("ab", "value"))
+	_ = hm.Put(makeRec("abc", "value"))
+	_ = hm.Put(makeRec("abcd", "value"))
+	_ = hm.Put(makeRec("abd", "value"))
+	_ = hm.Put(makeRec("b", "value"))
+
+	// Test single key range
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("abc", "abc", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys := []string{"abc"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys for single key range, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	// Test range with partial matches
+	tombstoned = []string{}
+	bestKeys = []string{}
+	hm.ScanForRange("ab", "abd", &tombstoned, &bestKeys, 10, 0)
+
+	expectedKeys = []string{"ab", "abc", "abcd", "abd"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys for range 'ab'-'abd', got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	// Test empty range (start > end)
+	tombstoned = []string{}
+	bestKeys = []string{}
+	hm.ScanForRange("z", "a", &tombstoned, &bestKeys, 10, 0)
+
+	if len(bestKeys) != 0 {
+		t.Errorf("Expected no keys for empty range (start > end), got %d keys: %v", len(bestKeys), bestKeys)
+	}
+}
+
+func TestHashMap_ScanForRange_NumericSorting(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	// Add numeric keys (as strings, they sort lexicographically)
+	keys := []string{"key001", "key010", "key100", "key002", "key020", "key200"}
+	for _, key := range keys {
+		_ = hm.Put(makeRec(key, "value"))
+	}
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key001", "key100", &tombstoned, &bestKeys, 10, 0)
+
+	// Lexicographic order: 001, 002, 010, 020, 100
+	expectedKeys := []string{"key001", "key002", "key010", "key020", "key100"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func TestHashMap_ScanForRange_LargeRange(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(1000)
+
+	// Insert many records
+	numRecords := 100
+	for i := 0; i < numRecords; i++ {
+		key := fmt.Sprintf("key%04d", i)
+		_ = hm.Put(makeRec(key, "value"))
+	}
+
+	// Delete every 5th record
+	for i := 0; i < numRecords; i += 5 {
+		key := fmt.Sprintf("key%04d", i)
+		_ = hm.Delete(makeTomb(key))
+	}
+
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("key0000", "key0099", &tombstoned, &bestKeys, 1000, 0)
+
+	// Should get non-tombstoned keys in sorted order
+	expectedCount := numRecords - (numRecords / 5)
+	if len(bestKeys) != expectedCount {
+		t.Errorf("Expected %d non-tombstoned keys, got %d", expectedCount, len(bestKeys))
+	}
+
+	// Verify sorting and no tombstoned keys
+	for i := 1; i < len(bestKeys); i++ {
+		if bestKeys[i-1] >= bestKeys[i] {
+			t.Errorf("Keys not in sorted order at indices %d, %d: %s >= %s",
+				i-1, i, bestKeys[i-1], bestKeys[i])
+		}
+	}
+
+	// Verify tombstoned count
+	expectedTombstoned := numRecords / 5
+	if len(tombstoned) != expectedTombstoned {
+		t.Errorf("Expected %d tombstoned keys, got %d", expectedTombstoned, len(tombstoned))
+	}
+}
+
+func TestHashMap_ScanForRange_PartialOverlap(t *testing.T) {
+	t.Parallel()
+	hm := NewHashMap(100)
+
+	_ = hm.Put(makeRec("apple", "value1"))
+	_ = hm.Put(makeRec("banana", "value2"))
+	_ = hm.Put(makeRec("cherry", "value3"))
+	_ = hm.Put(makeRec("date", "value4"))
+	_ = hm.Put(makeRec("elderberry", "value5"))
+
+	// Range that partially overlaps with keys
+	tombstoned := []string{}
+	bestKeys := []string{}
+	hm.ScanForRange("avocado", "durian", &tombstoned, &bestKeys, 10, 0)
+
+	// Should include banana, cherry, date (alphabetically between avocado and durian)
+	expectedKeys := []string{"banana", "cherry", "date"}
+	if len(bestKeys) != len(expectedKeys) {
+		t.Fatalf("Expected %d keys, got %d: %v", len(expectedKeys), len(bestKeys), bestKeys)
+	}
+
+	for i, expected := range expectedKeys {
+		if bestKeys[i] != expected {
+			t.Errorf("Key at index %d: expected %s, got %s", i, expected, bestKeys[i])
+		}
+	}
+}
+
+func BenchmarkHashMap_ScanForRange(b *testing.B) {
+	hm := NewHashMap(100000)
+
+	// Setup data
+	numRecords := 10000
+	for i := 0; i < numRecords; i++ {
+		key := fmt.Sprintf("key%06d", i)
+		_ = hm.Put(makeRec(key, "value"))
+	}
+
+	// Add some records outside the range
+	for i := 0; i < 1000; i++ {
+		key := fmt.Sprintf("other%06d", i)
+		_ = hm.Put(makeRec(key, "value"))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tombstoned := []string{}
+		bestKeys := []string{}
+		hm.ScanForRange("key000000", "key005000", &tombstoned, &bestKeys, 50, 0)
+	}
+}
