@@ -3,10 +3,10 @@ package wal
 import (
 	"bytes"
 	"fmt"
-	"hash/crc32"
 	bm "hunddb/lsm/block_manager"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
+	crc "hunddb/utils/crc"
 	"math"
 	"os"
 )
@@ -110,7 +110,7 @@ func (wal *WAL) writeFragmentedRecord(payload []byte) error {
 // fragmentType: the fragment type (FULL, FIRST, MIDDLE, LAST).
 func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 	header := NewWALHeader(
-		CRC32(payload),
+		crc.GetCRC(payload),
 		uint16(len(payload)),
 		fragmentType,
 		wal.lastLogIndex,
@@ -156,12 +156,6 @@ func (wal *WAL) flushCurrentAndMakeNewBlock() error {
 		wal.blocksInCurrentLog = 0
 	}
 	return nil
-}
-
-// CRC32 calculates CRC32 checksum over a byte array.
-// Used for fragment-level integrity checking in WALHeader.
-func CRC32(data []byte) uint32 {
-	return crc32.ChecksumIEEE(data)
 }
 
 // Close flushes any remaining data and closes the WAL.
@@ -246,8 +240,9 @@ func (wal *WAL) processBlock(block []byte, fragmentBuffer *[]byte) error {
 		payload := block[offset : offset+int(header.Size)]
 		offset += int(header.Size)
 
-		if header.CRC != CRC32(payload) {
-			return fmt.Errorf("corrupted record: CRC mismatch")
+		err := crc.CheckBlockIntegrity(block)
+		if err != nil {
+			return fmt.Errorf("CRC check failed for record fragment: %w", err)
 		}
 
 		switch header.Type {
