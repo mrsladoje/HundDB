@@ -2,6 +2,7 @@ package wal
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	bm "hunddb/lsm/block_manager"
 	block_location "hunddb/model/block_location"
@@ -34,8 +35,6 @@ type WAL struct {
 // or initializes from existing logs if present.
 func BuildWAL() (*WAL, error) {
 	dirPath := "hunddb/lsm/wal/logs"
-	metadataPath := fmt.Sprintf("%s/wal_metadata.json", dirPath)
-
 	wal := &WAL{
 		lastBlock:          make([]byte, BLOCK_SIZE),
 		offsetInBlock:      crc.CRC_SIZE,
@@ -45,6 +44,7 @@ func BuildWAL() (*WAL, error) {
 		logSize:            LOG_SIZE,
 		logsPath:           dirPath,
 	}
+	err := wal.recoverMetadata()
 	return wal, err
 }
 
@@ -166,6 +166,59 @@ func (wal *WAL) flushCurrentAndMakeNewBlock() error {
 func (wal *WAL) Close() error {
 	if wal.offsetInBlock > 0 {
 		return wal.flushCurrentAndMakeNewBlock()
+	}
+	err := syncMetadata(wal)
+	if err != nil {
+		return fmt.Errorf("failed to write WAL metadata on close: %w", err)
+	}
+	return nil
+}
+
+func (wal *WAL) recoverMetadata() error {
+	metadataPath := fmt.Sprintf("%s/wal_metadata.bin", wal.logsPath)
+	file, err := os.Open(metadataPath)
+	if err == os.ErrNotExist {
+		fmt.Println("WAL metadata file does not exist, starting fresh WAL")
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("failed to open WAL metadata file: %w", err)
+	}
+	defer file.Close()
+	data := make([]byte, 32)
+	_, err = file.Read(data)
+	if err != nil {
+		return fmt.Errorf("failed to read WAL metadata file: %w", err)
+	}
+	wal.offsetInBlock = binary.LittleEndian.Uint64(data[0:8])
+	wal.blocksInCurrentLog = binary.LittleEndian.Uint64(data[8:16])
+	wal.firstLogIndex = binary.LittleEndian.Uint64(data[16:24])
+	wal.lastLogIndex = binary.LittleEndian.Uint64(data[24:32])
+	wal.lastBlock, err = bm.GetBlockManager().ReadBlock(block_location.BlockLocation{
+		FilePath:   fmt.Sprintf("%s/wal_%d.bin", wal.logsPath, wal.lastLogIndex),
+		BlockIndex: uint64(wal.blocksInCurrentLog),
+	})
+	if err != nil {
+		err = fmt.Errorf("WAL data could not be recovered")
+	}
+	return err
+}
+
+// syncMetadata writes the WAL metadata to a file for recovery purposes.
+func syncMetadata(wal *WAL) error {
+	metadataPath := fmt.Sprintf("%s/wal_metadata.bin", wal.logsPath)
+	file, err := os.Create(metadataPath)
+	if err != nil {
+		return fmt.Errorf("failed to create WAL metadata file: %w", err)
+	}
+	defer file.Close()
+	data := make([]byte, 32)
+	binary.LittleEndian.PutUint64(data[0:8], wal.offsetInBlock)
+	binary.LittleEndian.PutUint64(data[8:16], wal.blocksInCurrentLog)
+	binary.LittleEndian.PutUint64(data[16:24], wal.firstLogIndex)
+	binary.LittleEndian.PutUint64(data[24:32], wal.lastLogIndex)
+	_, err = file.Write(data)
+	if err != nil {
+		return fmt.Errorf("failed to serialize WAL metadata file: %w", err)
 	}
 	return nil
 }
