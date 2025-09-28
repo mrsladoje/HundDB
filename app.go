@@ -127,8 +127,21 @@ func (a *App) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string,
 	return keys, nil
 }
 
-func (a *App) RangeScan() string {
-	return "Not implemented yet"
+// RangeScan scans for keys within the given range using pagination
+func (a *App) RangeScan(rangeStart string, rangeEnd string, pageSize int, pageNumber int) ([]string, error) {
+	if pageSize <= 0 {
+		pageSize = 5 // Default page size
+	}
+	if pageNumber < 0 {
+		pageNumber = 0 // Default to first page
+	}
+
+	keys, err := a.lsm.RangeScan(rangeStart, rangeEnd, pageSize, pageNumber)
+	if err != nil {
+		return nil, fmt.Errorf("error scanning range [%s, %s): %v", rangeStart, rangeEnd, err)
+	}
+
+	return keys, nil
 }
 
 // PrefixIterate retrieves the next record for a given prefix and key
