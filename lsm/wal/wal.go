@@ -22,27 +22,31 @@ const (
 // It manages record writing, fragmentation across blocks, and crash recovery.
 type WAL struct {
 	lastBlock          []byte // Current block being written to
-	offsetInBlock      uint16 // Current write position within the block
-	blocksInCurrentLog uint16 // Number of blocks written in current log
-	lastLogIndex       uint32 // Current log segment index
-	dirPath            string // Directory path for log files
+	offsetInBlock      uint64 // Current write position within the block
+	blocksInCurrentLog uint64 // Number of blocks written in current log
+	firstLogIndex      uint64 // First log segment index
+	lastLogIndex       uint64 // Last log segment index
+	logSize            uint64 // Maximum number of blocks per log file
+	logsPath           string // Path to logs directory
 }
 
-// NewWAL creates a new WAL instance with the specified directory path and starting log index.
-// TODO: consult with Milos about this, shouldn't system set the filePath and log number is known? What about reading the last block if system closes?
-// dirPath: the directory where log files will be stored.
-// logIndex: the starting log index for this WAL instance.
-func NewWAL(dirPath string, logIndex uint32) *WAL {
-	return &WAL{
+// BuildWAL creates a new WAL instance with the specified directory path and starting log index,
+// or initializes from existing logs if present.
+func BuildWAL() (*WAL, error) {
+	dirPath := "hunddb/lsm/wal/logs"
+	metadataPath := fmt.Sprintf("%s/wal_metadata.json", dirPath)
+
+	wal := &WAL{
 		lastBlock:          make([]byte, BLOCK_SIZE),
 		offsetInBlock:      crc.CRC_SIZE,
 		blocksInCurrentLog: 0,
-		lastLogIndex:       logIndex,
-		dirPath:            dirPath,
+		firstLogIndex:      1,
+		lastLogIndex:       1,
+		logSize:            LOG_SIZE,
+		logsPath:           dirPath,
 	}
+	return wal, err
 }
-
-// TODO: Implement recovery logic to read the last written block and continue from there. It should be called upon startup.
 
 // WriteRecord writes a WAL record to the log, handling both complete and fragmented records.
 func (wal *WAL) WriteRecord(record *record.Record) error {
@@ -50,7 +54,7 @@ func (wal *WAL) WriteRecord(record *record.Record) error {
 	spaceNeeded := HEADER_TOTAL_SIZE + len(payload)
 
 	// Checks if there is enough space left in the block.
-	if int(BLOCK_SIZE)-int(wal.offsetInBlock) < spaceNeeded {
+	if int(BLOCK_SIZE-wal.offsetInBlock) < spaceNeeded {
 		err := wal.flushCurrentAndMakeNewBlock()
 		if err != nil {
 			return err
@@ -124,7 +128,7 @@ func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 	copy(wal.lastBlock[wal.offsetInBlock:], header)
 	copy(wal.lastBlock[wal.offsetInBlock+HEADER_TOTAL_SIZE:], payload)
 
-	wal.offsetInBlock += uint16(totalSize)
+	wal.offsetInBlock += uint64(totalSize)
 
 	// If the block is exactly full, flush it
 	if wal.offsetInBlock == BLOCK_SIZE {
@@ -134,13 +138,12 @@ func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 	return nil
 }
 
-// TODO: Agree on the correct path to logs
 // flushCurrentAndMakeNewBlock writes the current block to storage and prepares for the next block.
 func (wal *WAL) flushCurrentAndMakeNewBlock() error {
 	wal.lastBlock = crc.AddCRCToBlockData(wal.lastBlock)
 	err := bm.GetBlockManager().WriteBlock(block_location.BlockLocation{
-		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, wal.lastLogIndex),
-		BlockIndex: uint64(wal.blocksInCurrentLog),
+		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, wal.lastLogIndex),
+		BlockIndex: wal.blocksInCurrentLog,
 	}, wal.lastBlock)
 	if err != nil {
 		return fmt.Errorf("failed to write block to disk: %w", err)
@@ -169,14 +172,12 @@ func (wal *WAL) Close() error {
 
 // DeleteOldLogs deletes all log files with numbers below the given low watermark.
 // lowWatermark: the log number below which all logs should be deleted.
-func (wal *WAL) DeleteOldLogs(lowWatermark uint32) error {
+func (wal *WAL) DeleteOldLogs(lowWatermark uint64) error {
 	if lowWatermark <= 0 {
 		return nil
 	}
-	// TODO: Get first log file index, for now dummy value of 1
-	firstLogFileIndex := uint32(1)
-	for logNum := firstLogFileIndex; logNum < lowWatermark; logNum++ {
-		logFilePath := fmt.Sprintf("%s/wal_%d.log", wal.dirPath, logNum)
+	for logNum := wal.firstLogIndex; logNum < lowWatermark; logNum++ {
+		logFilePath := fmt.Sprintf("%s/wal_%d.log", wal.logsPath, logNum)
 		err := os.Remove(logFilePath)
 		if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to delete log file %s: %w", logFilePath, err)
@@ -196,14 +197,10 @@ func (wal *WAL) ReconstructMemtable() error {
 	blockManager := bm.GetBlockManager()
 	fragmentBuffer := make([]byte, 0)
 
-	// TODO: Get actual log range - for now read from log 1 to current log
-	startLogIndex := uint32(1)
-	endLogIndex := wal.lastLogIndex
-
-	for logIndex := startLogIndex; logIndex <= endLogIndex; logIndex++ {
-		for blockIndex := uint64(0); blockIndex < LOG_SIZE; blockIndex++ {
+	for logIndex := wal.firstLogIndex; logIndex <= wal.lastLogIndex; logIndex++ {
+		for blockIndex := range uint64(LOG_SIZE) {
 			location := block_location.BlockLocation{
-				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.dirPath, logIndex),
+				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, logIndex),
 				BlockIndex: blockIndex,
 			}
 

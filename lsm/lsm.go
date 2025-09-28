@@ -142,19 +142,23 @@ LoadLSM loads the LSM from disk, or creates a new one if it doesn't exist.
 Always returns an LSM instance. If previous data couldn't be loaded, the DataLost flag will be set to true.
 */
 func LoadLSM() *LSM {
-	// Create a new LSM instance with default values
+	dataLost := false
+	wal, err := wal.BuildWAL()
+	if err != nil {
+		dataLost = true
+	}
 	lsm := &LSM{
 		levels:    make([][]int, MAX_LEVELS),
 		memtables: make([]*memtable.MemTable, 0, MAX_MEMTABLES),
-		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
+		wal:       wal,
 		cache:     cache.NewReadPathCache(),
-		DataLost:  false, // Initially assume no data loss
+		DataLost:  dataLost, // Initially assume no data loss
 	}
 
 	blockManager := block_manager.GetBlockManager()
 
 	// Check if the file exists using os.Stat
-	_, err := os.Stat(LSM_PATH)
+	_, err = os.Stat(LSM_PATH)
 	if os.IsNotExist(err) {
 		// File doesn't exist - this is a fresh start (not data loss)
 		firstMemtable, _ := memtable.NewMemtable()
