@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from "react";
-import { FaShield, FaX } from "react-icons/fa6";
-import { FaHome, FaPaw, FaDice } from "react-icons/fa";
-import { MdMenu } from "react-icons/md";
-import { FiSettings } from "react-icons/fi";
 import NavButton from "@/components/navbar/NavButton.jsx";
-import { Link, useNavigate } from "react-router-dom";
 import { useNavbar } from "@/context/NavbarContext.jsx";
 import { throttle } from "lodash";
+import { useEffect, useRef, useState } from "react";
+import { FaDice, FaHome, FaPaw } from "react-icons/fa";
+import { FaShield, FaX } from "react-icons/fa6";
+import { FiSettings } from "react-icons/fi";
+import { MdMenu } from "react-icons/md";
+import { Link, useNavigate } from "react-router-dom";
 
 export const Navbar = () => {
   const navigate = useNavigate();
@@ -23,9 +23,9 @@ export const Navbar = () => {
       }
     };
 
-    window.addEventListener('resize', handleResize);
-    
-    return () => window.removeEventListener('resize', handleResize);
+    window.addEventListener("resize", handleResize);
+
+    return () => window.removeEventListener("resize", handleResize);
   }, [isMenuOpen]);
 
   const updateNavbarHeight = () => {
@@ -68,28 +68,28 @@ export const Navbar = () => {
       label: "Home",
       icon: FaHome,
       description: "PUT, GET, DELETE operations",
-      to: "/"
+      to: "/",
     },
     {
       id: "config",
       label: "Config",
       icon: FiSettings,
       description: "System settings & parameters",
-      to: "/config"
+      to: "/config",
     },
     {
       id: "data",
       label: "Data",
       icon: FaShield,
       description: "Merkle tree validation",
-      to: "/data"
+      to: "/data",
     },
     {
       id: "probabilistic",
       label: "Probabilistic",
       icon: FaDice,
       description: "Probabilistic data structures",
-      to: "/probabilistic"
+      to: "/probabilistic",
     },
   ];
 
@@ -99,7 +99,7 @@ export const Navbar = () => {
   };
 
   return (
-    <nav 
+    <nav
       ref={navbarRef}
       className="bg-sloth-yellow border-y-2 border-sloth-brown shadow-[0_4px_0px_0px_#6b5e4a] sticky top-0 left-0 w-full z-50 select-none"
     >
@@ -146,7 +146,7 @@ export const Navbar = () => {
               isActive={activeTab === "home"}
               onClick={() => {
                 setActiveTab("home");
-                navigate('/');
+                navigate("/");
               }}
             />
           </div>
@@ -173,12 +173,21 @@ export const Navbar = () => {
           {/* Desktop Layout - Right Navigation */}
           <div className="hidden md:flex items-center gap-4 lg:gap-[1.3rem]">
             <NavButton
+              icon={FaDice}
+              label="Probabilistic"
+              isActive={activeTab === "probabilistic"}
+              onClick={() => {
+                setActiveTab("probabilistic");
+                navigate("/probabilistic");
+              }}
+            />
+            <NavButton
               icon={FiSettings}
               label="Config"
               isActive={activeTab === "config"}
               onClick={() => {
                 setActiveTab("config");
-                navigate('/config');
+                navigate("/config");
               }}
             />
             <NavButton
@@ -187,22 +196,20 @@ export const Navbar = () => {
               isActive={activeTab === "data"}
               onClick={() => {
                 setActiveTab("data");
-                navigate('/data');
+                navigate("/data");
               }}
             />
           </div>
         </div>
-
-        
       </div>
 
       {/* Mobile Menu */}
-        <MobileMenu
-          isOpen={isMenuOpen}
-          navItems={navItems}
-          activeTab={activeTab}
-          onTabClick={handleTabClick}
-        />
+      <MobileMenu
+        isOpen={isMenuOpen}
+        navItems={navItems}
+        activeTab={activeTab}
+        onTabClick={handleTabClick}
+      />
 
       {!isMenuOpen && (
         <div className="h-[0.05rem] bg-sloth-brown border-t-2 border-sloth-brown-dark" />

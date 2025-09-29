@@ -46,8 +46,15 @@ const Probabilistic = () => {
   
   // State for loaded structures and their interfaces
   const [loadedStructures, setLoadedStructures] = useState({});
+  const [activeUsingStructure, setActiveUsingStructure] = useState(null); // Only one using structure at a time
   const [structureValues, setStructureValues] = useState({});
   const [structureResults, setStructureResults] = useState({});
+  // Create/Load modal state
+  const [createForm, setCreateForm] = useState({ name: '', capacity: '', fpr: '', precision: '', epsilon: '', delta: '', initialDocument: '' });
+  const [loadForm, setLoadForm] = useState({ name: '' });
+  const [busy, setBusy] = useState(false);
+  const [modalError, setModalError] = useState('');
+  const [modalSuccess, setModalSuccess] = useState('');
   
   const containerRef = useRef(null);
 
@@ -118,12 +125,49 @@ const Probabilistic = () => {
 
   const handleCreateStructure = (structureType) => {
     setSelectedStructureType(structureType);
+    setCreateForm({ name: '', capacity: '', fpr: '', precision: '', epsilon: '', delta: '', initialDocument: '' });
+    setModalError('');
+    setModalSuccess('');
     setShowCreateModal(true);
   };
 
   const handleLoadStructure = (structureType) => {
     setSelectedStructureType(structureType);
+    setLoadForm({ name: '' });
+    setModalError('');
+    setModalSuccess('');
     setShowLoadModal(true);
+  };
+
+  // Function to persist structure data when closing
+  const persistStructureData = async (structureType, structureName) => {
+    try {
+      // Add persistence logic here based on structure type
+      console.log(`Persisting data for ${structureType}: ${structureName}`);
+      // This would save any pending changes to disk
+    } catch (error) {
+      console.error('Error persisting structure data:', error);
+    }
+  };
+
+  // Function to close using structure
+  const closeUsingStructure = async () => {
+    if (activeUsingStructure) {
+      const structureName = loadedStructures[activeUsingStructure];
+      await persistStructureData(activeUsingStructure, structureName);
+    }
+    setActiveUsingStructure(null);
+    // Clear any structure-specific values and results
+    setStructureValues({});
+    setStructureResults({});
+  };
+
+  // Function to open using structure (closes current one first)
+  const openUsingStructure = async (structureType) => {
+    if (activeUsingStructure && activeUsingStructure !== structureType) {
+      await closeUsingStructure();
+    }
+    setActiveUsingStructure(structureType);
   };
 
   // Simulate loading a structure for testing
@@ -165,13 +209,13 @@ const Probabilistic = () => {
   const handleAddToSimHash = async (name) => {
     const document = structureValues['simhash-add'];
     if (!document) return;
-    
     try {
-      await window.go.main.App.AddToSimHash(name, document);
-      setStructureValues({...structureValues, 'simhash-add': ''});
-      // Show success notification
+      // Compute fingerprint and save it under provided name
+      const fp = await window.go.main.App.ComputeSimHashFingerprint(document);
+      await window.go.main.App.SaveSimHashFingerprint(name, fp);
+      setStructureValues({ ...structureValues, 'simhash-add': '' });
     } catch (error) {
-      console.error('Error adding to simhash:', error);
+      console.error('Error saving simhash fingerprint:', error);
     }
   };
 
@@ -233,6 +277,103 @@ const Probabilistic = () => {
       setStructureResults({...structureResults, 'cms-query': result});
     } catch (error) {
       console.error('Error querying count-min sketch:', error);
+    }
+  };
+
+  // Create modal submit
+  const handleCreateSubmit = async () => {
+    if (!selectedStructureType) return;
+    setBusy(true);
+    setModalError('');
+    setModalSuccess('');
+    try {
+      const name = (createForm.name || '').trim();
+      if (!name) throw new Error('Name is required');
+      let msg = '';
+      switch (selectedStructureType) {
+        case 'bloom-filter': {
+          const capacity = parseInt(createForm.capacity, 10);
+          const fpr = parseFloat(createForm.fpr);
+          if (!Number.isFinite(capacity) || capacity <= 0) throw new Error('Capacity must be a positive integer');
+          if (!(fpr > 0 && fpr < 1)) throw new Error('False positive rate must be between 0 and 1');
+          msg = await window.go.main.App.CreateBloomFilter(name, capacity, fpr);
+          break;
+        }
+        case 'hyperloglog': {
+          const precision = parseInt(createForm.precision, 10);
+          if (!Number.isFinite(precision) || precision < 4 || precision > 18) throw new Error('Precision must be between 4 and 18');
+          msg = await window.go.main.App.CreateHyperLogLog(name, precision);
+          break;
+        }
+        case 'count-min-sketch': {
+          const epsilon = parseFloat(createForm.epsilon);
+          const delta = parseFloat(createForm.delta);
+          if (!(epsilon > 0 && epsilon < 1)) throw new Error('Epsilon must be between 0 and 1');
+          if (!(delta > 0 && delta < 1)) throw new Error('Delta must be between 0 and 1');
+          msg = await window.go.main.App.CreateCountMinSketch(name, epsilon, delta);
+          break;
+        }
+        case 'simhash': {
+          // Optional initial document to create a fingerprint file immediately
+          if (createForm.initialDocument && createForm.initialDocument.trim().length > 0) {
+            const fp = await window.go.main.App.ComputeSimHashFingerprint(createForm.initialDocument);
+            msg = await window.go.main.App.SaveSimHashFingerprint(name, fp);
+          } else {
+            // No direct create API for simhash; require initial document
+            throw new Error('Provide an initial document to create a SimHash fingerprint');
+          }
+          break;
+        }
+        default:
+          throw new Error('Unsupported structure');
+      }
+      setModalSuccess(msg || 'Created');
+      setLoadedStructures(prev => ({ ...prev, [selectedStructureType]: name }));
+      setShowCreateModal(false);
+      // Automatically open the using interface for the newly created structure
+      await openUsingStructure(selectedStructureType);
+    } catch (e) {
+      setModalError(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Load modal submit
+  const handleLoadSubmit = async () => {
+    if (!selectedStructureType) return;
+    setBusy(true);
+    setModalError('');
+    setModalSuccess('');
+    try {
+      const name = (loadForm.name || '').trim();
+      if (!name) throw new Error('Name is required');
+      let msg = '';
+      switch (selectedStructureType) {
+        case 'bloom-filter':
+          msg = await window.go.main.App.LoadBloomFilter(name);
+          break;
+        case 'hyperloglog':
+          msg = await window.go.main.App.LoadHyperLogLog(name);
+          break;
+        case 'count-min-sketch':
+          msg = await window.go.main.App.LoadCountMinSketch(name);
+          break;
+        case 'simhash':
+          msg = await window.go.main.App.LoadSimHashFingerprint(name);
+          break;
+        default:
+          throw new Error('Unsupported structure');
+      }
+      setModalSuccess(msg || 'Loaded');
+      setLoadedStructures(prev => ({ ...prev, [selectedStructureType]: name }));
+      setShowLoadModal(false);
+      // Automatically open the using interface for the newly loaded structure
+      await openUsingStructure(selectedStructureType);
+    } catch (e) {
+      setModalError(e?.message || String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -306,7 +447,7 @@ const Probabilistic = () => {
                 <div className="flex gap-3">
                   <button
                     onClick={() => handleCreateStructure(structure.id)}
-                    className="flex items-center gap-2 px-4 py-3 bg-sloth-green text-white font-bold rounded-lg border-4 border-sloth-brown-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200"
+                    className="flex items-center gap-2 px-4 py-3 bg-sloth-green text-sloth-yellow font-bold rounded-lg border-4 border-sloth-brown-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200"
                   >
                     <FaPlus />
                     Create New
@@ -318,18 +459,261 @@ const Probabilistic = () => {
                     <FaFolderOpen />
                     Load
                   </button>
+                  {loadedStructures[structure.id] && (
+                    <button
+                      onClick={() => openUsingStructure(structure.id)}
+                      className="flex items-center gap-2 px-4 py-3 bg-sloth-yellow-lite text-sloth-brown-dark font-bold rounded-lg border-4 border-sloth-brown-dark shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200"
+                    >
+                      <FaDice />
+                      Use
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           ))}
         </div>
 
+        {/* Using Loaded Structures (moved above info boxes) */}
+        {activeUsingStructure && loadedStructures[activeUsingStructure] && (
+          <div className="mt-8 space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-3xl font-bold text-sloth-brown-dark flex items-center gap-3">
+                <FaDice className="text-sloth-brown" />
+                Using Loaded Structure
+              </h2>
+              <button
+                onClick={closeUsingStructure}
+                className="text-2xl text-sloth-brown-dark hover:text-red-600 transition-colors duration-200 bg-white border-2 border-sloth-brown-dark rounded-full w-10 h-10 flex items-center justify-center shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Bloom Filter Using Section */}
+            {activeUsingStructure === 'bloom-filter' && (
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+                <div className="bg-gradient-to-r from-pink-500 to-pink-600 p-4">
+                  <h3 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <FaFilter />
+                    🌸 Using Bloom Filter: {loadedStructures['bloom-filter']}
+                  </h3>
+                </div>
+                <div className="p-6">
+                  <div className="grid md:grid-cols-2 gap-6">
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Add Element</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Enter element to add"
+                          value={structureValues['bloom-add'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'bloom-add': e.target.value})}
+                          className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                        />
+                        <button 
+                          onClick={() => handleAddToBloomFilter(loadedStructures['bloom-filter'])}
+                          className="px-4 py-2 bg-pink-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Check Element</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Enter element to check"
+                          value={structureValues['bloom-check'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'bloom-check': e.target.value})}
+                          className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                        />
+                        <button 
+                          onClick={() => handleCheckBloomFilter(loadedStructures['bloom-filter'])}
+                          className="px-4 py-2 bg-pink-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Check
+                        </button>
+                      </div>
+                      {structureResults['bloom-check'] && (
+                        <div className="mt-3 p-3 bg-sloth-yellow-lite rounded border-2 border-sloth-brown text-sm">
+                          <strong className="text-sloth-brown-dark">Result:</strong> 
+                          <span className="text-sloth-brown ml-2">{structureResults['bloom-check']}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* SimHash Using Section */}
+            {activeUsingStructure === 'simhash' && (
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+                <div className="bg-gradient-to-r from-purple-500 to-purple-600 p-4">
+                  <h3 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <FaSearch />
+                    🔍 Using SimHash: {loadedStructures['simhash']}
+                  </h3>
+                </div>
+                <div className="p-6">
+                  <div className="grid md:grid-cols-2 gap-6">
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Add Document</h4>
+                      <div className="space-y-2">
+                        <textarea
+                          placeholder="Enter document content"
+                          value={structureValues['simhash-add'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'simhash-add': e.target.value})}
+                          className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark h-20 resize-none"
+                        />
+                        <button 
+                          onClick={() => handleAddToSimHash(loadedStructures['simhash'])}
+                          className="w-full px-4 py-2 bg-purple-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Add Document
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Compare Similarity</h4>
+                      <div className="space-y-2">
+                        <textarea
+                          placeholder="Enter document to compare"
+                          value={structureValues['simhash-compare'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'simhash-compare': e.target.value})}
+                          className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark h-20 resize-none"
+                        />
+                        <button 
+                          onClick={() => handleCompareSimHash(loadedStructures['simhash'])}
+                          className="w-full px-4 py-2 bg-purple-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Compare
+                        </button>
+                      </div>
+                      {structureResults['simhash-compare'] && (
+                        <div className="mt-3 p-3 bg-sloth-yellow-lite rounded border-2 border-sloth-brown text-sm">
+                          <strong className="text-sloth-brown-dark">Similarity:</strong> 
+                          <span className="text-sloth-brown ml-2">{structureResults['simhash-compare']}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* HyperLogLog Using Section */}
+            {activeUsingStructure === 'hyperloglog' && (
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+                <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-4">
+                  <h3 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <BsGraphUp />
+                    🔢 Using HyperLogLog: {loadedStructures['hyperloglog']}
+                  </h3>
+                </div>
+                <div className="p-6">
+                  <div className="grid md:grid-cols-2 gap-6">
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Add Element</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Enter element to add"
+                          value={structureValues['hll-add'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'hll-add': e.target.value})}
+                          className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                        />
+                        <button
+                          onClick={() => handleAddToHyperLogLog(loadedStructures['hyperloglog'])}
+                          className="px-4 py-2 bg-orange-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Get Cardinality</h4>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => handleQueryHyperLogLog(loadedStructures['hyperloglog'])}
+                          className="flex-1 px-4 py-2 bg-orange-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Get Count
+                        </button>
+                      </div>
+                      {structureResults['hll-count'] && (
+                        <div className="mt-3 p-3 bg-sloth-yellow-lite rounded border-2 border-sloth-brown text-sm">
+                          <strong className="text-sloth-brown-dark">Estimated Count:</strong> 
+                          <span className="text-sloth-brown ml-2">{structureResults['hll-count']}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Count-Min Sketch Using Section */}
+            {activeUsingStructure === 'count-min-sketch' && (
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+                <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-4">
+                  <h3 className="text-2xl font-bold text-white flex items-center gap-2">
+                    <FaChartBar />
+                    📊 Using Count-Min Sketch: {loadedStructures['count-min-sketch']}
+                  </h3>
+                </div>
+                <div className="p-6">
+                  <div className="grid md:grid-cols-2 gap-6">
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Add Element</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Enter element to add"
+                          value={structureValues['cms-add'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'cms-add': e.target.value})}
+                          className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                        />
+                        <button 
+                          onClick={() => handleAddToCountMinSketch(loadedStructures['count-min-sketch'])}
+                          className="px-4 py-2 bg-blue-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                    <div className="bg-white p-4 rounded-lg border-2 border-sloth-brown shadow-[2px_2px_0px_0px_rgba(107,94,74,1)]">
+                      <h4 className="font-bold text-sloth-brown-dark mb-3 text-lg">Query Frequency</h4>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="Enter element to query"
+                          value={structureValues['cms-query'] || ''}
+                          onChange={(e) => setStructureValues({...structureValues, 'cms-query': e.target.value})}
+                          className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                        />
+                        <button 
+                          onClick={() => handleQueryCountMinSketch(loadedStructures['count-min-sketch'])}
+                          className="px-4 py-2 bg-blue-600 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all duration-200">
+                          Query
+                        </button>
+                      </div>
+                      {structureResults['cms-query'] && (
+                        <div className="mt-3 p-3 bg-sloth-yellow-lite rounded border-2 border-sloth-brown text-sm">
+                          <strong className="text-sloth-brown-dark">Frequency:</strong> 
+                          <span className="text-sloth-brown ml-2">{structureResults['cms-query']}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Quick Info Section */}
-        <div className="bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6">
+        <div className="mt-2 bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6">
           <div className="flex items-start gap-4">
             <div className="text-4xl">💡</div>
             <div className="flex-1">
-              <h2 className="text-2xl font-bold text-sloth-brown-dark mb-4">About Probabilistic Structures</h2>
+              <h2 className="text-2xl font-bold text-sloth-brown-dark mb-4 mt-7">About Probabilistic Structures</h2>
               <div className="grid md:grid-cols-2 gap-6 text-sloth-brown">
                 <div>
                   <h3 className="font-bold text-sloth-brown-dark mb-2 text-lg">✨ Advantages</h3>
@@ -369,224 +753,6 @@ const Probabilistic = () => {
             </div>
           </div>
         </div>
-
-        {/* Dog Tips */}
-        <div className="bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6 mt-8">
-          <div className="flex items-start gap-3">
-            <FaDog className="text-3xl text-sloth-brown mt-1 flex-shrink-0" />
-            <div>
-              <h4 className="text-lg font-bold text-sloth-brown-dark mb-2">
-                🐕 Pro Puppy Tips
-              </h4>
-              <p className="text-sloth-brown leading-relaxed">
-                <strong>Woof! From the pack:</strong> Rodney loves how Bloom filters are like his nose - sometimes they give false positives (thinking there's a bone when there isn't), but they never give false negatives! Del Boy prefers HyperLogLog because it lets him be lazy about counting. Remember - approximate is often <em>ruff-ly</em> good enough! 🦴
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Using Loaded Structures */}
-        {Object.keys(loadedStructures).length > 0 && (
-          <div className="mt-8 space-y-6">
-            <h2 className="text-3xl font-bold text-sloth-brown-dark flex items-center gap-3">
-              <FaDice className="text-sloth-brown" />
-              Using Loaded Structures
-            </h2>
-
-            {/* Bloom Filter Using Section */}
-            {loadedStructures['bloom-filter'] && (
-              <div className="bg-gradient-to-r from-pink-500 to-pink-600 border-4 border-sloth-brown-dark rounded-xl p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                  <FaFilter />
-                  🌸 Using Bloom Filter: {loadedStructures['bloom-filter']}
-                </h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Add Element</h4>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Enter element to add"
-                        value={structureValues['bloom-add'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'bloom-add': e.target.value})}
-                        className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
-                      />
-                      <button 
-                        onClick={() => handleAddToBloomFilter(loadedStructures['bloom-filter'])}
-                        className="px-4 py-2 bg-pink-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Check Element</h4>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Enter element to check"
-                        value={structureValues['bloom-check'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'bloom-check': e.target.value})}
-                        className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
-                      />
-                      <button 
-                        onClick={() => handleCheckBloomFilter(loadedStructures['bloom-filter'])}
-                        className="px-4 py-2 bg-pink-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Check
-                      </button>
-                    </div>
-                    {structureResults['bloom-check'] && (
-                      <div className="mt-2 p-2 bg-white rounded border text-sm">
-                        <strong>Result:</strong> {structureResults['bloom-check']}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* SimHash Using Section */}
-            {loadedStructures['simhash'] && (
-              <div className="bg-gradient-to-r from-purple-500 to-purple-600 border-4 border-sloth-brown-dark rounded-xl p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                  <FaSearch />
-                  🔍 Using SimHash: {loadedStructures['simhash']}
-                </h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Add Document</h4>
-                    <div className="space-y-2">
-                      <textarea
-                        placeholder="Enter document content"
-                        value={structureValues['simhash-add'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'simhash-add': e.target.value})}
-                        className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark h-20 resize-none"
-                      />
-                      <button 
-                        onClick={() => handleAddToSimHash(loadedStructures['simhash'])}
-                        className="w-full px-4 py-2 bg-purple-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Add Document
-                      </button>
-                    </div>
-                  </div>
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Compare Similarity</h4>
-                    <div className="space-y-2">
-                      <textarea
-                        placeholder="Enter document to compare"
-                        value={structureValues['simhash-compare'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'simhash-compare': e.target.value})}
-                        className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark h-20 resize-none"
-                      />
-                      <button 
-                        onClick={() => handleCompareSimHash(loadedStructures['simhash'])}
-                        className="w-full px-4 py-2 bg-purple-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Compare
-                      </button>
-                    </div>
-                    {structureResults['simhash-compare'] && (
-                      <div className="mt-2 p-2 bg-white rounded border text-sm">
-                        <strong>Similarity:</strong> {structureResults['simhash-compare']}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* HyperLogLog Using Section */}
-            {loadedStructures['hyperloglog'] && (
-              <div className="bg-gradient-to-r from-orange-500 to-orange-600 border-4 border-sloth-brown-dark rounded-xl p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                  <BsGraphUp />
-                  🔢 Using HyperLogLog: {loadedStructures['hyperloglog']}
-                </h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Add Element</h4>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Enter element to add"
-                        value={structureValues['hll-add'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'hll-add': e.target.value})}
-                        className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
-                      />
-                      <button className="px-4 py-2 bg-orange-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Get Cardinality</h4>
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => handleQueryHyperLogLog(loadedStructures['hyperloglog'])}
-                        className="flex-1 px-4 py-2 bg-orange-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Get Count
-                      </button>
-                    </div>
-                    {structureResults['hll-count'] && (
-                      <div className="mt-2 p-2 bg-white rounded border text-sm">
-                        <strong>Estimated Count:</strong> {structureResults['hll-count']}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Count-Min Sketch Using Section */}
-            {loadedStructures['count-min-sketch'] && (
-              <div className="bg-gradient-to-r from-blue-500 to-blue-600 border-4 border-sloth-brown-dark rounded-xl p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)]">
-                <h3 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                  <FaChartBar />
-                  📊 Using Count-Min Sketch: {loadedStructures['count-min-sketch']}
-                </h3>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Add Element</h4>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Enter element to add"
-                        value={structureValues['cms-add'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'cms-add': e.target.value})}
-                        className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
-                      />
-                      <button 
-                        onClick={() => handleAddToCountMinSketch(loadedStructures['count-min-sketch'])}
-                        className="px-4 py-2 bg-blue-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                  <div className="bg-white/90 p-4 rounded-lg border-2 border-sloth-brown">
-                    <h4 className="font-bold text-sloth-brown-dark mb-2">Query Frequency</h4>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Enter element to query"
-                        value={structureValues['cms-query'] || ''}
-                        onChange={(e) => setStructureValues({...structureValues, 'cms-query': e.target.value})}
-                        className="flex-1 px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
-                      />
-                      <button 
-                        onClick={() => handleQueryCountMinSketch(loadedStructures['count-min-sketch'])}
-                        className="px-4 py-2 bg-blue-500 text-white font-bold border-2 border-sloth-brown-dark rounded shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                        Query
-                      </button>
-                    </div>
-                    {structureResults['cms-query'] && (
-                      <div className="mt-2 p-2 bg-white rounded border text-sm">
-                        <strong>Frequency:</strong> {structureResults['cms-query']}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Create Modal */}
@@ -597,7 +763,58 @@ const Probabilistic = () => {
               <FaPlus />
               Create {probabilisticStructures.find(s => s.id === selectedStructureType)?.name}
             </h3>
-            <p className="text-sloth-brown mb-6">Creation form will be implemented here...</p>
+            {/* Form fields based on structure */}
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Name</label>
+                <input
+                  type="text"
+                  value={createForm.name}
+                  onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
+                  className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                  placeholder="e.g. my-structure"
+                />
+              </div>
+              {selectedStructureType === 'bloom-filter' && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Capacity</label>
+                      <input type="number" min="1" value={createForm.capacity} onChange={(e) => setCreateForm({ ...createForm, capacity: e.target.value })} className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-bold text-sloth-brown-dark mb-1">False Positive Rate</label>
+                      <input type="number" step="0.0001" min="0" max="1" value={createForm.fpr} onChange={(e) => setCreateForm({ ...createForm, fpr: e.target.value })} className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark" />
+                    </div>
+                  </div>
+                </>
+              )}
+              {selectedStructureType === 'hyperloglog' && (
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Precision (4-18)</label>
+                  <input type="number" min="4" max="18" value={createForm.precision} onChange={(e) => setCreateForm({ ...createForm, precision: e.target.value })} className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark" />
+                </div>
+              )}
+              {selectedStructureType === 'count-min-sketch' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Epsilon (0-1)</label>
+                    <input type="number" step="0.0001" min="0" max="1" value={createForm.epsilon} onChange={(e) => setCreateForm({ ...createForm, epsilon: e.target.value })} className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Delta (0-1)</label>
+                    <input type="number" step="0.0001" min="0" max="1" value={createForm.delta} onChange={(e) => setCreateForm({ ...createForm, delta: e.target.value })} className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark" />
+                  </div>
+                </div>
+              )}
+              {selectedStructureType === 'simhash' && (
+                <div>
+                  <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Initial Document</label>
+                  <textarea value={createForm.initialDocument} onChange={(e) => setCreateForm({ ...createForm, initialDocument: e.target.value })} className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark h-24 resize-none" placeholder="Provide a document to create and save a SimHash fingerprint" />
+                </div>
+              )}
+              {modalError && (<div className="text-red-700 text-sm font-semibold">{modalError}</div>)}
+            </div>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowCreateModal(false)}
@@ -605,8 +822,11 @@ const Probabilistic = () => {
               >
                 Cancel
               </button>
-              <button className="flex-1 px-4 py-2 bg-sloth-green text-white font-bold border-4 border-sloth-brown-dark rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200">
-                Create
+              <button
+                onClick={busy ? undefined : handleCreateSubmit}
+                className={`flex-1 px-4 py-2 ${busy ? 'bg-gray-400' : 'bg-sloth-green'} text-sloth-yellow font-bold border-4 border-sloth-brown-dark rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200`}
+              >
+                {busy ? 'Creating…' : 'Create'}
               </button>
             </div>
           </div>
@@ -621,7 +841,19 @@ const Probabilistic = () => {
               <FaFolderOpen />
               Load {probabilisticStructures.find(s => s.id === selectedStructureType)?.name}
             </h3>
-            <p className="text-sloth-brown mb-6">Load form will be implemented here...</p>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-sm font-bold text-sloth-brown-dark mb-1">Name</label>
+                <input
+                  type="text"
+                  value={loadForm.name}
+                  onChange={(e) => setLoadForm({ name: e.target.value })}
+                  className="w-full px-3 py-2 border-2 border-sloth-brown rounded focus:outline-none focus:border-sloth-brown-dark"
+                  placeholder="e.g. my-structure"
+                />
+              </div>
+              {modalError && (<div className="text-red-700 text-sm font-semibold">{modalError}</div>)}
+            </div>
             <div className="flex gap-3">
               <button
                 onClick={() => setShowLoadModal(false)}
@@ -630,9 +862,10 @@ const Probabilistic = () => {
                 Cancel
               </button>
               <button 
-                onClick={() => simulateLoadStructure(selectedStructureType)}
-                className="flex-1 px-4 py-2 bg-sloth-green text-white font-bold border-4 border-sloth-brown-dark rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200">
-                Load
+                onClick={busy ? undefined : handleLoadSubmit}
+                className={`flex-1 px-4 py-2 ${busy ? 'bg-gray-400' : 'bg-sloth-green'} text-sloth-yellow font-bold border-4 border-sloth-brown-dark rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[4px] active:translate-y-[4px] transition-all duration-200`}
+              >
+                {busy ? 'Loading…' : 'Load'}
               </button>
             </div>
           </div>

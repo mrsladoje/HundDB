@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
+	"os"
+	"path/filepath"
 	"sync"
 
 	block_manager "hunddb/lsm/block_manager"
@@ -169,7 +171,14 @@ func Deserialize(data []byte) *HLL {
 
 // SaveToDisk saves the HyperLogLog to disk with the given name
 func (hll *HLL) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("hyperloglog_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("hyperloglog_%s.db", name))
+
+	// Ensure the directory exists
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
 
 	// Serialize the HLL data
 	serializedData := hll.Serialize()
@@ -193,7 +202,8 @@ func (hll *HLL) SaveToDisk(name string) error {
 
 // LoadHyperLogLogFromDisk loads a HyperLogLog from disk with the given name
 func LoadHyperLogLogFromDisk(name string) (*HLL, error) {
-	filename := fmt.Sprintf("hyperloglog_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("hyperloglog_%s.db", name))
 	blockManager := block_manager.GetBlockManager()
 
 	// Read size header (first 8 bytes)

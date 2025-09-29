@@ -3,6 +3,8 @@ package independent_bloom_filter
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	block_manager "hunddb/lsm/block_manager"
@@ -30,7 +32,14 @@ func (ibf *IndependentBloomFilter) SaveToDisk(name string) error {
 	ibf.mu.Lock()
 	defer ibf.mu.Unlock()
 
-	filename := fmt.Sprintf("independent_bloom_filter_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("independent_bloom_filter_%s.db", name))
+
+	// Ensure the directory exists
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
 
 	// Serialize the BloomFilter data
 	serializedData := ibf.BloomFilter.Serialize()
@@ -54,7 +63,8 @@ func (ibf *IndependentBloomFilter) SaveToDisk(name string) error {
 
 // LoadIndependentBloomFilterFromDisk loads an Independent Bloom Filter from disk with the given name
 func LoadIndependentBloomFilterFromDisk(name string) (*IndependentBloomFilter, error) {
-	filename := fmt.Sprintf("independent_bloom_filter_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("independent_bloom_filter_%s.db", name))
 	blockManager := block_manager.GetBlockManager()
 
 	// Read size header (first 8 bytes)
