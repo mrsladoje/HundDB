@@ -167,7 +167,7 @@ func SaveSimHashToDisk(hash [16]byte, name string) error {
 
 // LoadSimHashFromDisk loads a SimHash fingerprint from disk with the given name
 func LoadSimHashFromDisk(name string) ([16]byte, error) {
-	filename := fmt.Sprintf("probabilistic/sim_hash_%s", name)
+	filename := fmt.Sprintf("probabilistic/sim_hash_%s.db", name)
 	blockManager := block_manager.GetBlockManager()
 	var result [16]byte
 	
@@ -198,7 +198,7 @@ func LoadSimHashFromDisk(name string) ([16]byte, error) {
 // name: identifier for the saved file (e.g., "document_123")
 // The file will be saved as "sim_hash_fingerprint_{name}"
 func (f SimHashFingerprint) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("sim_hash_fingerprint_%s", name)
+	filename := fmt.Sprintf("sim_hash_fingerprint_%s.db", name)
 	
 	// Create file data: [size (8B) + hash data (16B)]
 	totalSize := 8 + 16
