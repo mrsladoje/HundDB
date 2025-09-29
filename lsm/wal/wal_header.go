@@ -4,17 +4,17 @@ import "encoding/binary"
 
 const (
 	// Header field sizes
-	HEADER_SIZE_SIZE       = 8
+	PAYLOAD_SIZE_SIZE      = 8
 	HEADER_TYPE_SIZE       = 1
 	HEADER_LOG_NUMBER_SIZE = 8
 
 	// Header field positions
-	HEADER_SIZE_START       = 0
-	HEADER_TYPE_START       = HEADER_SIZE_START + HEADER_SIZE_SIZE
+	PAYLOAD_SIZE_START      = 0
+	HEADER_TYPE_START       = PAYLOAD_SIZE_START + PAYLOAD_SIZE_SIZE
 	HEADER_LOG_NUMBER_START = HEADER_TYPE_START + HEADER_TYPE_SIZE
 
 	// Total header size
-	HEADER_TOTAL_SIZE = HEADER_SIZE_SIZE + HEADER_TYPE_SIZE + HEADER_LOG_NUMBER_SIZE
+	HEADER_TOTAL_SIZE = PAYLOAD_SIZE_SIZE + HEADER_TYPE_SIZE + HEADER_LOG_NUMBER_SIZE
 
 	// Fragment types
 	FRAGMENT_FIRST  = 1 // First fragment of a multi-block user record
@@ -36,17 +36,17 @@ const (
 // WALHeader represents the header for WAL record fragments.
 // Contains metadata including size, fragment type, and log number.
 type WALHeader struct {
-	Size      uint64 // 8 bytes (size of payload)
-	Type      byte   // indicates which part of fragment
-	LogNumber uint64 // indicates which log
+	PayloadSize uint64 // 8 bytes (size of payload)
+	Type        byte   // indicates which part of fragment
+	LogNumber   uint64 // indicates which log
 }
 
 // NewWALHeader creates a new WALHeader with the provided values.
 func NewWALHeader(size uint64, typ byte, logNumber uint64) *WALHeader {
 	return &WALHeader{
-		Size:      size,
-		Type:      typ,
-		LogNumber: logNumber,
+		PayloadSize: size,
+		Type:        typ,
+		LogNumber:   logNumber,
 	}
 }
 
@@ -56,7 +56,7 @@ func NewWALHeader(size uint64, typ byte, logNumber uint64) *WALHeader {
 // - LogNumber: 4 bytes for the log number identifier
 func (h *WALHeader) Serialize() []byte {
 	data := make([]byte, HEADER_TOTAL_SIZE)
-	binary.LittleEndian.PutUint64(data[HEADER_SIZE_START:HEADER_SIZE_START+HEADER_SIZE_SIZE], h.Size)
+	binary.LittleEndian.PutUint64(data[PAYLOAD_SIZE_START:PAYLOAD_SIZE_START+PAYLOAD_SIZE_SIZE], h.PayloadSize)
 	data[HEADER_TYPE_START] = h.Type
 	binary.LittleEndian.PutUint64(data[HEADER_LOG_NUMBER_START:HEADER_LOG_NUMBER_START+HEADER_LOG_NUMBER_SIZE], h.LogNumber)
 	return data
@@ -70,8 +70,8 @@ func DeserializeWALHeader(data []byte) *WALHeader {
 		return nil
 	}
 	return &WALHeader{
-		Size:      binary.LittleEndian.Uint64(data[HEADER_SIZE_START : HEADER_SIZE_START+HEADER_SIZE_SIZE]),
-		Type:      data[HEADER_TYPE_START],
-		LogNumber: binary.LittleEndian.Uint64(data[HEADER_LOG_NUMBER_START : HEADER_LOG_NUMBER_START+HEADER_LOG_NUMBER_SIZE]),
+		PayloadSize: binary.LittleEndian.Uint64(data[PAYLOAD_SIZE_START : PAYLOAD_SIZE_START+PAYLOAD_SIZE_SIZE]),
+		Type:        data[HEADER_TYPE_START],
+		LogNumber:   binary.LittleEndian.Uint64(data[HEADER_LOG_NUMBER_START : HEADER_LOG_NUMBER_START+HEADER_LOG_NUMBER_SIZE]),
 	}
 }

@@ -43,7 +43,7 @@ func BuildWAL() (*WAL, error) {
 		logSize:            LOG_SIZE,
 		logsPath:           dirPath,
 	}
-	err := wal.recoverMetadata()
+	err := wal.reloadMetadata()
 	return wal, err
 }
 
@@ -160,7 +160,7 @@ func (wal *WAL) Close() error {
 	return nil
 }
 
-func (wal *WAL) recoverMetadata() error {
+func (wal *WAL) reloadMetadata() error {
 	metadataPath := fmt.Sprintf("%s/wal_metadata.bin", wal.logsPath)
 	file, err := os.Open(metadataPath)
 	if err == os.ErrNotExist {

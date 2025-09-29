@@ -82,7 +82,7 @@ func countBlocksInLog(logPath string) int {
 		if len(block) >= HEADER_TOTAL_SIZE {
 			// Try to parse the first header
 			header := DeserializeWALHeader(block[0:])
-			if header != nil && header.Size > 0 && header.Size < BLOCK_SIZE {
+			if header != nil && header.PayloadSize > 0 && header.PayloadSize < BLOCK_SIZE {
 				count++
 				continue
 			}
@@ -169,12 +169,12 @@ func processTestBlock(block []byte, fragmentBuffer *[]byte) ([]*record.Record, e
 
 		offset += HEADER_TOTAL_SIZE
 
-		if offset+int(header.Size) > len(block) {
+		if offset+int(header.PayloadSize) > len(block) {
 			break
 		}
 
-		payload := block[offset : offset+int(header.Size)]
-		offset += int(header.Size)
+		payload := block[offset : offset+int(header.PayloadSize)]
+		offset += int(header.PayloadSize)
 
 		switch header.Type {
 		case FRAGMENT_FULL:
