@@ -169,7 +169,7 @@ func Deserialize(data []byte) *HLL {
 
 // SaveToDisk saves the HyperLogLog to disk with the given name
 func (hll *HLL) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("hyperloglog_%s", name)
+	filename := fmt.Sprintf("hyperloglog_%s.db", name)
 	
 	// Serialize the HLL data
 	serializedData := hll.Serialize()
@@ -193,7 +193,7 @@ func (hll *HLL) SaveToDisk(name string) error {
 
 // LoadHyperLogLogFromDisk loads a HyperLogLog from disk with the given name
 func LoadHyperLogLogFromDisk(name string) (*HLL, error) {
-	filename := fmt.Sprintf("hyperloglog_%s", name)
+	filename := fmt.Sprintf("hyperloglog_%s.db", name)
 	blockManager := block_manager.GetBlockManager()
 	
 	// Read size header (first 8 bytes)
