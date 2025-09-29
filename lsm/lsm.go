@@ -166,6 +166,13 @@ func LoadLSM() *LSM {
 		return lsm
 	}
 
+	err = wal.RecoverMemtables(lsm.memtables)
+	if err != nil {
+		// WAL recovery failed - consider it data loss
+		lsm.DataLost = true
+		return lsm
+	}
+
 	// File exists, so any errors from here on are considered data corruption
 
 	// Try to read the levels size

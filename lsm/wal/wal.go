@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	bm "hunddb/lsm/block_manager"
+	memtable "hunddb/lsm/memtable"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
 	crc "hunddb/utils/crc"
@@ -226,66 +227,114 @@ func (wal *WAL) DeleteOldLogs(lowWatermark uint64) error {
 	return nil
 }
 
-// ReconstructMemtable reads and reconstructs all records from the WAL logs.
-// It handles both complete records and fragmented records across multiple blocks.
-// This function is designed to be called during database recovery/restart.
-//
-// TODO: When memtable is implemented, pass memtable reference as parameter:
-// TODO: Figure out log range specification (startLogIndex, endLogIndex), probably will need metadata file for wal
-func (wal *WAL) ReconstructMemtable() error {
-	blockManager := bm.GetBlockManager()
-	fragmentBuffer := make([]byte, 0)
+// WalPosition tracks the current position during WAL recovery.
+type WalPosition struct {
+	LogIndex   uint64 // Current log file being processed
+	BlockIndex uint64 // Current block within the log
+	Offset     uint64 // Current byte offset within the block
+}
 
-	for logIndex := wal.firstLogIndex; logIndex <= wal.lastLogIndex; logIndex++ {
-		for blockIndex := range uint64(LOG_SIZE) {
+// RecoverMemtables replays WAL logs to reconstruct the state of the provided memtables.
+// It processes logs sequentially, handling both complete and fragmented records.
+// Updates the position as it processes records across multiple logs and blocks.
+func (a *WAL) RecoverMemtables(memtables []*memtable.MemTable) error {
+	position := &WalPosition{
+		LogIndex:   a.firstLogIndex,
+		BlockIndex: 0,
+		Offset:     crc.CRC_SIZE,
+	}
+
+	for _, memtable := range memtables {
+		err := a.recoverMemtable(memtable, position)
+		if err != nil {
+			return fmt.Errorf("failed to recover memtable: %w", err)
+		}
+
+		// If the memtable is not full after its recovery, that means we have processed all logs
+		if !memtable.IsFull() {
+			return nil
+		}
+	}
+	return nil
+}
+
+// recoverMemtable reads and reconstructs records from the WAL logs starting from the given position.
+// It handles both complete records and fragmented records across multiple blocks.
+// Updates the position as it processes records.
+func (wal *WAL) recoverMemtable(memtable *memtable.MemTable, position *WalPosition) error {
+	blockManager := bm.GetBlockManager()
+	fragmentBuffer := make([]byte, 0, BLOCK_SIZE)
+
+	for position.LogIndex <= wal.lastLogIndex {
+		endBlockIndex := wal.logSize
+		if position.LogIndex == wal.lastLogIndex {
+			endBlockIndex = wal.blocksInCurrentLog
+		}
+
+		for position.BlockIndex < endBlockIndex {
 			location := block_location.BlockLocation{
-				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, logIndex),
-				BlockIndex: blockIndex,
+				FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, position.LogIndex),
+				BlockIndex: position.BlockIndex,
 			}
 
 			block, err := blockManager.ReadBlock(location)
 			if err != nil {
-				// If we can't read a block, it might not exist or be incomplete
-				continue
+				return fmt.Errorf("failed to read block %s:%d: %w", location.FilePath, location.BlockIndex, err)
 			}
 
-			err = wal.processBlock(block, &fragmentBuffer)
+			err = crc.CheckBlockIntegrity(block)
+			if err != nil {
+				return fmt.Errorf("CRC failed %s:%d: %w", location.FilePath, location.BlockIndex, err)
+			}
+
+			memtableFull, err := wal.processBlockForRecovery(block, &fragmentBuffer, memtable, position)
 			if err != nil {
 				return fmt.Errorf("failed to process block %s:%d: %w", location.FilePath, location.BlockIndex, err)
 			}
+			position.BlockIndex++
+			position.Offset = crc.CRC_SIZE
+
+			if memtableFull {
+				return nil
+			}
 		}
+
+		// Move to next log
+		position.LogIndex++
+		position.BlockIndex = 0
 	}
 
 	return nil
 }
 
-// processBlock processes a single WAL block and reconstructs records from it
-func (wal *WAL) processBlock(block []byte, fragmentBuffer *[]byte) error {
-	offset := 0
+// processBlockForRecovery processes a single WAL block and reconstructs records from it.
+// Updates the position as it processes records within the block.
+// Returns true if the memtable becomes full during processing.
+func (wal *WAL) processBlockForRecovery(block []byte, fragmentBuffer *[]byte, memtable *memtable.MemTable, position *WalPosition) (bool, error) {
+	offset := int(position.Offset)
 
 	for offset < len(block) {
-		// Check if the rest of the block is padding
+		// Check if rest of the block is padding
 		remainingBytes := block[offset:]
 		paddingBytes := make([]byte, len(remainingBytes))
 		if bytes.Equal(remainingBytes, paddingBytes) {
+			*fragmentBuffer = (*fragmentBuffer)[:0]
 			break
 		}
 
 		header := DeserializeWALHeader(block[offset:])
 		offset += HEADER_TOTAL_SIZE
-		payload := block[offset : offset+int(header.Size)]
-		offset += int(header.Size)
-
-		err := crc.CheckBlockIntegrity(block)
-		if err != nil {
-			return fmt.Errorf("CRC check failed for record fragment: %w", err)
-		}
+		payload := block[offset : offset+int(header.PayloadSize)]
+		offset += int(header.PayloadSize)
+		position.Offset = uint64(offset)
 
 		switch header.Type {
 		case FRAGMENT_FULL:
 			record := record.Deserialize(payload)
-			// TODO: Insert into memtable when implemented:
-			_ = record // Suppress unused variable warning, remove when used
+			memtable.Put(record)
+			if memtable.IsFull() {
+				return true, nil
+			}
 
 		case FRAGMENT_FIRST, FRAGMENT_MIDDLE:
 			*fragmentBuffer = append(*fragmentBuffer, payload...)
@@ -293,16 +342,16 @@ func (wal *WAL) processBlock(block []byte, fragmentBuffer *[]byte) error {
 		case FRAGMENT_LAST:
 			*fragmentBuffer = append(*fragmentBuffer, payload...)
 			record := record.Deserialize(*fragmentBuffer)
-			// TODO: Insert into memtable when implemented:
-			_ = record // Suppress unused variable warning, remove when used
-
-			// Clear fragment buffer for next fragmented record
 			*fragmentBuffer = (*fragmentBuffer)[:0]
+			memtable.Put(record)
+			if memtable.IsFull() {
+				return true, nil
+			}
 
 		default:
-			return fmt.Errorf("unknown fragment type: %d", header.Type)
+			return false, fmt.Errorf("unknown fragment type: %d", header.Type)
 		}
 	}
 
-	return nil
+	return false, nil
 }
