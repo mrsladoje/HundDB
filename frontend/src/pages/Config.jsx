@@ -1,34 +1,36 @@
-import React, { useState, useEffect } from "react";
-import { useForm } from "react-hook-form";
-import { yupResolver } from "@hookform/resolvers/yup";
-import * as yup from "yup";
 import { BgDecorations } from "@/components/home/BgDecorations";
 import StyledOperationSelect from "@/components/select/StyledOperationSelect";
-import { GetConfig, SaveConfig, CheckExistingData } from "@wails/main/App.js";
+import { yupResolver } from "@hookform/resolvers/yup";
+import { CheckExistingData, GetConfig, SaveConfig } from "@wails/main/App.js";
+import React, { useEffect, useState } from "react";
+import { useForm } from "react-hook-form";
 import {
-  FaRegSave,
+  BsExclamationTriangleFill,
+  BsGear,
+  BsShieldCheck,
+} from "react-icons/bs";
+import {
+  FaCheckCircle,
   FaCog,
   FaDatabase,
-  FaMemory,
-  FaExclamationTriangle,
-  FaCheckCircle,
   FaDog,
+  FaExclamationTriangle,
   FaLock,
+  FaMemory,
+  FaRegSave,
   FaShieldAlt,
 } from "react-icons/fa";
 import {
-  MdStorage,
   MdCompress,
-  MdSpeed,
-  MdTune,
   MdLockOutline,
+  MdSpeed,
+  MdStorage,
+  MdTune,
 } from "react-icons/md";
-import {
-  BsGear,
-  BsShieldCheck,
-  BsExclamationTriangleFill,
-} from "react-icons/bs";
 import { Tooltip } from "react-tooltip";
+import { toast, ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+import * as yup from "yup";
 
 const HyperRokica = "../../pics/rokica_hyper.png";
 const SleepyCousin = "../../pics/rokica_sleepy.png";
@@ -37,7 +39,7 @@ const SleepyCousin = "../../pics/rokica_sleepy.png";
 const configTips = [
   "Woof! Remember - higher cache values mean happier <em>retriever</em> performance!",
   "Bark bark! LSM levels are like dog houses - more levels, more <em>paw-sible</em> storage!",
-  "Good human! Compaction is like burying bones - <em>size-based</em> or <em>time-based</em>, both work!",
+  "Good human! Compaction is like burying bones - <em>size-tiered</em> or <em>leveled</em>, both work!",
   "RUFF! Block sizes should be <em>just right</em> - not too big, not too small, like a perfect chew toy!",
   "Woof woof! WAL is like marking territory - it protects your data from getting <em>lost</em>!",
 ];
@@ -69,43 +71,34 @@ const configSchema = yup.object().shape({
       .required("Max memtables is required"),
     compaction_type: yup
       .string()
-      .oneOf(["size", "time"], "Invalid compaction type")
-      .required("Compaction type is required")
+      .oneOf(["size", "level"], "Invalid compaction type")
+      .required("Compaction type is required"),
   }),
   cache: yup.object().shape({
     read_path_capacity: yup
       .number()
       .min(1, "Minimum capacity is 1")
+      .max(10000, "Maximum capacity is 10000")
       .required("Read path capacity is required"),
-    block_capacity: yup
-      .number()
-      .min(1, "Minimum capacity is 1")
-      .required("Block capacity is required"),
   }),
   wal: yup.object().shape({
-    block_size: yup
-      .number()
-      .min(1024, "Minimum block size is 1024 bytes")
-      .required("WAL block size is required"),
     log_size: yup
       .number()
       .min(1, "Minimum log size is 1")
-      .required("Log size is required")
+      .max(100, "Maximum log size is 100")
+      .required("Log size is required"),
   }),
   sstable: yup.object().shape({
     compression_enabled: yup
       .boolean()
       .required("Compression setting is required"),
-    block_size: yup
-      .number()
-      .min(1024, "Minimum block size is 1024 bytes")
-      .required("SSTable block size is required"),
     use_separate_files: yup
       .boolean()
       .required("File separation setting is required"),
     sparse_step_index: yup
       .number()
       .min(1, "Minimum step index is 1")
+      .max(1000, "Maximum step index is 1000")
       .required("Sparse step index is required"),
   }),
   memtable: yup.object().shape({
@@ -121,14 +114,13 @@ const configSchema = yup.object().shape({
   bloom_filter: yup.object().shape({
     false_positive_rate: yup
       .number()
-      .min(0.001, "Minimum false positive rate is 0.001")
-      .max(0.5, "Maximum false positive rate is 0.5")
+      .oneOf([0.01, 0.05, 0.1, 0.2], "Invalid false positive rate")
       .required("False positive rate is required"),
   }),
   block_manager: yup.object().shape({
     block_size: yup
       .number()
-      .min(1024, "Minimum block size is 1024 bytes")
+      .oneOf([1024, 2048, 4096, 8192], "Invalid block size")
       .required("Block manager block size is required"),
     cache_size: yup
       .number()
@@ -160,8 +152,8 @@ const configSchema = yup.object().shape({
 
 // Select options
 const compactionTypeOptions = [
-  { value: "size", label: "Size-based Compaction" },
-  { value: "time", label: "Time-based Compaction" },
+  { value: "size", label: "Size-tiered Compaction" },
+  { value: "level", label: "Leveled Compaction" },
 ];
 
 const memtableTypeOptions = [
@@ -175,11 +167,23 @@ const booleanOptions = [
   { value: false, label: "Disabled" },
 ];
 
+const blockSizeOptions = [
+  { value: 1024, label: "1 KB (1024 bytes)" },
+  { value: 2048, label: "2 KB (2048 bytes)" },
+  { value: 4096, label: "4 KB (4096 bytes)" },
+  { value: 8192, label: "8 KB (8192 bytes)" },
+];
+
+const falsePositiveRateOptions = [
+  { value: 0.01, label: "1% (0.01) - High precision" },
+  { value: 0.05, label: "5% (0.05) - Balanced" },
+  { value: 0.1, label: "10% (0.1) - Fast lookups" },
+  { value: 0.2, label: "20% (0.2) - Memory efficient" },
+];
+
 export const Config = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
-  const [error, setError] = useState(null);
   const [isConfigLocked, setIsConfigLocked] = useState(false);
   const [lockReason, setLockReason] = useState("");
   const [dogTip, setDogTip] = useState("");
@@ -238,7 +242,14 @@ export const Config = () => {
           });
         });
       } catch (err) {
-        setError("Failed to load configuration: " + err.message);
+        toast.error("🚫 Failed to load configuration: " + err.message, {
+          position: "top-right",
+          autoClose: 5000,
+          hideProgressBar: false,
+          closeOnClick: true,
+          pauseOnHover: true,
+          draggable: true,
+        });
       } finally {
         setLoading(false);
       }
@@ -249,13 +260,19 @@ export const Config = () => {
 
   const onSubmit = async (data) => {
     if (isConfigLocked) {
-      setError("Configuration is locked due to existing database files!");
+      toast.error("🔒 Configuration is locked due to existing database files!", {
+        position: "top-right",
+        autoClose: 5000,
+        hideProgressBar: false,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+      });
       return;
     }
 
     try {
       setSaving(true);
-      setError(null);
 
       const currentConfigData = await GetConfig();
       const currentConfig = JSON.parse(currentConfigData);
@@ -272,10 +289,24 @@ export const Config = () => {
       const configJSON = JSON.stringify(finalConfig, null, 2);
       await SaveConfig(configJSON);
 
-      setSaveSuccess(true);
-      setTimeout(() => setSaveSuccess(false), 5000);
+      toast.success("🐕 Woof! Configuration saved successfully!", {
+        position: "top-right",
+        autoClose: 4000,
+        hideProgressBar: false,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+        progress: undefined,
+      });
     } catch (err) {
-      setError("Failed to save configuration: " + err.message);
+      toast.error("🚫 Failed to save configuration: " + err.message, {
+        position: "top-right",
+        autoClose: 5000,
+        hideProgressBar: false,
+        closeOnClick: true,
+        pauseOnHover: true,
+        draggable: true,
+      });
     } finally {
       setSaving(false);
     }
@@ -416,27 +447,6 @@ export const Config = () => {
           </div>
         )}
 
-        {/* Alerts */}
-        {error && (
-          <div className="bg-red-100 border-4 border-red-600 rounded-lg p-4 mb-6">
-            <div className="flex items-center gap-3">
-              <FaExclamationTriangle className="text-2xl text-red-700" />
-              <p className="text-red-700 font-semibold">{error}</p>
-            </div>
-          </div>
-        )}
-
-        {saveSuccess && (
-          <div className="bg-green-100 border-4 border-green-600 rounded-lg p-4 mb-6">
-            <div className="flex items-center gap-3">
-              <FaCheckCircle className="text-2xl text-green-700" />
-              <p className="text-green-700 font-semibold">
-                Configuration saved successfully!
-              </p>
-            </div>
-          </div>
-        )}
-
         {/* Configuration Sections */}
         <div className={`space-y-6 ${isConfigLocked ? "opacity-60" : ""}`}>
           {/* LSM Configuration */}
@@ -500,28 +510,16 @@ export const Config = () => {
             description="Memory cache settings"
             isLocked={isConfigLocked}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <ConfigInput
-                label="Read Path Capacity"
-                name="cache.read_path_capacity"
-                type="number"
-                register={register}
-                error={errors.cache?.read_path_capacity}
-                description="Cache capacity for read operations"
-                min={1}
-                disabled={isConfigLocked}
-              />
-              <ConfigInput
-                label="Block Capacity"
-                name="cache.block_capacity"
-                type="number"
-                register={register}
-                error={errors.cache?.block_capacity}
-                description="Cache capacity for blocks"
-                min={1}
-                disabled={isConfigLocked}
-              />
-            </div>
+            <ConfigInput
+              label="Read Path Capacity"
+              name="cache.read_path_capacity"
+              type="number"
+              register={register}
+              error={errors.cache?.read_path_capacity}
+              description="Cache capacity for read operations"
+              min={1}
+              disabled={isConfigLocked}
+            />
           </ConfigSection>
 
           {/* WAL Configuration */}
@@ -531,29 +529,16 @@ export const Config = () => {
             description="Write-ahead logging configuration"
             isLocked={isConfigLocked}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <ConfigInput
-                label="Block Size (bytes)"
-                name="wal.block_size"
-                type="number"
-                register={register}
-                error={errors.wal?.block_size}
-                description="WAL block size (min: 1024)"
-                min={1024}
-                disabled={isConfigLocked}
-              />
-              <ConfigInput
-                label="Log Size"
-                name="wal.log_size"
-                type="number"
-                register={register}
-                error={errors.wal?.log_size}
-                description="Maximum WAL log size"
-                min={1}
-                disabled={isConfigLocked}
-              />
-              {/** WAL path is managed by the app; hidden from user but preserved on save */}
-            </div>
+            <ConfigInput
+              label="Log Size"
+              name="wal.log_size"
+              type="number"
+              register={register}
+              error={errors.wal?.log_size}
+              description="Maximum WAL log size (in blocks)"
+              min={1}
+              disabled={isConfigLocked}
+            />
           </ConfigSection>
 
           {/* SSTable Configuration */}
@@ -571,16 +556,6 @@ export const Config = () => {
                 setValue={setValue}
                 watch={watch}
                 error={errors.sstable?.compression_enabled}
-                disabled={isConfigLocked}
-              />
-              <ConfigInput
-                label="Block Size (bytes)"
-                name="sstable.block_size"
-                type="number"
-                register={register}
-                error={errors.sstable?.block_size}
-                description="SSTable block size (min: 1024)"
-                min={1024}
                 disabled={isConfigLocked}
               />
               <ConfigSelect
@@ -601,6 +576,7 @@ export const Config = () => {
                 description="Sparse index step size"
                 min={1}
                 disabled={isConfigLocked}
+                className="md:col-span-2"
               />
             </div>
           </ConfigSection>
@@ -642,16 +618,14 @@ export const Config = () => {
             description="Bloom filter settings"
             isLocked={isConfigLocked}
           >
-            <ConfigInput
+            <ConfigSelect
               label="False Positive Rate"
               name="bloom_filter.false_positive_rate"
-              type="number"
-              step="0.001"
-              register={register}
+              options={falsePositiveRateOptions}
+              setValue={setValue}
+              watch={watch}
               error={errors.bloom_filter?.false_positive_rate}
-              description="False positive rate (0.001-0.5)"
-              min={0.001}
-              max={0.5}
+              description="Choose the balance between precision and performance"
               disabled={isConfigLocked}
             />
           </ConfigSection>
@@ -664,14 +638,14 @@ export const Config = () => {
             isLocked={isConfigLocked}
           >
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <ConfigInput
-                label="Block Size (bytes)"
+              <ConfigSelect
+                label="Block Size"
                 name="block_manager.block_size"
-                type="number"
-                register={register}
+                options={blockSizeOptions}
+                setValue={setValue}
+                watch={watch}
                 error={errors.block_manager?.block_size}
-                description="Block size (min: 1024)"
-                min={1024}
+                description="Standard block sizes for optimal performance"
                 disabled={isConfigLocked}
               />
               <ConfigInput
@@ -798,8 +772,8 @@ export const Config = () => {
                   </strong>
                 ) : (
                   <>
-                    <strong>Woof! From the pack:</strong> LSM levels are like dog
-                    houses - more levels mean more storage but slower reads.
+                    <strong>Woof! From the pack:</strong> LSM levels are like
+                    dog houses - more levels mean more storage but slower reads.
                     Cache settings are like treat storage - bigger cache means
                     faster <em>retrieval</em>!
                   </>
@@ -861,6 +835,21 @@ export const Config = () => {
           </div>
         </div>
       </Tooltip>
+
+      {/* Toast Container */}
+      <ToastContainer
+        position="top-right"
+        autoClose={4000}
+        hideProgressBar={false}
+        newestOnTop={false}
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss
+        draggable
+        pauseOnHover
+        toastClassName="font-medium"
+        bodyClassName="text-sloth-brown-dark"
+      />
     </div>
   );
 };
