@@ -30,7 +30,7 @@ func (ibf *IndependentBloomFilter) SaveToDisk(name string) error {
 	ibf.mu.Lock()
 	defer ibf.mu.Unlock()
 	
-	filename := fmt.Sprintf("independent_bloom_filter_%s", name)
+	filename := fmt.Sprintf("independent_bloom_filter_%s.db", name)
 	
 	// Serialize the BloomFilter data
 	serializedData := ibf.BloomFilter.Serialize()
@@ -54,7 +54,7 @@ func (ibf *IndependentBloomFilter) SaveToDisk(name string) error {
 
 // LoadIndependentBloomFilterFromDisk loads an Independent Bloom Filter from disk with the given name
 func LoadIndependentBloomFilterFromDisk(name string) (*IndependentBloomFilter, error) {
-	filename := fmt.Sprintf("independent_bloom_filter_%s", name)
+	filename := fmt.Sprintf("independent_bloom_filter_%s.db", name)
 	blockManager := block_manager.GetBlockManager()
 	
 	// Read size header (first 8 bytes)
