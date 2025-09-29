@@ -8,6 +8,7 @@ import (
 	mi "hunddb/lsm/memtable/memtable_interface"
 	"hunddb/lsm/memtable/skip_list"
 	model "hunddb/model/record"
+	"hunddb/utils/config"
 	"sync"
 )
 
@@ -19,29 +20,46 @@ const (
 	HashMap  MemtableType = "hashmap"
 )
 
-// TODO: Get these from config
-const (
-	CAPACITY      = 1000
-	MEMTABLE_TYPE = BTree
+// Configuration variables loaded from config file
+var (
+	CAPACITY      uint64       
+	MEMTABLE_TYPE MemtableType 
 )
+
+// init loads Memtable configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	CAPACITY = cfg.Memtable.Capacity
+	// Convert string to MemtableType
+	switch cfg.Memtable.MemtableType {
+	case "btree":
+		MEMTABLE_TYPE = BTree
+	case "skiplist":
+		MEMTABLE_TYPE = SkipList
+	case "hashmap":
+		MEMTABLE_TYPE = HashMap
+	default:
+		MEMTABLE_TYPE = BTree 
+	}
+}
 
 // MemTable is a concrete struct that wraps the implementation
 type MemTable struct {
 	impl mi.MemtableInterface
 	mu   sync.RWMutex
+	
 }
 
 // NewMemtable returns a concrete *MemTable, not an interface
 func NewMemtable() (*MemTable, error) {
 	var impl mi.MemtableInterface
-
 	switch MEMTABLE_TYPE {
 	case BTree:
-		impl = btree.NewBTree(btree.DefaultOrder, CAPACITY)
+		impl = btree.NewBTree(btree.DefaultOrder, int(CAPACITY))
 	case SkipList:
-		impl = skip_list.New(16, CAPACITY)
+		impl = skip_list.New(16, int(CAPACITY))
 	case HashMap:
-		impl = hashmap.NewHashMap(CAPACITY)
+		impl = hashmap.NewHashMap(int(CAPACITY))
 	default:
 		return nil, fmt.Errorf("unknown memtable type: %s", MEMTABLE_TYPE)
 	}
@@ -87,16 +105,34 @@ func (mt *MemTable) ScanForPrefix(
 	mt.impl.ScanForPrefix(prefix, tombstonedKeys, bestKeys, pageSize, pageNumber)
 }
 
-func (mt *MemTable) Size() int {
+func (mt *MemTable) GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
-	return mt.impl.Size()
+	return mt.impl.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys)
+}
+
+func (mt *MemTable) ScanForRange(
+	rangeStart string,
+	rangeEnd string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int) {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	mt.impl.ScanForRange(rangeStart, rangeEnd, tombstonedKeys, bestKeys, pageSize, pageNumber)
 }
 
 func (mt *MemTable) Capacity() int {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.impl.Capacity()
+}
+
+func (mt *MemTable) Size() int {
+	mt.mu.RLock()
+	defer mt.mu.RUnlock()
+	return mt.impl.Size()
 }
 
 func (mt *MemTable) TotalEntries() int {

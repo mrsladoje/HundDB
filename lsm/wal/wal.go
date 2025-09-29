@@ -10,17 +10,27 @@ import (
 	record "hunddb/model/record"
 	byte_util "hunddb/utils/byte_util"
 	crc "hunddb/utils/crc"
+	"hunddb/utils/config"
 	"math"
 	"os"
 	"regexp"
 	"strconv"
 )
 
-// TODO: These const values should be imported from user config
-const (
-	BLOCK_SIZE = 4096
-	LOG_SIZE   = 16
+
+// Configuration variables loaded from config file - no hardcoded defaults
+var (
+	BLOCK_SIZE uint16
+	LOG_SIZE   uint16
 )
+
+// init loads WAL configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	// Always use config - no fallbacks here
+	BLOCK_SIZE = uint16(cfg.BlockManager.BlockSize)
+	LOG_SIZE = uint16(cfg.WAL.LogSize)
+}
 
 // WAL represents a Write-Ahead Log implementation for database persistence.
 // It manages record writing, fragmentation across blocks, and crash recovery.

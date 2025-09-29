@@ -1,4 +1,3 @@
-import Record from "@/components/home/Record";
 import React, { useRef, useState } from "react";
 import {
   FaAngleDoubleLeft,
@@ -10,12 +9,24 @@ import {
 } from "react-icons/fa";
 import Select from "react-select";
 import NoResultsFoundCard from "@/components/table/NoResultsFoundCard";
+import Record from "@/components/home/Record";
+import { Get } from "@wails/main/App.js";
 
-const PrefixScanTable = ({
+/**
+ * Generic green-themed scan table for paginated keys with optional record preview.
+ * Props:
+ * - operation: { keys: string[], currentPage: number, pageSize: number, paginationError?: boolean }
+ * - onPageChange(page: number, pageSize: number)
+ * - onViewRecord?(key: string): Promise<RecordObject|null> (falls back to Get)
+ * - isLoading?: boolean
+ * - emptySearchQuery?: string (text for NoResultsFoundCard)
+ */
+const ScanTable = ({
   operation,
   onPageChange,
   onViewRecord,
   isLoading = false,
+  emptySearchQuery = "",
 }) => {
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [loadingRecord, setLoadingRecord] = useState(null);
@@ -27,7 +38,6 @@ const PrefixScanTable = ({
   const pageSize = operation?.pageSize || 10;
   const isPaginationError = !!operation?.paginationError;
 
-  // Green theme colors
   const themeColors = {
     primary: "bg-green-500",
     secondary: "bg-green-100",
@@ -50,7 +60,12 @@ const PrefixScanTable = ({
   const handleViewRecord = async (key) => {
     setLoadingRecord(key);
     try {
-      const record = await onViewRecord(key);
+      let record = null;
+      if (onViewRecord) {
+        record = await onViewRecord(key);
+      } else {
+        record = await Get(key);
+      }
       if (record) {
         setSelectedRecord(record);
       }
@@ -131,7 +146,7 @@ const PrefixScanTable = ({
   if (!keys || keys.length === 0) {
     return (
       <NoResultsFoundCard
-        searchQuery={operation?.prefix || ""}
+        searchQuery={emptySearchQuery || ""}
         containerRef={scrollContainerRef}
         isPaginationError={isPaginationError}
         onResetPagination={() => onPageChange(1, pageSize)}
@@ -183,7 +198,7 @@ const PrefixScanTable = ({
                 className={`border-b ${themeColors.hover} cursor-pointer transition-all duration-150 bg-white`}
               >
                 <td className="px-1 sm:px-2 py-[0.325rem] sm:py-[0.375rem] border-r text-center text-xs font-medium border-gray-200 text-gray-500 w-10">
-                  {index + 1}
+                  {(currentPage - 1) * pageSize + index + 1}
                 </td>
                 <td className="px-2 sm:px-3 py-[0.325rem] sm:py-[0.375rem] text-gray-600 border-r border-gray-200">
                   <div className="font-mono text-sm truncate max-w-[20rem]">
@@ -242,9 +257,7 @@ const PrefixScanTable = ({
         <div className="flex flex-col items-center md:items-start">
           <span className={`text-sm font-medium ${themeColors.text}`}>
             Page <span className="font-bold">{currentPage}</span>
-            <span className="ml-2 text-gray-500/80">
-              ({keys.length} records)
-            </span>
+            <span className="ml-2 text-gray-500/80">({keys.length} records)</span>
           </span>
         </div>
 
@@ -304,13 +317,11 @@ const PrefixScanTable = ({
                 className={`w-18 sm:w-24 p-2 text-sm text-gray-900 border-0 focus:ring-0 focus:outline-none ${themeColors.secondary} transition-all duration-200`}
                 value={gotoPage}
                 onChange={(e) => {
-                  // Allow only digits
                   const raw = e.target.value;
                   const digitsOnly = raw.replace(/\D+/g, "");
                   setGotoPage(digitsOnly);
                 }}
                 onKeyDown={(e) => {
-                  // Block non-numeric input (except control keys)
                   const allowedKeys = [
                     "Backspace",
                     "Delete",
@@ -321,12 +332,7 @@ const PrefixScanTable = ({
                     "Tab",
                     "Enter",
                   ];
-                  if (
-                    allowedKeys.includes(e.key) ||
-                    // Allow Ctrl/Cmd + A/C/V/X
-                    e.ctrlKey ||
-                    e.metaKey
-                  ) {
+                  if (allowedKeys.includes(e.key) || e.ctrlKey || e.metaKey) {
                     if (e.key === "Enter") {
                       const page = parseInt(gotoPage, 10);
                       if (!isNaN(page) && page >= 1) {
@@ -335,7 +341,6 @@ const PrefixScanTable = ({
                     }
                     return;
                   }
-                  // Allow digits only
                   if (!/^[0-9]$/.test(e.key)) {
                     e.preventDefault();
                   }
@@ -346,9 +351,7 @@ const PrefixScanTable = ({
 
           <div className="w-full sm:w-48">
             <Select
-              value={pageSizeOptions.find(
-                (option) => option.value === pageSize
-              )}
+              value={pageSizeOptions.find((option) => option.value === pageSize)}
               onChange={(option) => onPageChange(currentPage, option.value)}
               options={pageSizeOptions}
               className="react-select-container max-w-[12rem] mx-auto"
@@ -358,9 +361,9 @@ const PrefixScanTable = ({
                 ...theme,
                 colors: {
                   ...theme.colors,
-                  primary: "#22c55e", // green-500 for active states
-                  primary25: "#bbf7d0", // green-200 on hover
-                  primary50: "#86efac", // green-300 on stronger focus/active
+                  primary: "#22c55e",
+                  primary25: "#bbf7d0",
+                  primary50: "#86efac",
                 },
               })}
               isSearchable={false}
@@ -373,4 +376,4 @@ const PrefixScanTable = ({
   );
 };
 
-export default PrefixScanTable;
+export default ScanTable;

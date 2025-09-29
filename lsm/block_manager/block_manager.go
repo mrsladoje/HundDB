@@ -4,6 +4,7 @@ import (
 	"errors"
 	lru_cache "hunddb/lsm/lru_cache"
 	block_location "hunddb/model/block_location"
+	"hunddb/utils/config"
 	crc_util "hunddb/utils/crc"
 	"io"
 	"os"
@@ -15,11 +16,18 @@ var (
 	once     sync.Once
 )
 
-// TODO: Load these from config
-const (
-	BLOCK_SIZE = 4096 // 4KB blocks
-	CRC_SIZE   = 4    // 4 bytes for CRC32
+// Configuration variables loaded from config file
+var (
+	BLOCK_SIZE uint64
+	CRC_SIZE   uint64 
 )
+
+// init loads BlockManager configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	BLOCK_SIZE = cfg.BlockManager.BlockSize
+	CRC_SIZE = cfg.CRC.Size
+}
 
 // BlockManager manages disk I/O operations at block level
 // Implements singleton pattern
@@ -32,12 +40,11 @@ type BlockManager struct {
 // GetBlockManager returns the singleton instance
 func GetBlockManager() *BlockManager {
 	once.Do(func() {
-		// TODO: load from config the block size and cache size,
-		// since config will be singleton no function params are needed
-		// For now dummy values are present
+		// Use config values loaded in init()
+		cfg := config.GetConfig()
 		instance = &BlockManager{
-			blockSize:  1024 * uint16(4),
-			blockCache: lru_cache.NewLRUCache[block_location.BlockLocation, []byte](100),
+			blockSize:  uint16(cfg.BlockManager.BlockSize),
+			blockCache: lru_cache.NewLRUCache[block_location.BlockLocation, []byte](uint32(cfg.BlockManager.CacheSize)),
 		}
 	})
 	return instance
@@ -185,8 +192,8 @@ func (blockManager *BlockManager) ReadFromDisk(filePath string, startOffset uint
 	blockOffset := startOffset % uint64(blockManager.blockSize)
 
 	// If the offset is within the CRC area, move to after the CRC
-	if blockOffset < CRC_SIZE {
-		blockOffset = CRC_SIZE
+	if blockOffset < uint64(CRC_SIZE) {
+		blockOffset = uint64(CRC_SIZE)
 	}
 
 	finalBytes := make([]byte, 0, size) // Pre-allocate capacity
@@ -224,7 +231,7 @@ func (blockManager *BlockManager) ReadFromDisk(filePath string, startOffset uint
 		currentBlockIndex++
 
 		// For subsequent blocks, we start reading after the CRC
-		blockOffset = CRC_SIZE
+		blockOffset = uint64(CRC_SIZE)
 	}
 
 	// Calculate the final offset (where reading ended)

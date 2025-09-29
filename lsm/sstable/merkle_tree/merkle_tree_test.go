@@ -23,16 +23,15 @@ func TestNewMerkleTree(t *testing.T) {
 	for _, test := range tests {
 		tree, err := NewMerkleTree(test.blocks, false)
 		if err != nil {
-			if err != ErrEmptyTree {
-				t.Error(err.Error())
-			} else {
-				continue
-			}
+			t.Error(err.Error())
 		}
 
 		if len(test.blocks) == 0 {
-			if tree != nil {
-				t.Fatal("Expected nil MerkleTree for empty blocks")
+			if tree == nil {
+				t.Fatal("Expected non-nil MerkleTree for empty blocks")
+			}
+			if tree.merkleRoot == nil || tree.merkleRoot.hashedValue != md5.Sum([]byte{}) {
+				t.Fatal("Expected MerkleTree.merkleRoot.hashedValue to be md5.Sum([]byte{}) for empty blocks")
 			}
 			continue
 		}
@@ -66,8 +65,11 @@ func TestHeight(t *testing.T) {
 		}
 
 		if len(test.blocks) == 0 {
-			if tree != nil {
-				t.Fatal("Expected nil MerkleTree for empty blocks")
+			if tree == nil {
+				t.Fatal("Expected non-nil MerkleTree for empty blocks")
+			}
+			if tree.merkleRoot != nil {
+				t.Fatal("Expected MerkleTree.merkleRoot to be nil for empty blocks")
 			}
 			continue
 		}
@@ -101,8 +103,11 @@ func TestMaxNumOfNodes(t *testing.T) {
 		}
 
 		if len(test.blocks) == 0 {
-			if tree != nil {
-				t.Fatal("Expected nil MerkleTree for empty blocks")
+			if tree == nil {
+				t.Fatal("Expected non-nil MerkleTree for empty blocks")
+			}
+			if tree.merkleRoot != nil {
+				t.Fatal("Expected MerkleTree.merkleRoot to be nil for empty blocks")
 			}
 			continue
 		}

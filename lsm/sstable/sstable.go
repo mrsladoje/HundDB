@@ -11,6 +11,7 @@ import (
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
 	byte_util "hunddb/utils/byte_util"
+	"hunddb/utils/config"
 	crc_util "hunddb/utils/crc"
 	string_util "hunddb/utils/string_util"
 	"io"
@@ -29,13 +30,24 @@ TODO:
 Guide: https://claude.ai/share/864c522e-b5fe-4e34-8ec9-04c7d6a4e9ee
 */
 
-// TODO: Load from config
+// Configuration variables loaded from config file
 var (
-	COMPRESSION_ENABLED = true
-	BLOCK_SIZE          = 1024 * uint64(4) // 4KB
-	USE_SEPARATE_FILES  = true
-	SPARSE_STEP_INDEX   = 10 // Every 10th index goes into the summary
+	COMPRESSION_ENABLED bool // Default values as fallback
+	BLOCK_SIZE          uint64
+	USE_SEPARATE_FILES  bool
+	SPARSE_STEP_INDEX   uint64 // Every 10th index goes into the summary
 )
+
+// init loads SSTable configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	if cfg != nil {
+		COMPRESSION_ENABLED = cfg.SSTable.CompressionEnabled
+		BLOCK_SIZE = uint64(cfg.BlockManager.BlockSize)
+		USE_SEPARATE_FILES = cfg.SSTable.UseSeparateFiles
+		SPARSE_STEP_INDEX = cfg.SSTable.SparseStepIndex
+	}
+}
 
 const (
 	FILE_NAME_FORMAT          = "sstable_%d.db"
@@ -139,7 +151,7 @@ type SSTableConfig struct {
 		Each sparseStepIndex-th index for the Index component goes into the Summary component.
 		Chosen by user.
 	*/
-	SparseStepIndex int
+	SparseStepIndex uint64
 }
 
 // DataComp handles the actual key-value data storage.
@@ -308,6 +320,140 @@ type MetadataComp struct {
 	MerkleTree *merkle_tree.MerkleTree
 }
 
+// SSTableIterator represents an iterator over an SSTable's data component
+type SSTableIterator struct {
+	index              int
+	filePath           string
+	startOffset        uint64
+	currentOffset      uint64
+	recordIndex        uint64
+	maxRecordIndex     uint64
+	compressionEnabled bool
+	hasNextRecord      bool
+	currentRecord      *record.Record
+}
+
+// CompactionState tracks the state during compaction (memory-efficient)
+type CompactionState struct {
+	iterators         []*SSTableIterator
+	totalNewRecords   uint64
+	newDataOffset     uint64
+	recordHashes      [][]byte     // Only store hashes for Merkle tree
+	indexEntries      []IndexEntry // Track index entries as we go
+	dataFilePath      string
+	currentDataOffset uint64
+	// totalLogical tracks total logical bytes written (record size flags + record payloads) since data start
+	totalLogical uint64
+	// dataPhysicalBase is the physical offset (file position) where the first record would start (after CRC and size prefix if any)
+	dataPhysicalBase uint64
+	// wroteSizePrefix indicates whether we've already emitted the size prefix (separate-files mode only)
+	wroteSizePrefix bool
+}
+
+// initializeIterator creates and initializes an SSTable iterator
+func initializeIterator(tableIndex int, config *SSTableConfig, sizes []uint64, offsets []uint64) (*SSTableIterator, error) {
+	var dataPath string
+	var dataOffset uint64
+
+	if config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, tableIndex)
+		dataOffset = CRC_SIZE + STANDARD_FLAG_SIZE
+	} else {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, tableIndex)
+		dataOffset = offsets[0] + CRC_SIZE
+	}
+
+	// Get max record index using checkIndexBounds
+	var indexPath string
+	var indexFileOffset uint64
+	if config.UseSeparateFiles {
+		indexPath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, tableIndex)
+		indexFileOffset = CRC_SIZE + STANDARD_FLAG_SIZE
+	} else {
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, tableIndex)
+		indexFileOffset = offsets[1] + CRC_SIZE
+	}
+
+	// Use a very high sentinel key to avoid early-out and still compute last index entry
+	// We only need indexOfLastIndexEntry from the return values here.
+	highKey := string([]byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF})
+	_, _, _, _, maxRecordIndex, err := checkIndexBounds(indexPath, indexFileOffset, highKey, config.SparseStepIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check index bounds for table %d: %v", tableIndex, err)
+	}
+
+	iterator := &SSTableIterator{
+		index:              tableIndex,
+		filePath:           dataPath,
+		startOffset:        dataOffset,
+		currentOffset:      dataOffset,
+		recordIndex:        0,
+		maxRecordIndex:     maxRecordIndex,
+		compressionEnabled: config.CompressionEnabled,
+		hasNextRecord:      true,
+	}
+
+	// Load first record
+	err = iterator.loadNextRecord()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load first record for table %d: %v", tableIndex, err)
+	}
+
+	return iterator, nil
+}
+
+// loadNextRecord loads the next record from the iterator's SSTable
+func (iter *SSTableIterator) loadNextRecord() error {
+	if iter.recordIndex > iter.maxRecordIndex {
+		iter.hasNextRecord = false
+		iter.currentRecord = nil
+		return nil
+	}
+
+	blockManager := block_manager.GetBlockManager()
+
+	// Read record size
+	recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(iter.filePath, iter.currentOffset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		iter.hasNextRecord = false
+		iter.currentRecord = nil
+		return nil
+	}
+	recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+	iter.currentOffset = newOffset
+
+	// Read record data
+	recordData, newOffset, err := blockManager.ReadFromDisk(iter.filePath, iter.currentOffset, recordSize)
+	if err != nil {
+		iter.hasNextRecord = false
+		iter.currentRecord = nil
+		return nil
+	}
+	iter.currentOffset = newOffset
+
+	// Deserialize record
+	rec := record.DeserializeForSSTable(recordData, iter.compressionEnabled)
+	iter.currentRecord = rec
+	iter.recordIndex++
+
+	return nil
+}
+
+// advance moves the iterator to the next record
+func (iter *SSTableIterator) advance() error {
+	return iter.loadNextRecord()
+}
+
+// hasNext checks if the iterator has more records
+func (iter *SSTableIterator) hasNext() bool {
+	return iter.hasNextRecord && iter.currentRecord != nil
+}
+
+// getCurrentRecord returns the current record
+func (iter *SSTableIterator) getCurrentRecord() *record.Record {
+	return iter.currentRecord
+}
+
 /*
 PersistMemtable is used to save the memtable to disk.
 
@@ -323,7 +469,7 @@ func PersistMemtable(sortedRecords []record.Record, index int) error {
 	SSTableConfig := &SSTableConfig{
 		UseSeparateFiles:   USE_SEPARATE_FILES,
 		CompressionEnabled: COMPRESSION_ENABLED,
-		SparseStepIndex:    SPARSE_STEP_INDEX,
+		SparseStepIndex:    uint64(SPARSE_STEP_INDEX),
 	}
 
 	serializedConfig, configSize, err := SSTableConfig.serialize()
@@ -636,7 +782,7 @@ func generateSummaryEntries(indexEntries []IndexEntry) []IndexEntry {
 	summaryEntries := make([]IndexEntry, 0, len(indexEntries))
 
 	for i, entry := range indexEntries {
-		if i%SPARSE_STEP_INDEX == 0 {
+		if i%int(SPARSE_STEP_INDEX) == 0 {
 			summaryEntries = append(summaryEntries, entry)
 		}
 	}
@@ -915,6 +1061,45 @@ func Get(key string, index int) (record *record.Record, err error) {
 	}
 }
 
+// GetSSBoundaries returns the first (smallest) and last (largest) keys stored in the SSTable for the provided index.
+// It loads the SSTable config, locates the index component and reads the first and last entries directly.
+func GetSSBoundaries(index int) (string, string, error) {
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1. Prepare Index component path and offset
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		indexFileOffset = offsets[1] + CRC_SIZE
+	}
+
+	// 2. Read first entry key (skip the 8B last-entry-offset header)
+	firstKey, _, err := readIndexMetadataEntry(indexPath, indexFileOffset+STANDARD_FLAG_SIZE)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read first index entry: %v", err)
+	}
+
+	// 3. Read last entry offset header, then the last entry key
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(indexPath, indexFileOffset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read last entry offset: %v", err)
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+
+	lastKey, _, err := readIndexMetadataEntry(indexPath, lastEntryOffset)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read last index entry: %v", err)
+	}
+
+	return firstKey, lastKey, nil
+}
+
 /*
 GetNextForPrefix retrieves the next record for a given prefix from the SSTable
 */
@@ -1003,8 +1188,125 @@ func GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string, index
 	var startingDataOffset uint64 = offset
 
 	// 4. Sequential iteration from the starting position
-	return iterateSequentiallyForPrefix(dataPath, startingDataOffset, prefix, tombstonedKeys, config.CompressionEnabled)
+	within := func(k string) bool { return strings.HasPrefix(k, prefix) }
+	stop := func(k string) bool { return !strings.HasPrefix(k, prefix) }
+	return iterateSequentially(dataPath, startingDataOffset, tombstonedKeys, config.CompressionEnabled, within, stop)
 
+}
+
+/*
+Checks basic bounds for a range and computes last summary and index entry indexes for searching.
+Returns inBounds=false if [rangeStart, rangeEnd] doesn't overlap with [firstKey, lastKey] of the table.
+*/
+func checkIndexBoundsForRange(filepath string, offset uint64, rangeStart string, rangeEnd string, sparseStep uint64) (bool, uint64, uint64, error) {
+	// Read first entry key
+	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, 0, 0, err
+	}
+
+	// Read last entry info
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(filepath, offset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+	lastEntryKey, _, err := readIndexMetadataEntry(filepath, lastEntryOffset)
+	if err != nil {
+		return false, 0, 0, err
+	}
+
+	// Quick overlap check: [rangeStart, rangeEnd] vs [firstEntryKey, lastEntryKey]
+	if rangeEnd < firstEntryKey || rangeStart > lastEntryKey {
+		return false, 0, 0, nil
+	}
+
+	// Compute last entry indexes similarly to other helpers
+	physicalOffsetFirst := offset + STANDARD_FLAG_SIZE
+	crcsFirst := (physicalOffsetFirst / BLOCK_SIZE) + 1
+	logicalOffsetFirst := physicalOffsetFirst - crcsFirst*CRC_SIZE
+	physicalOffsetLast := lastEntryOffset
+	crcsLast := (physicalOffsetLast / BLOCK_SIZE) + 1
+	logicalOffsetLast := physicalOffsetLast - crcsLast*CRC_SIZE
+
+	indexOfLastIndexEntry := (logicalOffsetLast - logicalOffsetFirst) / INDEX_ENTRY_METADATA_SIZE
+	indexOfLastSummaryEntry := indexOfLastIndexEntry / uint64(sparseStep)
+
+	return true, indexOfLastSummaryEntry, indexOfLastIndexEntry, nil
+}
+
+/*
+GetNextForRange retrieves the next record whose key is within [rangeStart, rangeEnd] (inclusive).
+No Bloom filter checks are performed (range cannot be easily represented in filter).
+It returns the next record strictly greater than the provided key.
+*/
+func GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string, index int) (*record.Record, error) {
+
+	// Quick invalid range check
+	if rangeStart > rangeEnd {
+		return nil, nil
+	}
+
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return nil, fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1.5. Data, Index and Summary preparation (no Bloom filter for range)
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check for range overlap
+	inBounds, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForRange(indexPath, indexFileOffset, rangeStart, rangeEnd, config.SparseStepIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check index bounds for range: %v", err)
+	}
+	if !inBounds {
+		return nil, nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position: first key strictly greater than max(key, rangeStart)
+	startingKey := key
+	if startingKey < rangeStart {
+		startingKey = rangeStart
+	}
+
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, startingKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	// If there is no key strictly greater than startingKey, there's no next record in range
+	if !found {
+		return nil, nil
+	}
+
+	// Exact lower-bound offset to begin reading data
+	startingDataOffset := offset
+
+	// 4. Sequential iteration within range [rangeStart, rangeEnd] and strictly greater than 'key'
+	within := func(k string) bool { return k > key && k >= rangeStart && k <= rangeEnd }
+	stop := func(k string) bool { return k > rangeEnd }
+	return iterateSequentially(dataPath, startingDataOffset, tombstonedKeys, config.CompressionEnabled, within, stop)
 }
 
 /*
@@ -1030,7 +1332,7 @@ func deserializeSSTableConfig(index int) (*SSTableConfig, []uint64, []uint64, er
 
 	useSeparateFiles := byte_util.ByteToBool(blockData[CRC_SIZE])
 	compressionEnabled := byte_util.ByteToBool(blockData[CRC_SIZE+1])
-	sparseStepIndex := int(binary.LittleEndian.Uint64(blockData[CRC_SIZE+2 : CRC_SIZE+10]))
+	sparseStepIndex := uint64(binary.LittleEndian.Uint64(blockData[CRC_SIZE+2 : CRC_SIZE+10]))
 
 	config := &SSTableConfig{
 		UseSeparateFiles:   useSeparateFiles,
@@ -1088,7 +1390,7 @@ If the key happens to be one of the bounds, we return the offset in Data compone
 
 If the key is not in the bounds, there is no point in searching further.
 */
-func checkIndexBounds(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
+func checkIndexBounds(filepath string, offset uint64, key string, sparseStep uint64) (bool, bool, uint64, uint64, uint64, error) {
 
 	firstEntryKey, firstEntryDataOffset, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
 
@@ -1140,7 +1442,7 @@ If the key happens to be one of the bounds, we return the offset in Data compone
 
 If the key is not in the bounds, there is no point in searching further.
 */
-func checkIndexBoundsForPrefix(filepath string, offset uint64, key string, sparseStep int) (bool, bool, uint64, uint64, uint64, error) {
+func checkIndexBoundsForPrefix(filepath string, offset uint64, key string, sparseStep uint64) (bool, bool, uint64, uint64, uint64, error) {
 
 	firstEntryKey, _, err := readIndexMetadataEntry(filepath, offset+STANDARD_FLAG_SIZE)
 
@@ -1209,7 +1511,7 @@ Binary search the summary index for the given key.
 When we reach recursion base case, we do binary search of the index component.
 */
 func binarySearchSummary(filepath string, key string, offsetFirst uint64, indexFirst uint64, indexLast uint64,
-	sparseIndex int, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
+	sparseIndex uint64, indexFileOffset uint64, useSeperateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
 	if indexFirst > indexLast {
 		return 0, false, nil // Key not found, terminate gracefully
@@ -1309,7 +1611,7 @@ lowerBoundSearchSummaryForPrefix performs a lower-bound search in the summary co
 If found, it then performs a more precise lower-bound search in the index component to find the exact offset.
 */
 func lowerBoundSearchSummary(summaryPath string, offsetFirst uint64, indexFirst uint64,
-	indexLast uint64, startingKey string, sparseIndex int, indexFileOffset uint64,
+	indexLast uint64, startingKey string, sparseIndex uint64, indexFileOffset uint64,
 	useSeparateFiles bool, index int, originalIndexLast uint64) (uint64, bool, error) {
 
 	low := indexFirst
@@ -1408,9 +1710,18 @@ func lowerBoundSearchIndexes(filepath string, startingKey string, offsetFirst ui
 }
 
 /*
-Helper function for sequential iteration.
+Generic helper for sequential iteration with custom inclusion and stop conditions.
+within returns true if the record is within the desired window (e.g., has prefix or in range).
+stop returns true if we should stop scanning (e.g., key no longer has prefix or key > rangeEnd).
 */
-func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix string, tombstonedKeys *[]string, compressionEnabled bool) (*record.Record, error) {
+func iterateSequentially(
+	dataPath string,
+	startOffset uint64,
+	tombstonedKeys *[]string,
+	compressionEnabled bool,
+	within func(string) bool,
+	stop func(string) bool,
+) (*record.Record, error) {
 	blockManager := block_manager.GetBlockManager()
 	currentOffset := startOffset
 
@@ -1431,6 +1742,11 @@ func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix st
 		currentOffset = newOffset
 
 		// Read record data
+		// Guard against pathological sizes which would cause panics deeper in deserialization
+		// If recordSize is excessively large, bail out gracefully.
+		if recordSize > 64*1024*1024 { // 64MB safety cap, data files here are small
+			return nil, nil
+		}
 		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
 		if err != nil {
 			if err == io.EOF {
@@ -1443,41 +1759,47 @@ func iterateSequentiallyForPrefix(dataPath string, startOffset uint64, prefix st
 		// Deserialize record
 		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
 
-		// Check if record still has the prefix (if not, we're done)
-		if !strings.HasPrefix(rec.Key, prefix) {
+		// If we are outside of the scan window, stop.
+		if stop != nil && stop(rec.Key) {
 			return nil, nil
 		}
 
-		// Handle tombstones
+		// If not in our window yet, continue scanning
+		if within != nil && !within(rec.Key) {
+			continue
+		}
+
+		// Handle tombstones only for records within the window
 		if rec.IsDeleted() {
-
-			isTomstonedAlready := false
-			for _, tombstonedKey := range *tombstonedKeys {
-				if tombstonedKey == rec.Key {
-					isTomstonedAlready = true
-					break
+			if tombstonedKeys != nil {
+				isTomstonedAlready := false
+				for _, tombstonedKey := range *tombstonedKeys {
+					if tombstonedKey == rec.Key {
+						isTomstonedAlready = true
+						break
+					}
 				}
+				if isTomstonedAlready {
+					continue
+				}
+				// Add to tombstoned list and continue
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
 			}
-			if isTomstonedAlready {
-				continue
-			}
-
-			// Add to tombstoned list and continue
-			*tombstonedKeys = append(*tombstonedKeys, rec.Key)
 			continue
 		}
 
 		// Check if already tombstoned by higher levels
-		isTombstoned := false
-		for _, tombstonedKey := range *tombstonedKeys {
-			if tombstonedKey == rec.Key {
-				isTombstoned = true
-				break
+		if tombstonedKeys != nil {
+			isTombstoned := false
+			for _, tombstonedKey := range *tombstonedKeys {
+				if tombstonedKey == rec.Key {
+					isTombstoned = true
+					break
+				}
 			}
-		}
-
-		if isTombstoned {
-			continue // Skip tombstoned record
+			if isTombstoned {
+				continue // Skip tombstoned record
+			}
 		}
 
 		// Found a valid record!
@@ -1707,6 +2029,207 @@ func scanSequentiallyForPrefixRange(dataPath string, startOffset uint64, prefix 
 	return nil
 }
 
+/*
+ScanForRange scans records within the given range [rangeStart, rangeEnd] (inclusive) and adds keys to bestKeys.
+Only keys are added for memory efficiency - use Get() to retrieve full records.
+No Bloom filter checks are performed as ranges cannot be easily represented in filters.
+Parameters:
+- rangeStart: the starting key of the range (inclusive)
+- rangeEnd: the ending key of the range (inclusive)
+- tombstonedKeys: keys that have been tombstoned in more recent structures
+- bestKeys: best keys found so far from previous memtables (will be modified)
+- pageSize: maximum number of results per page (typically <= 50)
+- pageNumber: which page to return (0-based)
+- index: SSTable index to scan
+*/
+func ScanForRange(rangeStart string, rangeEnd string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, index int) error {
+	// Quick invalid range check
+	if rangeStart > rangeEnd {
+		return nil
+	}
+
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// Skip Bloom filter check - ranges cannot be easily represented in filters
+
+	// 1. Data, Index and Summary preparation
+	summaryPath := fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index)
+	summaryOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		summaryPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		summaryOffset = offsets[2] + CRC_SIZE
+	}
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		indexFileOffset = offsets[1] + CRC_SIZE
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+	dataPath := fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
+	if !config.UseSeparateFiles {
+		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+	}
+
+	// 2. Index Bounds Check for range overlap
+	inBounds, lastSummaryEntryIndex, lastIndexEntryIndex, err := checkIndexBoundsForRange(indexPath, indexFileOffset, rangeStart, rangeEnd, config.SparseStepIndex)
+	if err != nil {
+		return fmt.Errorf("failed to check index bounds for range: %v", err)
+	}
+	if !inBounds {
+		return nil
+	}
+	if !config.UseSeparateFiles {
+		indexFileOffset += STANDARD_FLAG_SIZE
+	}
+
+	// 3. Find starting position using lexicographically smaller string than rangeStart
+	searchKey := string_util.FindLexicographicallySmaller(rangeStart)
+
+	// Use existing binary search to find the starting position
+	offset, found, err := lowerBoundSearchSummary(summaryPath, summaryOffset+STANDARD_FLAG_SIZE, 0, lastSummaryEntryIndex, searchKey, config.SparseStepIndex, indexFileOffset, config.UseSeparateFiles, index, lastIndexEntryIndex)
+	if err != nil {
+		return fmt.Errorf("failed to perform binary search on summary: %v", err)
+	}
+
+	var startingDataOffset uint64
+	if found {
+		startingDataOffset = offset
+	} else {
+		// If not found, start from the beginning of data
+		startingDataOffset = uint64(CRC_SIZE)
+		if config.UseSeparateFiles {
+			startingDataOffset += STANDARD_FLAG_SIZE
+		} else {
+			startingDataOffset = offsets[0] + CRC_SIZE
+		}
+	}
+
+	// 4. Sequential scan from the starting position
+	return scanSequentiallyForRange(dataPath, startingDataOffset, rangeStart, rangeEnd, tombstonedKeys, bestKeys, pageSize, pageNumber, config.CompressionEnabled)
+}
+
+/*
+scanSequentiallyForRange scans records sequentially starting from the given offset,
+looking for records within the specified range [rangeStart, rangeEnd] (inclusive).
+It handles tombstones and maintains bestKeys with pagination.
+*/
+func scanSequentiallyForRange(dataPath string, startOffset uint64, rangeStart string, rangeEnd string, tombstonedKeys *[]string, bestKeys *[]string, pageSize int, pageNumber int, compressionEnabled bool) error {
+	blockManager := block_manager.GetBlockManager()
+	currentOffset := startOffset
+
+	// Create sets for efficient lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	var candidateKeys []string
+	foundRangeStart := false
+
+	// Read records sequentially
+	for {
+		// Read record size
+		recordSizeBytes, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, STANDARD_FLAG_SIZE)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		recordSize := binary.LittleEndian.Uint64(recordSizeBytes)
+		if recordSize == 0 {
+			break // Invalid record size indicates end
+		}
+		currentOffset = newOffset
+
+		// Read record data
+		recordData, newOffset, err := blockManager.ReadFromDisk(dataPath, currentOffset, recordSize)
+		if err != nil {
+			if err == io.EOF {
+				break // No more records
+			}
+			return err
+		}
+		currentOffset = newOffset
+
+		// Deserialize record
+		rec := record.DeserializeForSSTable(recordData, compressionEnabled)
+
+		// Check if we've reached the range
+		if rec.Key >= rangeStart && rec.Key <= rangeEnd {
+			foundRangeStart = true
+		} else if foundRangeStart && rec.Key > rangeEnd {
+			// We've moved past the range, stop scanning
+			break
+		} else if rec.Key < rangeStart {
+			// We haven't reached the range yet, continue scanning
+			continue
+		}
+
+		// If we're not in the range, skip
+		if rec.Key < rangeStart || rec.Key > rangeEnd {
+			continue
+		}
+
+		// Skip if already tombstoned by higher levels
+		if tombstonedSet[rec.Key] {
+			continue
+		}
+
+		// Skip if already found in newer memtables
+		if bestKeysSet[rec.Key] {
+			continue
+		}
+
+		// Handle tombstones
+		if rec.IsDeleted() {
+			if tombstonedKeys != nil {
+				*tombstonedKeys = append(*tombstonedKeys, rec.Key)
+				tombstonedSet[rec.Key] = true
+			}
+			continue
+		}
+
+		// Add to candidate keys
+		candidateKeys = append(candidateKeys, rec.Key)
+		bestKeysSet[rec.Key] = true
+	}
+
+	// Handle pagination
+	startIndex := pageNumber * pageSize
+	endIndex := startIndex + pageSize
+
+	if startIndex >= len(candidateKeys) {
+		return nil // No keys for this page
+	}
+
+	if endIndex > len(candidateKeys) {
+		endIndex = len(candidateKeys)
+	}
+
+	// Add paginated keys to bestKeys in sorted order
+	if bestKeys != nil {
+		for i := startIndex; i < endIndex; i++ {
+			*bestKeys = insertKeySortedIfNotExists(*bestKeys, candidateKeys[i])
+		}
+	}
+
+	return nil
+}
+
 // insertKeySortedIfNotExists inserts a key in sorted order into the slice if it doesn't already exist
 func insertKeySortedIfNotExists(keys []string, newKey string) []string {
 	// Check if key already exists
@@ -1783,18 +2306,20 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 	if config.UseSeparateFiles {
 		dataPath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, index)
 		dataCompSizeBytes, dataStartOffset, err := blockManager.ReadFromDisk(dataPath, 0, uint64(STANDARD_FLAG_SIZE))
-		corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
-			FilePath:   dataPath,
-			BlockIndex: 0,
-		})
 		if err != nil {
+			corruptDataBlocks = append(corruptDataBlocks, block_location.BlockLocation{
+				FilePath:   dataPath,
+				BlockIndex: 0,
+			})
 			return false, corruptDataBlocks, true, fmt.Errorf("failed to read data file size: %v", err)
 		}
 		dataOffset = dataStartOffset
 		dataCompSize := binary.LittleEndian.Uint64(dataCompSizeBytes)
-		dataEndOffset = crc_util.SizeAfterAddingCRCs(crc_util.SizeWithoutCRCs(dataOffset) + dataCompSize)
-	}
-	if !config.UseSeparateFiles {
+
+		totalLogicalSize := STANDARD_FLAG_SIZE + dataCompSize
+		dataEndOffset = crc_util.SizeAfterAddingCRCs(totalLogicalSize)
+
+	} else {
 		dataPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
 		dataOffset = offsets[0] + CRC_SIZE
 		dataCompSize := sizes[0]
@@ -1838,6 +2363,11 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 		recordHashes = append(recordHashes, recordHash[:])
 		hashToOffset[recordHash] = offsetBeforeRecord
 		i++
+	}
+
+	if len(recordHashes) == 0 {
+		emptyLeaf := md5.Sum([]byte{})
+		recordHashes = append(recordHashes, emptyLeaf[:])
 	}
 
 	merkleTree, err := merkle_tree.NewMerkleTree(recordHashes, true)
@@ -1887,4 +2417,537 @@ func CheckIntegrity(index int) (bool, []block_location.BlockLocation, bool, erro
 	}
 
 	return true, []block_location.BlockLocation{}, false, nil
+}
+
+/*
+Compact performs SSTable compaction by merging multiple SSTables into a single new SSTable.
+The input SSTables are specified by their indexes, sorted by age (newest first).
+The compacted SSTable will be stored at the specified newIndex.
+*/
+func Compact(sstableIndexes []int, newIndex int) error {
+	if len(sstableIndexes) == 0 {
+		return fmt.Errorf("no SSTables provided for compaction")
+	}
+
+	blockManager := block_manager.GetBlockManager()
+
+	// 1. Load configs and initialize iterators
+	iterators := make([]*SSTableIterator, 0, len(sstableIndexes))
+
+	for _, tableIndex := range sstableIndexes {
+		config, sizes, offsets, err := deserializeSSTableConfig(tableIndex)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize config for table %d: %v", tableIndex, err)
+		}
+
+		iterator, err := initializeIterator(tableIndex, config, sizes, offsets)
+		if err != nil {
+			return fmt.Errorf("failed to initialize iterator for table %d: %v", tableIndex, err)
+		}
+		iterators = append(iterators, iterator)
+	}
+
+	// 2. Create new SSTable config using global variables
+	newConfig := &SSTableConfig{
+		UseSeparateFiles:   USE_SEPARATE_FILES,
+		CompressionEnabled: COMPRESSION_ENABLED,
+		SparseStepIndex:    uint64(SPARSE_STEP_INDEX),
+	}
+
+	// 3. Persist new config
+	serializedConfig, configSize, err := newConfig.serialize()
+	if err != nil {
+		return fmt.Errorf("failed to serialize new config: %v", err)
+	}
+	err = blockManager.WriteToDisk(serializedConfig, fmt.Sprintf(FILE_NAME_FORMAT, newIndex), 0)
+	if err != nil {
+		return fmt.Errorf("failed to write new config: %v", err)
+	}
+
+	// 4. Setup data component paths
+	dataStartOffset := configSize
+	dataFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+	if USE_SEPARATE_FILES {
+		dataStartOffset = 0
+		dataFilePath = fmt.Sprintf(DATA_FILE_NAME_FORMAT, newIndex)
+	}
+
+	// 5. Initialize compaction state (memory-efficient)
+	state := &CompactionState{
+		iterators:         iterators,
+		totalNewRecords:   0,
+		newDataOffset:     dataStartOffset,
+		recordHashes:      make([][]byte, 0),
+		indexEntries:      make([]IndexEntry, 0),
+		dataFilePath:      dataFilePath,
+		currentDataOffset: dataStartOffset,
+		totalLogical:      0,
+		wroteSizePrefix:   false,
+	}
+
+	if USE_SEPARATE_FILES {
+		state.currentDataOffset += STANDARD_FLAG_SIZE
+	}
+	state.currentDataOffset += CRC_SIZE
+	// Capture base physical offset for first record start (after CRC and size prefix if any)
+	state.dataPhysicalBase = state.currentDataOffset
+
+	// 6. Perform streaming compaction
+	err = performStreamingDataCompaction(state)
+	if err != nil {
+		return fmt.Errorf("failed to compact data: %v", err)
+	}
+
+	// 7. Create other components
+	err = createCompactedComponentsFromState(state, newIndex, newConfig, dataStartOffset)
+	if err != nil {
+		return fmt.Errorf("failed to create compacted components: %v", err)
+	}
+
+	// 8. Clean up old SSTable files after successful compaction
+	err = cleanupOldSSTables(sstableIndexes)
+	if err != nil {
+		return fmt.Errorf("compaction succeeded but failed to clean up old files: %v", err)
+	}
+
+	return nil
+}
+
+// performStreamingDataCompaction performs merge-sort compaction with streaming writes
+func performStreamingDataCompaction(state *CompactionState) error {
+	blockManager := block_manager.GetBlockManager()
+
+	// Track data to accumulate before writing to disk in blocks
+	accumulatedData := []byte{}
+	tombstonedKeys := make(map[string]bool)
+
+	for {
+		// Find the iterator with the smallest current key
+		minIterator := findMinIterator(state.iterators)
+		if minIterator == nil {
+			break // All iterators exhausted
+		}
+
+		currentRecord := minIterator.getCurrentRecord()
+		currentKey := currentRecord.Key
+
+		// Check if this key is tombstoned
+		if currentRecord.IsDeleted() {
+			tombstonedKeys[currentKey] = true
+			// Skip this record and all future occurrences of this key
+			skipKeyInAllIterators(state.iterators, currentKey)
+			continue
+		}
+
+		// Check if this key was already tombstoned by a newer SSTable
+		if tombstonedKeys[currentKey] {
+			// Skip this record and all future occurrences of this key
+			skipKeyInAllIterators(state.iterators, currentKey)
+			continue
+		}
+
+		// This is a valid record - serialize and stream it
+		serializedRecord := currentRecord.SerializeForSSTable(COMPRESSION_ENABLED)
+
+		// Store hash for Merkle tree (only 32 bytes per record)
+		recordHash := md5.Sum(serializedRecord)
+		state.recordHashes = append(state.recordHashes, recordHash[:])
+
+		// Create index entry using total logical bytes so far (since data start)
+		noOfBlocks := uint64(state.totalLogical / (BLOCK_SIZE - CRC_SIZE))
+		actualOffset := state.dataPhysicalBase + state.totalLogical + noOfBlocks*CRC_SIZE
+
+		state.indexEntries = append(state.indexEntries, IndexEntry{
+			Key:    currentRecord.Key,
+			Offset: actualOffset,
+		})
+
+		// Prepare record for writing
+		recordSize := make([]byte, STANDARD_FLAG_SIZE)
+		binary.LittleEndian.PutUint64(recordSize, uint64(len(serializedRecord)))
+
+		recordData := append(recordSize, serializedRecord...)
+		accumulatedData = append(accumulatedData, recordData...)
+
+		recordTotalSize := uint64(len(recordData))
+		state.currentDataOffset += recordTotalSize // logical cursor (base + totalLogical)
+		state.totalLogical += recordTotalSize      // total logical bytes since data start
+		state.totalNewRecords++
+
+		// Advance the iterator we consumed from
+		_ = minIterator.advance()
+		// Skip this key in all other iterators
+		skipKeyInAllIterators(state.iterators, currentKey)
+
+		// If accumulated data is approaching a block boundary, flush to disk periodically
+		if len(accumulatedData) > 0 && (uint64(len(accumulatedData))%(BLOCK_SIZE-CRC_SIZE) < STANDARD_FLAG_SIZE) {
+			toWrite := accumulatedData
+			// Only the very first chunk in separate-file mode should start with the size prefix placeholder
+			if USE_SEPARATE_FILES && !state.wroteSizePrefix {
+				// Prepend placeholder (actual size will be patched later)
+				placeholder := make([]byte, STANDARD_FLAG_SIZE)
+				toWrite = append(placeholder, toWrite...)
+				state.wroteSizePrefix = true
+			}
+			finalBytes := crc_util.AddCRCsToData(toWrite)
+			byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+			crc_util.FixLastBlockCRC(finalBytes)
+			if err := blockManager.WriteToDisk(finalBytes, state.dataFilePath, state.newDataOffset); err != nil {
+				return fmt.Errorf("failed to write data chunk to disk: %v", err)
+			}
+			state.newDataOffset += uint64(len(finalBytes))
+			accumulatedData = accumulatedData[:0]
+			// currentDataOffset already tracked physical pointer; keep as-is
+		}
+	}
+
+	// Write accumulated data to disk
+	if len(accumulatedData) > 0 {
+		if USE_SEPARATE_FILES && !state.wroteSizePrefix {
+			// Prepend placeholder on the first (and only) write
+			placeholder := make([]byte, STANDARD_FLAG_SIZE)
+			accumulatedData = append(placeholder, accumulatedData...)
+			state.wroteSizePrefix = true
+		}
+
+		finalBytes := crc_util.AddCRCsToData(accumulatedData)
+		byte_util.AddPadding(&finalBytes, BLOCK_SIZE)
+		crc_util.FixLastBlockCRC(finalBytes)
+
+		err := blockManager.WriteToDisk(finalBytes, state.dataFilePath, state.newDataOffset)
+		if err != nil {
+			return fmt.Errorf("failed to write data to disk: %v", err)
+		}
+		state.newDataOffset += uint64(len(finalBytes))
+	}
+
+	// If separate files, patch the size prefix with the actual logical size and fix CRC of first block
+	if USE_SEPARATE_FILES && state.wroteSizePrefix {
+		// Read the first block
+		blk, err := blockManager.ReadBlock(block_location.BlockLocation{FilePath: state.dataFilePath, BlockIndex: 0})
+		if err != nil {
+			return fmt.Errorf("failed to read first data block for patching: %v", err)
+		}
+		if uint64(len(blk)) != BLOCK_SIZE {
+			return fmt.Errorf("invalid block size while patching data size prefix")
+		}
+
+		payload := blk[CRC_SIZE:]
+		binary.LittleEndian.PutUint64(payload[0:STANDARD_FLAG_SIZE], state.totalLogical)
+
+		crc_util.AddCRCToBlockData(blk)
+
+		// Write the fully corrected block back to disk.
+		if err := blockManager.WriteToDisk(blk, state.dataFilePath, 0); err != nil {
+			return fmt.Errorf("failed to patch size prefix in data file: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// findMinIterator finds the iterator with the smallest current key
+func findMinIterator(iterators []*SSTableIterator) *SSTableIterator {
+	var minIterator *SSTableIterator
+	var minKey string
+
+	for _, iter := range iterators {
+		if iter.hasNext() {
+			currentKey := iter.getCurrentRecord().Key
+			if minIterator == nil || currentKey < minKey {
+				minKey = currentKey
+				minIterator = iter
+			}
+		}
+	}
+
+	return minIterator
+}
+
+// skipKeyInAllIterators advances all iterators past the given key
+func skipKeyInAllIterators(iterators []*SSTableIterator, key string) {
+	for _, iter := range iterators {
+		for iter.hasNext() && iter.getCurrentRecord().Key == key {
+			iter.advance()
+		}
+	}
+}
+
+// createCompactedComponentsFromState creates all remaining components using the compaction state
+func createCompactedComponentsFromState(state *CompactionState, newIndex int, config *SSTableConfig, dataStartOffset uint64) error {
+	blockManager := block_manager.GetBlockManager()
+
+	// Handle the edge case where no records survived compaction (all were tombstoned)
+	if len(state.indexEntries) == 0 || state.totalNewRecords == 0 {
+		// Data component: write empty payload (size prefix only in separate files)
+		if USE_SEPARATE_FILES {
+			empty := make([]byte, 0)
+			prependSizePrefix(&empty)
+			final := crc_util.AddCRCsToData(empty)
+			byte_util.AddPadding(&final, BLOCK_SIZE)
+			crc_util.FixLastBlockCRC(final)
+			if err := blockManager.WriteToDisk(final, fmt.Sprintf(DATA_FILE_NAME_FORMAT, newIndex), 0); err != nil {
+				return err
+			}
+		}
+
+		// Calculate component start offsets similar to non-empty
+		indexStartOffset := dataStartOffset
+		if !USE_SEPARATE_FILES {
+			// No data written; start right after dataStartOffset
+			indexStartOffset = state.newDataOffset
+		}
+		indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		if USE_SEPARATE_FILES {
+			indexStartOffset = 0
+			indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, newIndex)
+		}
+		emptyIndex := &IndexComp{FilePath: indexFilePath, StartOffset: indexStartOffset, IndexEntries: []IndexEntry{}}
+		idxBytes, idxSize, err := emptyIndex.serialize(indexStartOffset)
+		if err != nil {
+			return err
+		}
+		if err := blockManager.WriteToDisk(idxBytes, indexFilePath, indexStartOffset); err != nil {
+			return err
+		}
+
+		summaryStartOffset := indexStartOffset + uint64(len(idxBytes))
+		summaryFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		if USE_SEPARATE_FILES {
+			summaryStartOffset = 0
+			summaryFilePath = fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, newIndex)
+		}
+		emptySummary := &SummaryComp{FilePath: summaryFilePath, StartOffset: summaryStartOffset, MinKey: "", MaxKey: "", IndexEntries: []IndexEntry{}}
+		sumBytes, sumSize, err := emptySummary.serialize(summaryStartOffset)
+		if err != nil {
+			return err
+		}
+		if err := blockManager.WriteToDisk(sumBytes, summaryFilePath, summaryStartOffset); err != nil {
+			return err
+		}
+
+		filterStartOffset := summaryStartOffset + uint64(len(sumBytes))
+		filterFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		if USE_SEPARATE_FILES {
+			filterFilePath = fmt.Sprintf(FILTER_FILE_NAME_FORMAT, newIndex)
+			filterStartOffset = 0
+		}
+		bf := bloom_filter.NewBloomFilter(1, BLOOM_FILTER_FALSE_POSITIVE_RATE)
+		filterComp := &FilterComp{FilePath: filterFilePath, StartOffset: filterStartOffset, BloomFilter: bf}
+		filterBytes, filterSize, err := filterComp.serialize()
+		if err != nil {
+			return err
+		}
+		if err := blockManager.WriteToDisk(filterBytes, filterFilePath, filterStartOffset); err != nil {
+			return err
+		}
+
+		metaDataStartOffset := filterStartOffset + uint64(len(filterBytes))
+		metaDataFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+		if USE_SEPARATE_FILES {
+			metaDataStartOffset = 0
+			metaDataFilePath = fmt.Sprintf(METADATA_FILE_NAME_FORMAT, newIndex)
+		}
+		emptyLeaf := md5.Sum([]byte{})
+		mt, err := merkle_tree.NewMerkleTree([][]byte{emptyLeaf[:]}, true)
+		if err != nil {
+			return err
+		}
+		metaComp := &MetadataComp{FilePath: metaDataFilePath, StartOffset: metaDataStartOffset, MerkleTree: mt}
+		metaBytes, metaSize, err := metaComp.serialize()
+		if err != nil {
+			return err
+		}
+		if err := blockManager.WriteToDisk(metaBytes, metaDataFilePath, metaDataStartOffset); err != nil {
+			return err
+		}
+
+		// Update main config if single-file mode
+		if !USE_SEPARATE_FILES {
+			sizes := []uint64{0, idxSize, sumSize, filterSize, metaSize}
+			offsets := []uint64{dataStartOffset, indexStartOffset, summaryStartOffset, filterStartOffset, metaDataStartOffset}
+			if err := config.addSizeDataToConfig(sizes, offsets, newIndex); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Calculate data size (logical, without CRCs). In single-file mode this is needed for index offset.
+	dataSize := state.totalLogical
+
+	// 1. Create Index Component — in single-file mode, place right after last written data chunk (aligned)
+	indexStartOffset := state.newDataOffset
+	indexFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+	if USE_SEPARATE_FILES {
+		indexStartOffset = 0
+		indexFilePath = fmt.Sprintf(INDEX_FILE_NAME_FORMAT, newIndex)
+	}
+
+	indexComp := &IndexComp{
+		FilePath:     indexFilePath,
+		StartOffset:  indexStartOffset,
+		IndexEntries: state.indexEntries,
+	}
+
+	serializedIndex, indexSize, err := indexComp.serialize(indexStartOffset)
+	if err != nil {
+		return err
+	}
+	err = blockManager.WriteToDisk(serializedIndex, indexComp.FilePath, indexComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 2. Create Summary Component
+	summaryStartOffset := indexStartOffset + uint64(len(serializedIndex))
+	summaryFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+	if USE_SEPARATE_FILES {
+		summaryStartOffset = 0
+		summaryFilePath = fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, newIndex)
+	}
+
+	// Get min and max keys
+	var minKey, maxKey string
+	if len(state.indexEntries) > 0 {
+		minKey = state.indexEntries[0].Key
+		maxKey = state.indexEntries[len(state.indexEntries)-1].Key
+	}
+
+	summaryComp := &SummaryComp{
+		FilePath:     summaryFilePath,
+		StartOffset:  summaryStartOffset,
+		MinKey:       minKey,
+		MaxKey:       maxKey,
+		IndexEntries: generateSummaryEntries(state.indexEntries),
+	}
+
+	serializedSummary, summarySize, err := summaryComp.serialize(summaryStartOffset)
+	if err != nil {
+		return err
+	}
+	err = blockManager.WriteToDisk(serializedSummary, summaryComp.FilePath, summaryComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 3. Create Filter Component
+	filterStartOffset := summaryStartOffset + uint64(len(serializedSummary))
+	filterFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+	if USE_SEPARATE_FILES {
+		filterFilePath = fmt.Sprintf(FILTER_FILE_NAME_FORMAT, newIndex)
+		filterStartOffset = 0
+	}
+
+	expected := len(state.indexEntries)
+	if expected <= 0 {
+		expected = 1
+	}
+	bloomFilter := bloom_filter.NewBloomFilter(expected, BLOOM_FILTER_FALSE_POSITIVE_RATE)
+	for _, entry := range state.indexEntries {
+		bloomFilter.Add([]byte(entry.Key))
+
+		// Add prefixes
+		keyLen := len(entry.Key)
+		maxPrefixLen := 10
+		if keyLen < maxPrefixLen {
+			maxPrefixLen = keyLen
+		}
+
+		for prefixLen := 1; prefixLen <= maxPrefixLen; prefixLen++ {
+			prefix := entry.Key[:prefixLen]
+			prefixWithMarker := prependPrefixPrefix(prefix)
+			bloomFilter.Add([]byte(prefixWithMarker))
+		}
+	}
+	bloomFilter.Add([]byte(prependPrefixPrefix("")))
+
+	filterComp := &FilterComp{
+		FilePath:    filterFilePath,
+		StartOffset: filterStartOffset,
+		BloomFilter: bloomFilter,
+	}
+
+	serializedFilter, filterSize, err := filterComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = blockManager.WriteToDisk(serializedFilter, filterComp.FilePath, filterComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 4. Create Metadata Component (using only hashes, memory-efficient)
+	metaDataStartOffset := filterStartOffset + uint64(len(serializedFilter))
+	metaDataFilePath := fmt.Sprintf(FILE_NAME_FORMAT, newIndex)
+	if USE_SEPARATE_FILES {
+		metaDataStartOffset = 0
+		metaDataFilePath = fmt.Sprintf(METADATA_FILE_NAME_FORMAT, newIndex)
+	}
+
+	merkleTree, err := merkle_tree.NewMerkleTree(state.recordHashes, true)
+	if err != nil {
+		return err
+	}
+	metadataComp := &MetadataComp{
+		FilePath:    metaDataFilePath,
+		StartOffset: metaDataStartOffset,
+		MerkleTree:  merkleTree,
+	}
+
+	serializedMerkle, metadataSize, err := metadataComp.serialize()
+	if err != nil {
+		return err
+	}
+	err = blockManager.WriteToDisk(serializedMerkle, metadataComp.FilePath, metadataComp.StartOffset)
+	if err != nil {
+		return err
+	}
+
+	// 5. Update config with component sizes and offsets (if single file mode)
+	sizes := []uint64{dataSize, indexSize, summarySize, filterSize, metadataSize}
+	offsets := []uint64{dataStartOffset, indexStartOffset, summaryStartOffset, filterStartOffset, metaDataStartOffset}
+	err = config.addSizeDataToConfig(sizes, offsets, newIndex)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// cleanupOldSSTables removes the files of old SSTables after successful compaction
+func cleanupOldSSTables(sstableIndexes []int) error {
+	for _, index := range sstableIndexes {
+		// Get config to determine if using separate files
+		config, _, _, err := deserializeSSTableConfig(index)
+		if err != nil {
+			// If we can't read config, try to delete both file patterns
+			config = &SSTableConfig{UseSeparateFiles: false}
+		}
+
+		if config.UseSeparateFiles {
+			// Delete all component files
+			filesToDelete := []string{
+				fmt.Sprintf(FILE_NAME_FORMAT, index), // Main config file
+				fmt.Sprintf(DATA_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(SUMMARY_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(FILTER_FILE_NAME_FORMAT, index),
+				fmt.Sprintf(METADATA_FILE_NAME_FORMAT, index),
+			}
+
+			for _, filePath := range filesToDelete {
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("failed to delete file %s: %v", filePath, err)
+				}
+			}
+		} else {
+			// Delete single file
+			filePath := fmt.Sprintf(FILE_NAME_FORMAT, index)
+			if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to delete file %s: %v", filePath, err)
+			}
+		}
+	}
+	return nil
 }

@@ -19,6 +19,11 @@ type MemtableInterface interface {
 	// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
 	GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record
 
+	// GetNextForRange returns the next record in lexicographical order for the given key,
+	// with the range [rangeStart, rangeEnd] as a constraint, or nil if none exists
+	// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+	GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record
+
 	// Only keys are returned for memory efficiency - use Get() to retrieve full records.
 	// Parameters:
 	// - prefix: the key prefix to search for
@@ -28,6 +33,23 @@ type MemtableInterface interface {
 	// - pageNumber: which page to return (0-based)
 	ScanForPrefix(
 		prefix string,
+		tombstonedKeys *[]string,
+		bestKeys *[]string,
+		pageSize int,
+		pageNumber int,
+	)
+
+	// Only keys are returned for memory efficiency - use Get() to retrieve full records.
+	// Parameters:
+	// - rangeStart: start of the key range (inclusive)
+	// - rangeEnd: end of the key range (inclusive)
+	// - tombstonedKeys: keys that have been tombstoned in more recent structures
+	// - bestKeys: best keys found so far from previous memtables (will be modified)
+	// - pageSize: maximum number of results per page (typically <= 50)
+	// - pageNumber: which page to return (0-based)
+	ScanForRange(
+		rangeStart string,
+		rangeEnd string,
 		tombstonedKeys *[]string,
 		bestKeys *[]string,
 		pageSize int,
