@@ -53,6 +53,12 @@ type DBConfig struct {
 	CRC struct {
 		Size uint64 `json:"size"`
 	} `json:"crc"`
+	
+	TokenBucket struct {
+		Capacity       uint16 `json:"capacity"`
+		RefillInterval uint   `json:"refill_interval"`
+		RefillAmount   uint16 `json:"refill_amount"`
+	} `json:"token_bucket"`
 }
 
 var (
