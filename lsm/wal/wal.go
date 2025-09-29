@@ -15,15 +15,15 @@ import (
 // TODO: Create tests for WAL when all dependencies are complete.
 // Configuration variables loaded from config file - no hardcoded defaults
 var (
-	BLOCK_SIZE uint16 
-	LOG_SIZE   uint16 
+	BLOCK_SIZE uint16
+	LOG_SIZE   uint16
 )
 
 // init loads WAL configuration from config file
 func init() {
 	cfg := config.GetConfig()
 	// Always use config - no fallbacks here
-	BLOCK_SIZE = uint16(cfg.WAL.BlockSize)
+	BLOCK_SIZE = uint16(cfg.BlockManager.BlockSize)
 	LOG_SIZE = uint16(cfg.WAL.LogSize)
 }
 
