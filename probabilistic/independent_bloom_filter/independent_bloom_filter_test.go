@@ -2,6 +2,7 @@ package independent_bloom_filter
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
@@ -57,6 +58,11 @@ func TestBasicOperations(t *testing.T) {
 
 // TestSaveToDisk tests saving independent bloom filter to disk
 func TestSaveToDisk(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("independent_bloom_filter_test_ibf_save")
+	}()
+	
 	ibf := NewIndependentBloomFilter(100, 0.01)
 	
 	// Add some test data
@@ -74,6 +80,11 @@ func TestSaveToDisk(t *testing.T) {
 
 // TestLoadFromDisk tests loading independent bloom filter from disk
 func TestLoadFromDisk(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("independent_bloom_filter_test_ibf_load")
+	}()
+	
 	// First create and save a filter
 	original := NewIndependentBloomFilter(100, 0.01)
 	
@@ -103,6 +114,11 @@ func TestLoadFromDisk(t *testing.T) {
 
 // TestLoadFromDiskMethod tests the instance method for loading from disk
 func TestLoadFromDiskMethod(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("independent_bloom_filter_test_ibf_method")
+	}()
+	
 	// Create and save original filter
 	original := NewIndependentBloomFilter(200, 0.01)
 	
@@ -133,6 +149,11 @@ func TestLoadFromDiskMethod(t *testing.T) {
 
 // TestSaveLoadRoundTrip tests complete save/load cycle
 func TestSaveLoadRoundTrip(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("independent_bloom_filter_test_ibf_roundtrip")
+	}()
+	
 	// Create original filter with specific parameters
 	original := NewIndependentBloomFilter(1000, 0.01)
 	

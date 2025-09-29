@@ -3,6 +3,7 @@ package hyperloglog
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -357,6 +358,11 @@ func BenchmarkConcurrentSerialization(b *testing.B) {
 
 // TestSaveToDisk tests saving HyperLogLog to disk
 func TestSaveToDisk(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("hyperloglog_test_hll")
+	}()
+	
 	hll, err := NewHLL(10)
 	if err != nil {
 		t.Fatalf("Failed to create HLL: %v", err)
@@ -377,6 +383,11 @@ func TestSaveToDisk(t *testing.T) {
 
 // TestLoadFromDisk tests loading HyperLogLog from disk
 func TestLoadFromDisk(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("hyperloglog_test_hll_load")
+	}()
+	
 	// Create and populate original HLL
 	original, err := NewHLL(8)
 	if err != nil {
@@ -430,6 +441,11 @@ func TestLoadFromDisk(t *testing.T) {
 
 // TestSaveLoadRoundTrip tests complete save/load cycle for HyperLogLog
 func TestSaveLoadRoundTrip(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("hyperloglog_test_hll_roundtrip")
+	}()
+	
 	original, err := NewHLL(12)
 	if err != nil {
 		t.Fatalf("Failed to create original HLL: %v", err)
