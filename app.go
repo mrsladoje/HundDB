@@ -6,7 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"hunddb/lsm"
+	"hunddb/lsm/sstable"
 	model "hunddb/model/record"
+	"hunddb/probabilistic/count_min_sketch"
+	"hunddb/probabilistic/hyperloglog"
+	"hunddb/probabilistic/independent_bloom_filter"
+	"hunddb/probabilistic/sim_hash"
 	"os"
 	"path/filepath"
 	"strings"
@@ -295,4 +300,251 @@ func (a *App) GetConfig() (string, error) {
 	}
 
 	return string(data), nil
+}
+
+// CheckSSTableIntegrity checks the integrity of a specific SSTable
+func (a *App) CheckSSTableIntegrity(sstableIndex int) map[string]interface{} {
+	passed, corruptBlocks, fatalError, err := sstable.CheckIntegrity(sstableIndex)
+
+	// Convert corrupt blocks to a format that Wails can handle
+	corruptBlocksData := make([]map[string]interface{}, len(corruptBlocks))
+	for i, block := range corruptBlocks {
+		corruptBlocksData[i] = map[string]interface{}{
+			"filePath":   block.FilePath,
+			"blockIndex": block.BlockIndex,
+		}
+	}
+
+	result := map[string]interface{}{
+		"sstableIndex":  sstableIndex,
+		"passed":        passed,
+		"corruptBlocks": corruptBlocksData,
+		"fatalError":    fatalError,
+		"error":         nil,
+		"timestamp":     "now", // Will be set by frontend
+	}
+
+	if err != nil {
+		result["error"] = err.Error()
+	}
+
+	return result
+}
+
+// ======== PROBABILISTIC DATA STRUCTURES ========
+
+// Count-Min Sketch Functions
+func (a *App) CreateCountMinSketch(name string, epsilon, delta float64) (string, error) {
+	cms := count_min_sketch.NewCMS(epsilon, delta)
+	if err := cms.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save Count-Min Sketch: %w", err)
+	}
+	return fmt.Sprintf("Count-Min Sketch '%s' created successfully (Epsilon: %.4f, Delta: %.4f)", name, epsilon, delta), nil
+}
+
+func (a *App) LoadCountMinSketch(name string) (string, error) {
+	_, err := count_min_sketch.LoadCountMinSketchFromDisk(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to load Count-Min Sketch: %w", err)
+	}
+	return fmt.Sprintf("Count-Min Sketch '%s' loaded successfully", name), nil
+}
+
+func (a *App) AddToCountMinSketch(name, item string) (string, error) {
+	cms, err := count_min_sketch.LoadCountMinSketchFromDisk(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to load Count-Min Sketch: %w", err)
+	}
+
+	cms.Add([]byte(item))
+
+	if err := cms.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save Count-Min Sketch: %w", err)
+	}
+
+	return fmt.Sprintf("Added '%s' to Count-Min Sketch '%s'", item, name), nil
+}
+
+func (a *App) QueryCountMinSketch(name, item string) (int, error) {
+	cms, err := count_min_sketch.LoadCountMinSketchFromDisk(name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to load Count-Min Sketch: %w", err)
+	}
+
+	count := cms.Count([]byte(item))
+	return int(count), nil
+}
+
+// HyperLogLog Functions
+func (a *App) CreateHyperLogLog(name string, precision int) (string, error) {
+	hll, err := hyperloglog.NewHLL(uint8(precision))
+	if err != nil {
+		return "", fmt.Errorf("failed to create HyperLogLog: %w", err)
+	}
+	if err := hll.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save HyperLogLog: %w", err)
+	}
+	return fmt.Sprintf("HyperLogLog '%s' created successfully (Precision: %d)", name, precision), nil
+}
+
+func (a *App) LoadHyperLogLog(name string) (string, error) {
+	_, err := hyperloglog.LoadHyperLogLogFromDisk(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to load HyperLogLog: %w", err)
+	}
+	return fmt.Sprintf("HyperLogLog '%s' loaded successfully", name), nil
+}
+
+func (a *App) AddToHyperLogLog(name, item string) (string, error) {
+	hll, err := hyperloglog.LoadHyperLogLogFromDisk(name)
+	if err != nil {
+		return "", fmt.Errorf("failed to load HyperLogLog: %w", err)
+	}
+
+	hll.Add([]byte(item))
+
+	if err := hll.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save HyperLogLog: %w", err)
+	}
+
+	return fmt.Sprintf("Added '%s' to HyperLogLog '%s'", item, name), nil
+}
+
+func (a *App) EstimateHyperLogLog(name string) (int, error) {
+	hll, err := hyperloglog.LoadHyperLogLogFromDisk(name)
+	if err != nil {
+		return 0, fmt.Errorf("failed to load HyperLogLog: %w", err)
+	}
+
+	estimate := hll.Estimate()
+	return int(estimate), nil
+}
+
+// SimHash Functions
+func (a *App) ComputeSimHashFingerprint(document string) (string, error) {
+	fingerprint := sim_hash.NewSimHashFingerprintFromText(document)
+	return fingerprint.String(), nil
+}
+
+func (a *App) SaveSimHashFingerprint(name string, fingerprint string) (string, error) {
+	fp := &sim_hash.SimHashFingerprint{}
+	if err := fp.UnmarshalText([]byte(fingerprint)); err != nil {
+		return "", fmt.Errorf("failed to parse fingerprint: %w", err)
+	}
+
+	if err := fp.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save SimHash fingerprint: %w", err)
+	}
+
+	return fmt.Sprintf("SimHash fingerprint '%s' saved successfully", name), nil
+}
+
+func (a *App) LoadSimHashFingerprint(name string) (string, error) {
+	fp := &sim_hash.SimHashFingerprint{}
+	if err := fp.LoadFromDisk(name); err != nil {
+		return "", fmt.Errorf("failed to load SimHash fingerprint: %w", err)
+	}
+
+	return fp.String(), nil
+}
+
+func (a *App) CompareSimHashFingerprints(fp1, fp2 string) (int, error) {
+	fingerprint1 := &sim_hash.SimHashFingerprint{}
+	if err := fingerprint1.UnmarshalText([]byte(fp1)); err != nil {
+		return 0, fmt.Errorf("failed to parse first fingerprint: %w", err)
+	}
+
+	fingerprint2 := &sim_hash.SimHashFingerprint{}
+	if err := fingerprint2.UnmarshalText([]byte(fp2)); err != nil {
+		return 0, fmt.Errorf("failed to parse second fingerprint: %w", err)
+	}
+
+	distance := fingerprint1.HammingDistance(*fingerprint2)
+	return int(distance), nil
+}
+
+func (a *App) CompareDocumentsSimilarity(document1, document2 string) (map[string]interface{}, error) {
+	// Compute fingerprints for both documents
+	fingerprint1 := sim_hash.NewSimHashFingerprintFromText(document1)
+	fingerprint2 := sim_hash.NewSimHashFingerprintFromText(document2)
+
+	// Calculate Hamming distance
+	distance := fingerprint1.HammingDistance(fingerprint2)
+
+	// Determine similarity based on common thresholds
+	var similarity string
+	var similarityPercentage float64
+
+	if distance == 0 {
+		similarity = "Identical"
+		similarityPercentage = 100.0
+	} else if distance <= 3 {
+		similarity = "Very Similar"
+		similarityPercentage = 98.0
+	} else if distance <= 6 {
+		similarity = "Similar"
+		similarityPercentage = 90.0
+	} else if distance <= 12 {
+		similarity = "Somewhat Similar"
+		similarityPercentage = 75.0
+	} else if distance <= 20 {
+		similarity = "Slightly Similar"
+		similarityPercentage = 50.0
+	} else if distance <= 30 {
+		similarity = "Different"
+		similarityPercentage = 25.0
+	} else {
+		similarity = "Very Different"
+		similarityPercentage = 5.0
+	}
+
+	return map[string]interface{}{
+		"distance":             int(distance),
+		"similarity":           similarity,
+		"similarityPercentage": similarityPercentage,
+		"fingerprint1":         fingerprint1.String(),
+		"fingerprint2":         fingerprint2.String(),
+	}, nil
+}
+
+// Bloom Filter Functions
+func (a *App) CreateBloomFilter(name string, capacity int, falsePositiveRate float64) (string, error) {
+	bf := independent_bloom_filter.NewIndependentBloomFilter(capacity, falsePositiveRate)
+	if err := bf.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save Bloom Filter: %w", err)
+	}
+	return fmt.Sprintf("Bloom Filter '%s' created successfully (Capacity: %d, FP Rate: %.4f)", name, capacity, falsePositiveRate), nil
+}
+
+func (a *App) LoadBloomFilter(name string) (string, error) {
+	bf := &independent_bloom_filter.IndependentBloomFilter{}
+	if err := bf.LoadFromDisk(name); err != nil {
+		return "", fmt.Errorf("failed to load Bloom Filter: %w", err)
+	}
+	return fmt.Sprintf("Bloom Filter '%s' loaded successfully", name), nil
+}
+
+func (a *App) AddToBloomFilter(name, item string) (string, error) {
+	bf := &independent_bloom_filter.IndependentBloomFilter{}
+	if err := bf.LoadFromDisk(name); err != nil {
+		return "", fmt.Errorf("failed to load Bloom Filter: %w", err)
+	}
+
+	bf.Add([]byte(item))
+
+	if err := bf.SaveToDisk(name); err != nil {
+		return "", fmt.Errorf("failed to save Bloom Filter: %w", err)
+	}
+
+	return fmt.Sprintf("Added '%s' to Bloom Filter '%s'", item, name), nil
+}
+
+func (a *App) TestBloomFilter(name, item string) (bool, error) {
+	bf := &independent_bloom_filter.IndependentBloomFilter{}
+	if err := bf.LoadFromDisk(name); err != nil {
+		return false, fmt.Errorf("failed to load Bloom Filter: %w", err)
+	}
+
+	exists := bf.Contains([]byte(item))
+	return exists, nil
 }
