@@ -9,27 +9,26 @@ import (
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
 	byte_util "hunddb/utils/byte_util"
-	crc "hunddb/utils/crc"
 	"hunddb/utils/config"
+	crc "hunddb/utils/crc"
 	"math"
 	"os"
 	"regexp"
 	"strconv"
 )
 
-
 // Configuration variables loaded from config file - no hardcoded defaults
 var (
-	BLOCK_SIZE uint16
-	LOG_SIZE   uint16
+	BLOCK_SIZE uint64
+	LOG_SIZE   uint64
 )
 
 // init loads WAL configuration from config file
 func init() {
 	cfg := config.GetConfig()
 	// Always use config - no fallbacks here
-	BLOCK_SIZE = uint16(cfg.BlockManager.BlockSize)
-	LOG_SIZE = uint16(cfg.WAL.LogSize)
+	BLOCK_SIZE = cfg.BlockManager.BlockSize
+	LOG_SIZE = cfg.WAL.LogSize
 }
 
 // WAL represents a Write-Ahead Log implementation for database persistence.
@@ -142,7 +141,7 @@ func (wal *WAL) reloadWAL() error {
 	size := info.Size()
 
 	// How many blocks are written in the last log
-	wal.blocksWrittenInLastLog = uint64(size / BLOCK_SIZE)
+	wal.blocksWrittenInLastLog = uint64(uint64(size) / BLOCK_SIZE)
 
 	f, err = os.Open("hunddb/lsm/wal/metadata.bin")
 	if err != nil {

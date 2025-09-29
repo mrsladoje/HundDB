@@ -16,9 +16,9 @@ import (
 
 // Test helper functions
 
-func createTestRecord(key string, valueSize int) *record.Record {
+func createTestRecord(key string, valueSize uint64) *record.Record {
 	value := make([]byte, valueSize)
-	for i := 0; i < valueSize; i++ {
+	for i := uint64(0); i < valueSize; i++ {
 		value[i] = byte(i % 256)
 	}
 	return record.NewRecord(key, value, uint64(time.Now().Unix()), false)
@@ -499,13 +499,13 @@ func TestWAL_RecordLargerThanWholeLog(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate max payload size that can fit in the remaining blocks of current log
-	crcSize := 4 // crc.CRC_SIZE
+	crcSize := uint64(4) // crc.CRC_SIZE
 	maxPayloadPerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 	remainingBlocks := LOG_SIZE - wal.blocksWrittenInLastLog
 
 	// Create a record that fills most of the remaining log space
 	// but still fits within the current log
-	recordSize := int(remainingBlocks-1)*maxPayloadPerBlock + maxPayloadPerBlock/2
+	recordSize := uint64(remainingBlocks-1)*maxPayloadPerBlock + maxPayloadPerBlock/2
 
 	hugeRecord := createTestRecord("huge_record_key", recordSize)
 
@@ -586,7 +586,7 @@ func TestWAL_DataFragmentation(t *testing.T) {
 	// Test mixed record sizes that create complex fragmentation patterns
 	testCases := []struct {
 		key  string
-		size int
+		size uint64
 	}{
 		{"tiny", 10},
 		{"small", 500},
@@ -628,7 +628,7 @@ func TestWAL_DataFragmentation(t *testing.T) {
 		if records[i].Key != tc.key {
 			t.Errorf("Expected key %s at index %d, got %s", tc.key, i, records[i].Key)
 		}
-		if len(records[i].Value) != tc.size {
+		if uint64(len(records[i].Value)) != tc.size {
 			t.Errorf("Expected value size %d for key %s, got %d", tc.size, tc.key, len(records[i].Value))
 		}
 	}
@@ -644,8 +644,8 @@ func TestWAL_ExactBlockBoundary(t *testing.T) {
 
 	// Calculate the exact payload size needed to fill one block
 	// Available space = BLOCK_SIZE - CRC_SIZE - HEADER_TOTAL_SIZE - record serialization overhead
-	crcSize := 4 // crc.CRC_SIZE
-	maxPayloadSize := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE - serializedSize
+	crcSize := uint64(4) // crc.CRC_SIZE
+	maxPayloadSize := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE - uint64(serializedSize)
 	exactFitRecord := createTestRecord("exact_fit", maxPayloadSize)
 
 	totalRecordSize := HEADER_TOTAL_SIZE + len(exactFitRecord.Serialize())
@@ -658,7 +658,7 @@ func TestWAL_ExactBlockBoundary(t *testing.T) {
 
 	// Due to serialization overhead, the record may not exactly fill the block
 	// Check that we've written close to the block size
-	if int(wal.offsetInBlock) < BLOCK_SIZE-100 { // Allow some tolerance
+	if wal.offsetInBlock < BLOCK_SIZE-100 { // Allow some tolerance
 		t.Logf("Block not exactly filled: offset=%d, expected close to %d", wal.offsetInBlock, BLOCK_SIZE)
 	}
 
@@ -917,7 +917,7 @@ func TestWAL_RecordLargerThanEntireLog(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate the maximum size that can fit in one log
-	crcSize := 4 // crc.CRC_SIZE
+	crcSize := uint64(4) // crc.CRC_SIZE
 	maxPayloadPerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 
 	// Create multiple records that will fill up logs and trigger rollovers
@@ -974,7 +974,7 @@ func TestWAL_MultipleRecordsLargerThanLog(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate approximate size for records that will fill logs efficiently
-	crcSize := 4
+	crcSize := uint64(4) // crc.CRC_SIZE
 	maxPayloadPerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 	recordSize := maxPayloadPerBlock * 2 // 2 blocks per record
 
@@ -1020,7 +1020,7 @@ func TestWAL_MultipleRecordsLargerThanLog(t *testing.T) {
 		if rec.Key != expectedKey {
 			t.Errorf("Expected key %s at position %d, got %s", expectedKey, i, rec.Key)
 		}
-		if len(rec.Value) != recordSize {
+		if uint64(len(rec.Value)) != recordSize {
 			t.Errorf("Expected value size %d for record %d, got %d", recordSize, i, len(rec.Value))
 		}
 	}
@@ -1031,11 +1031,11 @@ func TestWAL_ExtremeLargeRecord(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Create records that gradually fill up the log space
-	crcSize := 4
+	crcSize := uint64(4)
 	maxPayloadPerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 
 	// Create records of increasing size to test different fragmentation patterns
-	recordSizes := []int{
+	recordSizes := []uint64{
 		maxPayloadPerBlock / 2, // Half block
 		maxPayloadPerBlock,     // One block
 		maxPayloadPerBlock * 2, // Two blocks
@@ -1090,7 +1090,7 @@ func TestWAL_ExtremeLargeRecord(t *testing.T) {
 		}
 
 		expectedSize := recordSizes[i]
-		if len(rec.Value) != expectedSize {
+		if uint64(len(rec.Value)) != expectedSize {
 			t.Errorf("Expected value length %d for record %d, got %d", expectedSize, i, len(rec.Value))
 		}
 	}
@@ -1101,19 +1101,19 @@ func TestWAL_RecordExactlyFillsOneBlock(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate exact size for one full block
-	crcSize := 4
+	crcSize := uint64(4)
 	availableSpacePerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 
 	// Create test record to calculate overhead
 	testRec := createTestRecord("exact_block_record", 0)
-	overhead := len(testRec.Serialize()) // This includes timestamp, tombstone, key/value sizes, key
+	overhead := uint64(len(testRec.Serialize())) // This includes timestamp, tombstone, key/value sizes, key
 
 	// Calculate exact payload size that will result in total serialized size fitting in one block
 	// Total must be: overhead + payload â‰¤ availableSpacePerBlock
 	exactPayloadSize := availableSpacePerBlock - overhead
 
 	exactRecord := createTestRecord("exact_block_record", exactPayloadSize)
-	totalSerializedSize := len(exactRecord.Serialize())
+	totalSerializedSize := uint64(len(exactRecord.Serialize()))
 
 	t.Logf("Created record with payload %d bytes, serialized %d bytes, available space %d bytes",
 		exactPayloadSize, totalSerializedSize, availableSpacePerBlock)
@@ -1165,7 +1165,7 @@ func TestWAL_RecordExactlyFillsMultipleBlocks(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate exact size for exactly 3 blocks with fragmentation
-	crcSize := 4
+	crcSize := uint64(4)
 	availableSpacePerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 
 	// For fragmented records, each fragment gets its own header
@@ -1178,7 +1178,7 @@ func TestWAL_RecordExactlyFillsMultipleBlocks(t *testing.T) {
 
 	// Create a test record to calculate the serialization overhead
 	testRec := createTestRecord("exact_3_blocks", 0)
-	serializationOverhead := len(testRec.Serialize()) // timestamp, tombstone, key/value lengths, key
+	serializationOverhead := uint64(len(testRec.Serialize())) // timestamp, tombstone, key/value lengths, key
 
 	// For exactly 3 blocks: serialized_record_size = 3 * availableSpacePerBlock
 	// So: value_payload + serializationOverhead = 3 * availableSpacePerBlock
@@ -1187,7 +1187,7 @@ func TestWAL_RecordExactlyFillsMultipleBlocks(t *testing.T) {
 	exactPayloadSize := (3 * availableSpacePerBlock) - serializationOverhead - 1
 
 	exactRecord := createTestRecord("exact_3_blocks", exactPayloadSize)
-	actualSerializedSize := len(exactRecord.Serialize())
+	actualSerializedSize := uint64(len(exactRecord.Serialize()))
 
 	t.Logf("Created record with payload %d bytes, serialized %d bytes for exactly 3 blocks", exactPayloadSize, actualSerializedSize)
 	t.Logf("Available space per block: %d, total for 3 blocks: %d", availableSpacePerBlock, 3*availableSpacePerBlock)
@@ -1209,7 +1209,7 @@ func TestWAL_RecordExactlyFillsMultipleBlocks(t *testing.T) {
 	// Should use exactly 3 blocks
 	blocksUsed := wal.blocksWrittenInLastLog - initialBlocks
 	if blocksUsed != 3 {
-		totalSerializedSize := len(exactRecord.Serialize())
+		totalSerializedSize := uint64(len(exactRecord.Serialize()))
 		expectedTotalSpace := availableSpacePerBlock * 3
 		t.Errorf("Multi-block fragmentation error - Expected exactly 3 blocks for 3-block record, got %d blocks\n"+
 			"  Payload size: %d bytes\n"+
@@ -1234,7 +1234,7 @@ func TestWAL_RecordExactlyFillsMultipleBlocks(t *testing.T) {
 		t.Fatalf("Failed to read records: %v", err)
 	}
 
-	if len(records) != 1 || records[0].Key != exactRecord.Key || len(records[0].Value) != exactPayloadSize {
+	if len(records) != 1 || records[0].Key != exactRecord.Key || uint64(len(records[0].Value)) != exactPayloadSize {
 		t.Errorf("3-block record reconstruction failed")
 	}
 }
@@ -1244,11 +1244,11 @@ func TestWAL_RecordExactlyFillsOneLog(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate exact size for one full log (16 blocks)
-	crcSize := 4
+	crcSize := uint64(4)
 	availableSpacePerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
 
 	// For one full log: LOG_SIZE * availableSpacePerBlock
-	exactPayloadSize := int(LOG_SIZE) * availableSpacePerBlock
+	exactPayloadSize := uint64(LOG_SIZE) * availableSpacePerBlock
 
 	exactRecord := createTestRecord("exact_one_log", exactPayloadSize)
 	t.Logf("Created record with payload %d bytes for exactly one full log", exactPayloadSize)
@@ -1275,7 +1275,7 @@ func TestWAL_RecordExactlyFillsOneLog(t *testing.T) {
 		t.Fatalf("Failed to read records: %v", err)
 	}
 
-	if len(records) != 1 || records[0].Key != exactRecord.Key || len(records[0].Value) != exactPayloadSize {
+	if len(records) != 1 || records[0].Key != exactRecord.Key || uint64(len(records[0].Value)) != exactPayloadSize {
 		t.Errorf("One-log record reconstruction failed")
 	}
 }
@@ -1285,9 +1285,9 @@ func TestWAL_RecordLargerThanOneLogByOneByte(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Calculate size that's exactly 1 byte more than one log can hold
-	crcSize := 4
+	crcSize := uint64(4)
 	availableSpacePerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
-	oneLogCapacity := int(LOG_SIZE) * availableSpacePerBlock
+	oneLogCapacity := LOG_SIZE * availableSpacePerBlock
 
 	payloadSize := oneLogCapacity + 1 // Exactly 1 byte over
 
@@ -1316,21 +1316,21 @@ func TestWAL_RecordLargerThanOneLogByOneByte(t *testing.T) {
 		t.Fatalf("Failed to read records: %v", err)
 	}
 
-	if len(records) != 1 || records[0].Key != overRecord.Key || len(records[0].Value) != payloadSize {
+	if len(records) != 1 || records[0].Key != overRecord.Key || uint64(len(records[0].Value)) != payloadSize {
 		t.Errorf("Over-capacity record reconstruction failed")
 	}
 }
 
 // TestWAL_BlockAndLogBoundaryStress tests various boundary conditions
 func TestWAL_BlockAndLogBoundaryStress(t *testing.T) {
-	crcSize := 4
+	crcSize := uint64(4)
 	availableSpacePerBlock := BLOCK_SIZE - crcSize - HEADER_TOTAL_SIZE
-	oneLogCapacity := int(LOG_SIZE) * availableSpacePerBlock
+	oneLogCapacity := LOG_SIZE * availableSpacePerBlock
 
 	// Test various sizes around boundaries
 	testCases := []struct {
 		name        string
-		payloadSize int
+		payloadSize uint64
 		description string
 	}{
 		{"half_block", availableSpacePerBlock / 2, "Half block size"},
@@ -1376,15 +1376,15 @@ func TestWAL_BlockAndLogBoundaryStress(t *testing.T) {
 				return
 			}
 
-			if records[0].Key != record.Key || len(records[0].Value) != tc.payloadSize {
+			if records[0].Key != record.Key || uint64(len(records[0].Value)) != tc.payloadSize {
 				t.Errorf("Record integrity failed for %s\n"+
 					"  Expected key: %s, got: %s\n"+
 					"  Expected value length: %d, got: %d",
-					tc.name, record.Key, records[0].Key, tc.payloadSize, len(records[0].Value))
+					tc.name, record.Key, records[0].Key, tc.payloadSize, uint64(len(records[0].Value)))
 			}
 
 			// Calculate expected blocks for detailed analysis
-			serializedSize := len(record.Serialize())
+			serializedSize := uint64(len(record.Serialize()))
 			expectedBlocks := (serializedSize + availableSpacePerBlock - 1) / availableSpacePerBlock
 			actualBlocks := testWal.blocksWrittenInLastLog - initialBlocks
 
@@ -1750,7 +1750,7 @@ func TestWAL_FlushBehaviorExplanation(t *testing.T) {
 		t.Logf("FILLING BLOCK TO BOUNDARY (triggers auto-flush):")
 
 		// Calculate how much space is available in a block
-		availableSpace := int(BLOCK_SIZE) - 4 - HEADER_TOTAL_SIZE // CRC + header
+		availableSpace := BLOCK_SIZE - 4 - HEADER_TOTAL_SIZE // CRC + header
 
 		// Write a record that exactly fills the available space
 		record := createTestRecord("boundary_record", availableSpace-50) // Leave some space for serialization overhead
@@ -2101,7 +2101,7 @@ func TestWAL_MetadataSyncBehavior(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	// Write some records to establish state
-	for i := 0; i < 5; i++ {
+	for i := uint64(0); i < 5; i++ {
 		record := createTestRecord(fmt.Sprintf("key_%d", i), 300+i*100)
 		err := wal.WriteRecord(record)
 		if err != nil {
@@ -2223,7 +2223,7 @@ func TestWAL_DetectBehavioralIssues(t *testing.T) {
 	t.Run("MixedSizesGracefulShutdown", func(t *testing.T) {
 		wal, _ := setupTestWAL(t)
 
-		recordSizes := []int{10, 100, 1000, 50, 2000, 5, 500}
+		recordSizes := []uint64{10, 100, 1000, 50, 2000, 5, 500}
 		for i, size := range recordSizes {
 			record := createTestRecord(fmt.Sprintf("mixed_%d", i), size)
 			err := wal.WriteRecord(record)

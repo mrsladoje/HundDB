@@ -178,11 +178,11 @@ func LoadLSM() *LSM {
 		dataLost = true
 	}
 	lsm := &LSM{
-		levels:    make([][]int, MAX_LEVELS),
-		memtables: make([]*memtable.MemTable, 0, MAX_MEMTABLES),
-		wal:       wal,
-		cache:     cache.NewReadPathCache(),
-		DataLost:  dataLost, // Initially assume no data loss
+		levels:     make([][]uint64, MAX_LEVELS),
+		memtables:  make([]*memtable.MemTable, 0, MAX_MEMTABLES),
+		wal:        wal,
+		cache:      cache.NewReadPathCache(),
+		DataLost:   dataLost, // Initially assume no data loss
 		flushPool:  nil,
 		levelLocks: make([]sync.Mutex, int(MAX_LEVELS)),
 	}
