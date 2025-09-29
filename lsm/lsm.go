@@ -11,6 +11,7 @@ import (
 	model "hunddb/model/record"
 	"hunddb/utils/config"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -40,19 +41,28 @@ LSM represents a Log-Structured Merge Tree
 */
 type LSM struct {
 	// Each level holds the indexes of its SSTables
-	levels    [][]int
+	levels    [][]uint64
 	memtables []*memtable.MemTable
 	wal       *wal.WAL
 	cache     *cache.ReadPathCache
 
 	// Flag to indicate if previous data was lost during loading
 	DataLost bool
+
+	// NextSSTableIndex holds the next available SSTable index to use when creating a new SSTable
+	// It is computed at load time using GetNextSSTableIndex() and can be used by the app layer
+	NextSSTableIndex uint64
+
+	// mu protects concurrent access to LSM shared state (levels, memtables metadata, DataLost, NextSSTableIndex)
+	mu sync.RWMutex
 }
 
 /*
 Serialize the LSM parts that need to be persisted (the levels and their SSTable indexes).
 */
 func (lsm *LSM) serialize() []byte {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 
 	stringifiedLevels := ""
 
@@ -93,6 +103,8 @@ func (lsm *LSM) PersistLSM() error {
 Deserialize the LSM parts that need to be persisted (the levels and their SSTable indexes).
 */
 func (lsm *LSM) deserialize(data []byte) error {
+	lsm.mu.Lock()
+	defer lsm.mu.Unlock()
 	if len(data) == 0 {
 		return fmt.Errorf("invalid data: empty")
 	}
@@ -101,7 +113,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 	stringifiedLevels := string(data)
 
 	// Parse the stringified levels back into the levels slice
-	lsm.levels = make([][]int, int(MAX_LEVELS))
+	lsm.levels = make([][]uint64, int(MAX_LEVELS))
 
 	i := 0
 	for i < len(stringifiedLevels) {
@@ -119,7 +131,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 		i++ // skip '['
 
 		// Parse table indexes for this level
-		var tableIndexes []int
+		var tableIndexes []uint64
 		for i < len(stringifiedLevels) && stringifiedLevels[i] != ']' {
 			numStart := i
 			for i < len(stringifiedLevels) && stringifiedLevels[i] != ',' && stringifiedLevels[i] != ']' {
@@ -127,7 +139,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 			}
 
 			if i > numStart {
-				var tableIndex int
+				var tableIndex uint64
 				fmt.Sscanf(stringifiedLevels[numStart:i], "%d", &tableIndex)
 				tableIndexes = append(tableIndexes, tableIndex)
 			}
@@ -157,7 +169,7 @@ func LoadLSM() *LSM {
 	// Create a new LSM instance with config values
 	lsm := &LSM{
 		// Initialize slices with config values
-		levels:    make([][]int, int(MAX_LEVELS)),
+		levels:    make([][]uint64, int(MAX_LEVELS)),
 		memtables: make([]*memtable.MemTable, 0, int(MAX_MEMTABLES)),
 		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
 		cache:     cache.NewReadPathCache(),
@@ -172,6 +184,10 @@ func LoadLSM() *LSM {
 		// File doesn't exist - this is a fresh start (not data loss)
 		firstMemtable, _ := memtable.NewMemtable()
 		lsm.memtables = append(lsm.memtables, firstMemtable)
+		// Initialize next SSTable index on fresh start
+		lsm.mu.Lock()
+		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.mu.Unlock()
 		return lsm
 	}
 
@@ -181,7 +197,11 @@ func LoadLSM() *LSM {
 	levelsSizeBytes, _, err := blockManager.ReadFromDisk(LSM_PATH, 0, 8)
 	if err != nil {
 		// File exists but can't read size header - corruption
+		lsm.mu.Lock()
 		lsm.DataLost = true
+		// Initialize with current state
+		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.mu.Unlock()
 		return lsm
 	}
 
@@ -191,7 +211,11 @@ func LoadLSM() *LSM {
 	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8+uint64(CRC_SIZE), uint64(levelsSize))
 	if err != nil {
 		// File exists but can't read data - corruption
+		lsm.mu.Lock()
 		lsm.DataLost = true
+		// Initialize with current state
+		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.mu.Unlock()
 		return lsm
 	}
 
@@ -199,11 +223,18 @@ func LoadLSM() *LSM {
 	err = lsm.deserialize(data)
 	if err != nil {
 		// File exists but data format is invalid - corruption
+		lsm.mu.Lock()
 		lsm.DataLost = true
+		// Initialize with current state
+		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.mu.Unlock()
 		return lsm
 	}
 
 	// Successfully loaded previous data
+	lsm.mu.Lock()
+	lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+	lsm.mu.Unlock()
 	return lsm
 }
 
@@ -212,11 +243,15 @@ IsDataLost returns true if the previous LSM data was lost during loading.
 This can happen if the LSM file doesn't exist, is corrupted, or unreadable.
 */
 func (lsm *LSM) IsDataLost() bool {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 	return lsm.DataLost
 }
 
 // Get retrieves a record from the LSM by checking the memtables, cache, and SSTables in order.
 func (lsm *LSM) Get(key string) (*model.Record, error, bool) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 
 	errorEncountered := false
 
@@ -268,7 +303,7 @@ func (lsm *LSM) checkSSTables(key string) (*model.Record, error, bool) {
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
 			tableIndex := levelIndexes[index]
-			record, err := sstable.Get(key, tableIndex)
+			record, err := sstable.Get(key, int(tableIndex))
 			if err != nil {
 				errorEncountered = true
 				errorEncounteredInCheck = err
@@ -282,6 +317,8 @@ func (lsm *LSM) checkSSTables(key string) (*model.Record, error, bool) {
 }
 
 func (lsm *LSM) Put(key string, value []byte) error {
+	lsm.mu.Lock()
+	defer lsm.mu.Unlock()
 
 	record := model.NewRecord(key, value, uint64(time.Now().UnixNano()), false)
 
@@ -307,6 +344,8 @@ func (lsm *LSM) Put(key string, value []byte) error {
 }
 
 func (lsm *LSM) Delete(key string) (bool, error) {
+	lsm.mu.Lock()
+	defer lsm.mu.Unlock()
 
 	record := model.NewRecord(key, nil, uint64(time.Now().UnixNano()), true)
 
@@ -332,6 +371,8 @@ func (lsm *LSM) Delete(key string) (bool, error) {
 GetNextForPrefix retrieves the next record for a given prefix and start key.
 */
 func (lsm *LSM) GetNextForPrefix(prefix string, key string) (*model.Record, error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 
 	tomstonedKeys := make([]string, 0)
 	nextRecord := lsm.checkMemtablesForPrefixIterate(prefix, key, &tomstonedKeys)
@@ -352,6 +393,8 @@ func (lsm *LSM) GetNextForPrefix(prefix string, key string) (*model.Record, erro
 GetNextForRange retrieves the next record within a given [rangeStart, rangeEnd) for a start key.
 */
 func (lsm *LSM) GetNextForRange(rangeStart string, rangeEnd string, key string) (*model.Record, error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 	tombstonedKeys := make([]string, 0)
 	nextRecord := lsm.checkMemtablesForRangeIterate(rangeStart, rangeEnd, key, &tombstonedKeys)
 	nextRecordFromSSTable, err := lsm.checkSSTableForRangeIterate(rangeStart, rangeEnd, key, &tombstonedKeys)
@@ -377,6 +420,8 @@ Parameters:
 - pageNumber: which page to return (0-based)
 */
 func (lsm *LSM) RangeScan(rangeStart string, rangeEnd string, pageSize int, pageNumber int) ([]string, error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 	tombstonedKeys := make([]string, 0)
 	bestKeys := make([]string, 0)
 
@@ -392,7 +437,7 @@ func (lsm *LSM) RangeScan(rangeStart string, rangeEnd string, pageSize int, page
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
 			tableIndex := levelIndexes[index]
-			err := sstable.ScanForRange(rangeStart, rangeEnd, &tombstonedKeys, &bestKeys, 10000, 0, tableIndex)
+			err := sstable.ScanForRange(rangeStart, rangeEnd, &tombstonedKeys, &bestKeys, 10000, 0, int(tableIndex))
 			if err != nil {
 				return nil, fmt.Errorf("failed to scan SSTable %d: %v", tableIndex, err)
 			}
@@ -440,7 +485,7 @@ func (lsm *LSM) checkSSTableForRangeIterate(rangeStart string, rangeEnd string, 
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
 			tableIndex := levelIndexes[index]
-			record, err := sstable.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys, tableIndex)
+			record, err := sstable.GetNextForRange(rangeStart, rangeEnd, key, tombstonedKeys, int(tableIndex))
 			if err != nil {
 				return nil, err
 			}
@@ -478,7 +523,7 @@ func (lsm *LSM) checkSSTableForPrefixIterate(prefix string, key string, tomstone
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
 			tableIndex := levelIndexes[index]
-			record, err := sstable.GetNextForPrefix(prefix, key, tomstonedKeys, tableIndex)
+			record, err := sstable.GetNextForPrefix(prefix, key, tomstonedKeys, int(tableIndex))
 			if err != nil {
 				return nil, err
 			}
@@ -499,6 +544,8 @@ Parameters:
 - pageNumber: which page to return (0-based)
 */
 func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]string, error) {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
 	tombstonedKeys := make([]string, 0)
 	bestKeys := make([]string, 0)
 
@@ -514,7 +561,7 @@ func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]strin
 		levelIndexes := lsm.levels[i]
 		for index := len(levelIndexes) - 1; index >= 0; index-- {
 			tableIndex := levelIndexes[index]
-			err := sstable.ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10000, 0, tableIndex)
+			err := sstable.ScanForPrefix(prefix, &tombstonedKeys, &bestKeys, 10000, 0, int(tableIndex))
 			if err != nil {
 				return nil, fmt.Errorf("failed to scan SSTable %d: %v", tableIndex, err)
 			}
@@ -534,6 +581,49 @@ func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]strin
 	}
 
 	return bestKeys[startIndex:endIndex], nil
+}
+
+/*
+GetNextSSTableIndex returns the next available SSTable index by finding the largest
+existing index across all levels and adding 1. Returns 0 if no SSTables exist.
+*/
+func (lsm *LSM) GetNextSSTableIndex() uint64 {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
+	var maxIndex uint64 = 0
+	var hasAnyTables bool = false
+
+	// Iterate through all levels
+	for _, level := range lsm.levels {
+		// Iterate through all SSTable indexes in this level
+		for _, tableIndex := range level {
+			if !hasAnyTables || tableIndex > maxIndex {
+				maxIndex = tableIndex
+				hasAnyTables = true
+			}
+		}
+	}
+
+	// Return the next available index (maxIndex + 1)
+	// If no SSTables exist, this returns 0
+	if !hasAnyTables {
+		return 0
+	}
+	return maxIndex + 1
+}
+
+/*
+GetNextSSTableIndexWithIncrement returns the current value of NextSSTableIndex
+and then increments it for the next call. This provides a simple monotonic
+counter for assigning new SSTable indexes based on the value computed at load
+time. Note: This method is not concurrency-safe.
+*/
+func (lsm *LSM) GetNextSSTableIndexWithIncrement() uint64 {
+	lsm.mu.Lock()
+	defer lsm.mu.Unlock()
+	current := lsm.NextSSTableIndex
+	lsm.NextSSTableIndex++
+	return current
 }
 
 func (lsm *LSM) checkIfToFlush(key string) error {
