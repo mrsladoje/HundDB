@@ -151,8 +151,11 @@ func (wal *WAL) flushCurrentAndMakeNewBlock() error {
 // Close flushes any remaining data and closes the WAL.
 // Should be called during graceful shutdown to avoid data loss.
 func (wal *WAL) Close() error {
-	if wal.offsetInBlock > 0 {
-		return wal.flushCurrentAndMakeNewBlock()
+	if wal.offsetInBlock > crc.CRC_SIZE {
+		err := wal.flushCurrentAndMakeNewBlock()
+		if err != nil {
+			return fmt.Errorf("failed to flush current block: %w", err)
+		}
 	}
 	err := syncMetadata(wal)
 	if err != nil {
