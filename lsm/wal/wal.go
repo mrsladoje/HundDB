@@ -8,9 +8,12 @@ import (
 	memtable "hunddb/lsm/memtable"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
+	byte_util "hunddb/utils/byte_util"
 	crc "hunddb/utils/crc"
 	"math"
 	"os"
+	"regexp"
+	"strconv"
 )
 
 // TODO: These const values should be imported from user config
@@ -21,6 +24,10 @@ const (
 
 // WAL represents a Write-Ahead Log implementation for database persistence.
 // It manages record writing, fragmentation across blocks, and crash recovery.
+// It guarantees that all blocks will be written to durable storage, thus ensuring durability.
+// With only exception being the last block that is being written to, due to performance reasons.
+// Only happens if the program crashes, supporting graceful exit.
+// That is a balance between performance and durability that is needed.
 type WAL struct {
 	lastBlock              []byte // Current block being written to
 	offsetInBlock          uint64 // Current write position within the block
@@ -34,18 +41,115 @@ type WAL struct {
 // BuildWAL creates a new WAL instance with the specified directory path and starting log index,
 // or initializes from existing logs if present.
 func BuildWAL() (*WAL, error) {
-	dirPath := "hunddb/lsm/wal/logs"
 	wal := &WAL{
-		lastBlock:          make([]byte, BLOCK_SIZE),
-		offsetInBlock:      crc.CRC_SIZE,
+		lastBlock:              make([]byte, BLOCK_SIZE),
+		offsetInBlock:          crc.CRC_SIZE,
 		blocksWrittenInLastLog: 0,
-		firstLogIndex:      1,
-		lastLogIndex:       1,
-		logSize:            LOG_SIZE,
-		logsPath:           dirPath,
+		firstLogIndex:          1,
+		lastLogIndex:           1,
+		logSize:                LOG_SIZE,
+		logsPath:               "hunddb/lsm/wal/logs",
 	}
-	err := wal.reloadMetadata()
+	err := wal.reloadWAL()
+	if err != nil {
+		return nil, fmt.Errorf("failed to reload WAL: %w", err)
+	}
+
+	// If Overwrite metadata file to indicate unclean shutdown
+	// This is done because if the program crashes, we want to know that it was not a graceful exit
+	// and we need to recover the offset from the metadata file
+	// If the program exits gracefully, we will update the metadata file to indicate a clean shutdown
+	// and the offset will be restored from there on next startup
+	metadataFile, err := os.OpenFile("hunddb/lsm/wal/metadata.bin", os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open metadata file: %w", err)
+	}
+	defer metadataFile.Close()
+
+	data := make([]byte, 9)
+	data[0] = byte_util.BoolToByte(false)
+	_, err = metadataFile.Write(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to write metadata file: %w", err)
+	}
+
 	return wal, err
+}
+
+// reloadWAL loads WAL metadata from a file to restore state after a crash or restart.
+func (wal *WAL) reloadWAL() error {
+	logs, err := os.ReadDir(wal.logsPath)
+	if err != nil {
+		return fmt.Errorf("failed to read WAL directory: %w", err)
+	}
+
+	if len(logs) == 0 {
+		fmt.Println("WAL directory is empty, starting fresh")
+		return nil
+	}
+
+	// Regex for wal_{number}.log
+	re := regexp.MustCompile(`^wal_(\d+)\.log$`)
+
+	minLogIndex := math.MaxInt32
+	maxLogIndex := -1
+
+	for _, log := range logs {
+		name := log.Name()
+		matches := re.FindStringSubmatch(name)
+		if matches != nil {
+			num, err := strconv.Atoi(matches[1])
+			if err == nil {
+				if num < minLogIndex {
+					minLogIndex = num
+				}
+				if num > maxLogIndex {
+					maxLogIndex = num
+				}
+			}
+		}
+	}
+
+	if maxLogIndex == -1 {
+		fmt.Println("No WAL logs found, starting fresh")
+		return nil
+	}
+
+	wal.firstLogIndex = uint64(minLogIndex)
+	wal.lastLogIndex = uint64(maxLogIndex)
+
+	lastFile := fmt.Sprintf("%s/wal_%d.log", wal.logsPath, maxLogIndex)
+	f, err := os.Open(lastFile)
+	if err != nil {
+		return fmt.Errorf("failed to open last WAL file: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat last WAL file: %w", err)
+	}
+	size := info.Size()
+
+	// How many blocks are written in the last log
+	wal.blocksWrittenInLastLog = uint64(size / BLOCK_SIZE)
+
+	f, err = os.Open("hunddb/lsm/wal/metadata.bin")
+	if err != nil {
+		return fmt.Errorf("failed to open metadata file: %w", err)
+	}
+	defer f.Close()
+	data := make([]byte, 9)
+	_, err = f.Read(data)
+	if err != nil {
+		return fmt.Errorf("failed to read metadata file: %w", err)
+	}
+	madeGracefulExit := byte_util.ByteToBool(data[0])
+	if madeGracefulExit {
+		wal.offsetInBlock = binary.LittleEndian.Uint64(data[1:])
+	}
+
+	return nil
 }
 
 // WriteRecord writes a WAL record to the log, handling both complete and fragmented records.
@@ -143,7 +247,7 @@ func (wal *WAL) flushBlock() error {
 	}
 	wal.blocksWrittenInLastLog++
 	return nil
-	}
+}
 
 // makeNewBlock initializes a new block for writing and updates WAL state accordingly.
 func (wal *WAL) makeNewBlock() {
@@ -161,63 +265,24 @@ func (wal *WAL) makeNewBlock() {
 // Should be called during graceful shutdown to avoid data loss.
 func (wal *WAL) Close() error {
 	err := wal.flushBlock()
-		if err != nil {
-			return fmt.Errorf("failed to flush current block: %w", err)
-		}
-	}
-	err := syncMetadata(wal)
 	if err != nil {
-		return fmt.Errorf("failed to write WAL metadata on close: %w", err)
+		return fmt.Errorf("failed to flush current block: %w", err)
 	}
-	return nil
-}
 
-func (wal *WAL) reloadMetadata() error {
-	metadataPath := fmt.Sprintf("%s/wal_metadata.bin", wal.logsPath)
-	file, err := os.Open(metadataPath)
-	if err == os.ErrNotExist {
-		fmt.Println("WAL metadata file does not exist, starting fresh WAL")
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("failed to open WAL metadata file: %w", err)
-	}
-	defer file.Close()
-	data := make([]byte, 32)
-	_, err = file.Read(data)
+	// Update metadata file to indicate graceful shutdown
+	metadataFile, err := os.OpenFile("hunddb/lsm/wal/metadata.bin", os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
-		return fmt.Errorf("failed to read WAL metadata file: %w", err)
+		return fmt.Errorf("failed to open metadata file: %w", err)
 	}
-	wal.offsetInBlock = binary.LittleEndian.Uint64(data[0:8])
-	wal.blocksInCurrentLog = binary.LittleEndian.Uint64(data[8:16])
-	wal.firstLogIndex = binary.LittleEndian.Uint64(data[16:24])
-	wal.lastLogIndex = binary.LittleEndian.Uint64(data[24:32])
+	defer metadataFile.Close()
 
-	wal.lastBlock, err = bm.GetBlockManager().ReadBlock(block_location.BlockLocation{
-		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, wal.lastLogIndex),
-		BlockIndex: uint64(wal.blocksInCurrentLog - 1),
-	})
-	if err != nil {
-		err = fmt.Errorf("WAL data could not be recovered")
-	}
-	return err
-}
+	data := make([]byte, 9)
+	data[0] = byte_util.BoolToByte(true) // Graceful exit flag
+	binary.LittleEndian.PutUint64(data[1:], wal.offsetInBlock)
 
-// syncMetadata writes the WAL metadata to a file for recovery purposes.
-func syncMetadata(wal *WAL) error {
-	metadataPath := fmt.Sprintf("%s/wal_metadata.bin", wal.logsPath)
-	file, err := os.Create(metadataPath)
+	_, err = metadataFile.Write(data)
 	if err != nil {
-		return fmt.Errorf("failed to create WAL metadata file: %w", err)
-	}
-	defer file.Close()
-	data := make([]byte, 32)
-	binary.LittleEndian.PutUint64(data[0:8], wal.offsetInBlock)
-	binary.LittleEndian.PutUint64(data[8:16], wal.blocksInCurrentLog)
-	binary.LittleEndian.PutUint64(data[16:24], wal.firstLogIndex)
-	binary.LittleEndian.PutUint64(data[24:32], wal.lastLogIndex)
-	_, err = file.Write(data)
-	if err != nil {
-		return fmt.Errorf("failed to serialize WAL metadata file: %w", err)
+		return fmt.Errorf("failed to write metadata file: %w", err)
 	}
 	return nil
 }
