@@ -263,7 +263,7 @@ func (f *SimHashFingerprint) LoadFromDisk(name string) error {
 // name: identifier for the saved file (e.g., "document_123")
 // Returns a new SimHashFingerprint instance with loaded data
 func LoadSimHashFingerprintFromDisk(name string) (SimHashFingerprint, error) {
-	filename := fmt.Sprintf("sim_hash_fingerprint_%s", name)
+	filename := filepath.Join("probabilistic", fmt.Sprintf("sim_hash_fingerprint_%s.db", name))
 	blockManager := block_manager.GetBlockManager()
 	var result SimHashFingerprint
 	// Read size header (first 8 bytes)
