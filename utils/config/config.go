@@ -21,7 +21,6 @@ type DBConfig struct {
 
 	Cache struct {
 		ReadPathCapacity uint64 `json:"read_path_capacity"`
-		BlockCapacity    uint64 `json:"block_capacity"`
 	} `json:"cache"`
 
 	WAL struct {
@@ -31,7 +30,6 @@ type DBConfig struct {
 
 	SSTable struct {
 		CompressionEnabled bool   `json:"compression_enabled"`
-		BlockSize          uint64 `json:"block_size"`
 		UseSeparateFiles   bool   `json:"use_separate_files"`
 		SparseStepIndex    uint64 `json:"sparse_step_index"`
 	} `json:"sstable"`
@@ -53,7 +51,7 @@ type DBConfig struct {
 	CRC struct {
 		Size uint64 `json:"size"`
 	} `json:"crc"`
-	
+
 	TokenBucket struct {
 		Capacity       uint16 `json:"capacity"`
 		RefillInterval uint   `json:"refill_interval"`
@@ -119,15 +117,12 @@ func getDefaultConfig() *DBConfig {
 
 	// Cache defaults
 	config.Cache.ReadPathCapacity = 1000
-	config.Cache.BlockCapacity = 100
 
 	// WAL defaults
-	config.WAL.BlockSize = 4096
 	config.WAL.LogSize = 16
 
 	// SSTable defaults
 	config.SSTable.CompressionEnabled = true
-	config.SSTable.BlockSize = 4096 // 4KB
 	config.SSTable.UseSeparateFiles = true
 	config.SSTable.SparseStepIndex = 10
 
@@ -144,6 +139,11 @@ func getDefaultConfig() *DBConfig {
 
 	// CRC defaults
 	config.CRC.Size = 4
+
+	// TokenBucket defaults
+	config.TokenBucket.Capacity = 25
+	config.TokenBucket.RefillInterval = 20
+	config.TokenBucket.RefillAmount = 1
 
 	return config
 }
@@ -201,23 +201,17 @@ func validateConfig(config *DBConfig) error {
 	if config.LSM.MaxMemtables < 1 {
 		return fmt.Errorf("max_memtables must be at least 1")
 	}
-	if config.LSM.CompactionType != "size" && config.LSM.CompactionType != "leveled" {
+	if config.LSM.CompactionType != "size" && config.LSM.CompactionType != "level" {
 		return fmt.Errorf("compaction_type must be either 'size' or 'leveled'")
 	}
 	if config.LSM.LSMPath == "" {
 		return fmt.Errorf("lsm_path cannot be empty")
-	}
-	if config.WAL.BlockSize < 1024 {
-		return fmt.Errorf("wal_block_size must be at least 1024")
 	}
 	if config.WAL.LogSize < 1 {
 		return fmt.Errorf("wal_log_size must be at least 1")
 	}
 
 	// SSTable validation
-	if config.SSTable.BlockSize < 1024 {
-		return fmt.Errorf("sstable_block_size must be at least 1024")
-	}
 	if config.SSTable.SparseStepIndex < 1 {
 		return fmt.Errorf("sparse_step_index must be at least 1")
 	}

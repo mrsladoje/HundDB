@@ -198,8 +198,8 @@ func TestNewTokenBucket_NoExistingData(t *testing.T) {
 	// We can't easily test this without dependency injection, but we can
 	// verify the constants are correct
 
-	if TOKEN_CAPACITY != 5 {
-		t.Errorf("Expected TOKEN_CAPACITY 5, got %d", TOKEN_CAPACITY)
+	if TOKEN_CAPACITY != 10 {
+		t.Errorf("Expected TOKEN_CAPACITY 10, got %d", TOKEN_CAPACITY)
 	}
 
 	if REFILL_INTERVAL != 20 {
@@ -288,9 +288,9 @@ func TestAllowRequest_TokenRefill_MultipleIntervals(t *testing.T) {
 }
 
 func TestAllowRequest_TokenRefill_ExceedsCapacity(t *testing.T) {
-	// Set last reset to 125 seconds ago (6 intervals + 5 seconds)
-	pastTime := time.Now().Add(-125 * time.Second)
-	tb := createTestTokenBucket(pastTime, 2) // Start with 2 tokens
+	// Set last reset to 600 seconds ago (30 intervals) to force capacity overflow
+	pastTime := time.Now().Add(-600 * time.Second)
+	tb := createTestTokenBucket(pastTime, 5) // Start with 5 tokens
 
 	result := tb.AllowRequest()
 
@@ -299,8 +299,9 @@ func TestAllowRequest_TokenRefill_ExceedsCapacity(t *testing.T) {
 		t.Error("Expected request to be allowed")
 	}
 
-	// Should be capped at capacity-1 (5 max, 1 consumed = 4)
-	expectedTokens := TOKEN_CAPACITY - 1 // 5 - 1 = 4
+	// Calculation: 5 initial + (30 intervals * 1 token) = 35 tokens
+	// Capped at TOKEN_CAPACITY (10), then 1 consumed = 9 tokens
+	expectedTokens := TOKEN_CAPACITY - 1 // 10 - 1 = 9
 	if tb.RemainingTokens != expectedTokens {
 		t.Errorf("Expected %d remaining tokens, got %d", expectedTokens, tb.RemainingTokens)
 	}
