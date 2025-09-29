@@ -58,6 +58,9 @@ type LSM struct {
 
 	// flushPool is the worker pool used for concurrent memtable flushes (lazy-initialized)
 	flushPool *FlushPool
+
+	// levelLocks ensures only one compaction operates on a given level at a time
+	levelLocks []sync.Mutex
 }
 
 /*
@@ -172,12 +175,13 @@ func LoadLSM() *LSM {
 	// Create a new LSM instance with config values
 	lsm := &LSM{
 		// Initialize slices with config values
-		levels:    make([][]uint64, int(MAX_LEVELS)),
-		memtables: make([]*memtable.MemTable, 0, int(MAX_MEMTABLES)),
-		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
-		cache:     cache.NewReadPathCache(),
-		DataLost:  false, // Initially assume no data loss
-		flushPool: nil,
+		levels:     make([][]uint64, int(MAX_LEVELS)),
+		memtables:  make([]*memtable.MemTable, 0, int(MAX_MEMTABLES)),
+		wal:        wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
+		cache:      cache.NewReadPathCache(),
+		DataLost:   false, // Initially assume no data loss
+		flushPool:  nil,
+		levelLocks: make([]sync.Mutex, int(MAX_LEVELS)),
 	}
 
 	blockManager := block_manager.GetBlockManager()
@@ -667,5 +671,98 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 
 // maybeStartCompactions checks compaction triggers after a flush; left empty for now
 func (lsm *LSM) maybeStartCompactions() {
-	// TODO: compaction logic will be implemented later
+	if COMPACTION_TYPE != "size" {
+		return
+	}
+	// Run compaction asynchronously to avoid blocking flush completion
+	go lsm.sizeTieredCompaction()
+}
+
+// sizeTieredCompaction performs size-tiered compaction starting from level 0 and cascading upwards
+func (lsm *LSM) sizeTieredCompaction() {
+	maxLevels := int(MAX_LEVELS)
+	maxPer := int(MAX_TABLES_PER_LEVEL)
+	if maxPer < 2 { // nothing sensible to do
+		return
+	}
+
+	for lvl := 0; lvl < maxLevels; lvl++ {
+		for {
+			// Exclusively reserve this level for compaction
+			lsm.levelLocks[lvl].Lock()
+
+			// Check current count
+			lsm.mu.RLock()
+			count := 0
+			if lvl < len(lsm.levels) {
+				count = len(lsm.levels[lvl])
+			}
+			lsm.mu.RUnlock()
+
+			if count <= maxPer {
+				lsm.levelLocks[lvl].Unlock()
+				break
+			}
+
+			// Choose oldest group (first maxPer tables)
+			groupSize := maxPer
+			if count < groupSize {
+				groupSize = count
+			}
+			if groupSize < 2 {
+				lsm.levelLocks[lvl].Unlock()
+				break
+			}
+
+			// Snapshot group under read lock
+			group := make([]int, groupSize)
+			lsm.mu.RLock()
+			for i := 0; i < groupSize; i++ {
+				group[i] = int(lsm.levels[lvl][i])
+			}
+			lsm.mu.RUnlock()
+
+			// Assign new SSTable index
+			newIndex := int(lsm.GetNextSSTableIndexWithIncrement())
+
+			// Perform compaction (heavy IO), keep the level lock held to serialize same-level compactions
+			if err := sstable.Compact(group, newIndex); err != nil {
+				// If compaction fails, release and stop attempting this level for now
+				lsm.levelLocks[lvl].Unlock()
+				return
+			}
+
+			// Determine target level (next level if exists, else same level)
+			target := lvl
+			if lvl < maxLevels-1 {
+				target = lvl + 1
+			}
+
+			// Lock target level (if different) to avoid concurrent mutations there
+			if target != lvl {
+				lsm.levelLocks[target].Lock()
+			}
+
+			// Apply metadata changes atomically
+			lsm.mu.Lock()
+			// Remove first groupSize from current level
+			cur := lsm.levels[lvl]
+			if groupSize <= len(cur) {
+				cur = cur[groupSize:]
+			} else {
+				cur = []uint64{}
+			}
+			lsm.levels[lvl] = cur
+			// Append new index to target level
+			lsm.levels[target] = append(lsm.levels[target], uint64(newIndex))
+			lsm.mu.Unlock()
+
+			if target != lvl {
+				lsm.levelLocks[target].Unlock()
+			}
+
+			// Keep looping on the same level until within capacity; outer loop will then handle the target level
+			lsm.levelLocks[lvl].Unlock()
+		}
+	}
 }

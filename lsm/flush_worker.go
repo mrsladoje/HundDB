@@ -79,11 +79,12 @@ func (p *FlushPool) submitBatch(lsm *LSM, memtables []*memtable.MemTable, indexe
 				}
 				// Only append to levels when the specific position is done (ensures ordering)
 				if rr.err == nil {
+					// Commit to level 0 under its compaction lock to avoid race with compaction
+					lsm.levelLocks[0].Lock()
 					lsm.mu.Lock()
-					l0 := lsm.levels[0]
-					l0 = append(l0, uint64(rr.index))
-					lsm.levels[0] = l0
+					lsm.levels[0] = append(lsm.levels[0], uint64(rr.index))
 					lsm.mu.Unlock()
+					lsm.levelLocks[0].Unlock()
 
 					// After successful append, consider compactions
 					lsm.maybeStartCompactions()
