@@ -548,32 +548,3 @@ func (a *App) TestBloomFilter(name, item string) (bool, error) {
 	exists := bf.Contains([]byte(item))
 	return exists, nil
 }
-
-// CheckSSTableIntegrity checks the integrity of a specific SSTable
-func (a *App) CheckSSTableIntegrity(sstableIndex int) map[string]interface{} {
-	passed, corruptBlocks, fatalError, err := sstable.CheckIntegrity(sstableIndex)
-
-	// Convert corrupt blocks to a format that Wails can handle
-	corruptBlocksData := make([]map[string]interface{}, len(corruptBlocks))
-	for i, block := range corruptBlocks {
-		corruptBlocksData[i] = map[string]interface{}{
-			"filePath":   block.FilePath,
-			"blockIndex": block.BlockIndex,
-		}
-	}
-
-	result := map[string]interface{}{
-		"sstableIndex":  sstableIndex,
-		"passed":        passed,
-		"corruptBlocks": corruptBlocksData,
-		"fatalError":    fatalError,
-		"error":         nil,
-		"timestamp":     "now", // Will be set by frontend
-	}
-
-	if err != nil {
-		result["error"] = err.Error()
-	}
-
-	return result
-}
