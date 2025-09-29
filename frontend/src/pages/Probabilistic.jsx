@@ -492,7 +492,7 @@ const Probabilistic = () => {
 
             {/* Bloom Filter Using Section */}
             {activeUsingStructure === 'bloom-filter' && (
-              <div className="bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
                 <div className="bg-gradient-to-r from-pink-500 to-pink-600 p-4">
                   <h3 className="text-2xl font-bold text-white flex items-center gap-2">
                     <FaFilter />
@@ -548,7 +548,7 @@ const Probabilistic = () => {
 
             {/* SimHash Using Section */}
             {activeUsingStructure === 'simhash' && (
-              <div className="bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
                 <div className="bg-gradient-to-r from-purple-500 to-purple-600 p-4">
                   <h3 className="text-2xl font-bold text-white flex items-center gap-2">
                     <FaSearch />
@@ -602,7 +602,7 @@ const Probabilistic = () => {
 
             {/* HyperLogLog Using Section */}
             {activeUsingStructure === 'hyperloglog' && (
-              <div className="bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
                 <div className="bg-gradient-to-r from-orange-500 to-orange-600 p-4">
                   <h3 className="text-2xl font-bold text-white flex items-center gap-2">
                     <BsGraphUp />
@@ -652,7 +652,7 @@ const Probabilistic = () => {
 
             {/* Count-Min Sketch Using Section */}
             {activeUsingStructure === 'count-min-sketch' && (
-              <div className="bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
+              <div className="mb-5 bg-sloth-yellow border-4 border-sloth-brown-dark rounded-xl shadow-[6px_6px_0px_0px_rgba(107,94,74,1)] overflow-hidden">
                 <div className="bg-gradient-to-r from-blue-500 to-blue-600 p-4">
                   <h3 className="text-2xl font-bold text-white flex items-center gap-2">
                     <FaChartBar />
@@ -709,7 +709,7 @@ const Probabilistic = () => {
         )}
 
         {/* Quick Info Section */}
-        <div className="bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6">
+        <div className="mt-2 bg-gradient-to-r from-sloth-yellow to-sloth-yellow-lite border-4 border-dashed border-sloth-brown rounded-xl p-6">
           <div className="flex items-start gap-4">
             <div className="text-4xl">💡</div>
             <div className="flex-1">

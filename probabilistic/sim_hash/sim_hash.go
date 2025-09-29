@@ -204,7 +204,14 @@ func LoadSimHashFromDisk(name string) ([16]byte, error) {
 // name: identifier for the saved file (e.g., "document_123")
 // The file will be saved as "sim_hash_fingerprint_{name}"
 func (f SimHashFingerprint) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("/probabilistic/sim_hash_fingerprint_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("sim_hash_fingerprint_%s.db", name))
+
+	// Ensure the directory exists
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
 
 	// Create file data: [size (8B) + hash data (16B)]
 	totalSize := 8 + 16
@@ -226,8 +233,10 @@ func (f SimHashFingerprint) SaveToDisk(name string) error {
 // LoadFromDisk loads fingerprint data from disk into this instance
 // name: identifier for the saved file (e.g., "document_123")
 func (f *SimHashFingerprint) LoadFromDisk(name string) error {
-	filename := fmt.Sprintf("sim_hash_fingerprint_%s", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("sim_hash_fingerprint_%s.db", name))
 	blockManager := block_manager.GetBlockManager()
+
 	// Read size header (first 8 bytes)
 	sizeBytes, _, err := blockManager.ReadFromDisk(filename, 0, 8)
 	if err != nil {
@@ -235,10 +244,10 @@ func (f *SimHashFingerprint) LoadFromDisk(name string) error {
 	}
 	dataSize := binary.LittleEndian.Uint64(sizeBytes)
 	if dataSize != 16 {
-		return fmt.Errorf("invalid SimHash size: expected 16, got %d", dataSize)
+		return fmt.Errorf("invalid data size: expected 16, got %d", dataSize)
 	}
+
 	// Read hash data starting from offset 8 + CRC_SIZE
-	// (BlockManager accounts for CRC internally)
 	hashData, _, err := blockManager.ReadFromDisk(filename, 8+4, 16)
 	if err != nil {
 		return fmt.Errorf("failed to read hash data: %v", err)
