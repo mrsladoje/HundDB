@@ -183,9 +183,10 @@ func (wal *WAL) reloadMetadata() error {
 	wal.blocksInCurrentLog = binary.LittleEndian.Uint64(data[8:16])
 	wal.firstLogIndex = binary.LittleEndian.Uint64(data[16:24])
 	wal.lastLogIndex = binary.LittleEndian.Uint64(data[24:32])
+
 	wal.lastBlock, err = bm.GetBlockManager().ReadBlock(block_location.BlockLocation{
-		FilePath:   fmt.Sprintf("%s/wal_%d.bin", wal.logsPath, wal.lastLogIndex),
-		BlockIndex: uint64(wal.blocksInCurrentLog),
+		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, wal.lastLogIndex),
+		BlockIndex: uint64(wal.blocksInCurrentLog - 1),
 	})
 	if err != nil {
 		err = fmt.Errorf("WAL data could not be recovered")
