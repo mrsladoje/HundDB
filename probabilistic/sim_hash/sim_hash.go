@@ -3,6 +3,7 @@ package sim_hash
 import (
 	"encoding/binary"
 	"encoding/hex"
+
 	"fmt"
 	"hash/fnv"
 	"math/bits"
@@ -84,6 +85,7 @@ func (f *SimHashFingerprint) UnmarshalText(text []byte) error {
 
 	return nil
 }
+
 
 // GenerateWordFrequency generates a frequency map of words in the text.
 // text: the input text to be processed.
@@ -191,6 +193,7 @@ func LoadSimHashFromDisk(name string) ([16]byte, error) {
 	return result, nil
 }
 
+
 // SaveToDisk saves the SimHashFingerprint to disk with the given name
 // name: identifier for the saved file (e.g., "document_123")
 // The file will be saved as "sim_hash_fingerprint_{name}"
@@ -275,3 +278,4 @@ func LoadSimHashFingerprintFromDisk(name string) (SimHashFingerprint, error) {
 	
 	return result, nil
 }
+
