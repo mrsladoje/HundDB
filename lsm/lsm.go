@@ -29,8 +29,8 @@ type LSM struct {
 	maxTablesPerLevel uint64
 	maxMemtables      uint64
 	compactionType    string
-	lsmPath          string
-	crcSize          uint64
+	lsmPath           string
+	crcSize           uint64
 
 	// Flag to indicate if previous data was lost during loading
 	DataLost bool
@@ -149,8 +149,8 @@ func LoadLSM() *LSM {
 		maxTablesPerLevel: cfg.LSM.MaxTablesPerLevel,
 		maxMemtables:      cfg.LSM.MaxMemtables,
 		compactionType:    cfg.LSM.CompactionType,
-		lsmPath:          cfg.LSM.LSMPath,
-		crcSize:          cfg.CRC.Size,
+		lsmPath:           cfg.LSM.LSMPath,
+		crcSize:           cfg.CRC.Size,
 		// Initialize slices with config values
 		levels:    make([][]int, int(cfg.LSM.MaxLevels)),
 		memtables: make([]*memtable.MemTable, 0, int(cfg.LSM.MaxMemtables)),
@@ -222,9 +222,6 @@ func (lsm *LSM) Get(key string) (*model.Record, error, bool) {
 
 	// 2. Check cache
 	record, err := lsm.cache.Get(key)
-	if err != nil {
-		errorEncountered = true
-	}
 	if err == nil {
 		return record, nil, false
 	}
