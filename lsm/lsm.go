@@ -216,7 +216,7 @@ func LoadLSM() *LSM {
 	levelsSize := binary.LittleEndian.Uint64(levelsSizeBytes)
 
 	// Try to read the actual levels data
-	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8+uint64(CRC_SIZE), uint64(levelsSize))
+	data, _, err := blockManager.ReadFromDisk(lsm.lsmPath, 8, uint64(levelsSize))
 	if err != nil {
 		// File exists but can't read data - corruption
 		lsm.mu.Lock()
@@ -905,4 +905,19 @@ func removeFirstOccurrence(s []uint64, val uint64) []uint64 {
 		}
 	}
 	return s
+}
+
+// GetLevels returns a copy of the current SSTable levels structure
+func (lsm *LSM) GetLevels() [][]int {
+	// Create a deep copy to prevent external modification
+	levelsCopy := make([][]int, len(lsm.levels))
+	for i, level := range lsm.levels {
+		if level != nil {
+			levelsCopy[i] = make([]int, len(level))
+			for j, v := range level {
+				levelsCopy[i][j] = int(v)
+			}
+		}
+	}
+	return levelsCopy
 }
