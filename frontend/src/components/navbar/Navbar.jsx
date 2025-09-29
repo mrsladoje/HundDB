@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { FaShield, FaX } from "react-icons/fa6";
-import { FaHome, FaPaw } from "react-icons/fa";
+import { FaHome, FaPaw, FaDice } from "react-icons/fa";
 import { MdMenu } from "react-icons/md";
 import { FiSettings } from "react-icons/fi";
 import NavButton from "@/components/navbar/NavButton.jsx";
@@ -83,6 +83,13 @@ export const Navbar = () => {
       icon: FaShield,
       description: "Merkle tree validation",
       to: "/data"
+    },
+    {
+      id: "probabilistic",
+      label: "Probabilistic",
+      icon: FaDice,
+      description: "Probabilistic data structures",
+      to: "/probabilistic"
     },
   ];
 

@@ -63,12 +63,12 @@ func (a *App) CheckExistingData() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	
+
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(configData), &config); err != nil {
 		return false, err
 	}
-	
+
 	// Check LSM path - only if file exists AND has size > 0
 	lsmConfig, ok := config["lsm"].(map[string]interface{})
 	if ok {
@@ -78,8 +78,8 @@ func (a *App) CheckExistingData() (bool, error) {
 			}
 		}
 	}
-	
-	// Check WAL path - only if file exists AND has size > 0  
+
+	// Check WAL path - only if file exists AND has size > 0
 	walConfig, ok := config["wal"].(map[string]interface{})
 	if ok {
 		if walPath, exists := walConfig["wal_path"].(string); exists && walPath != "" {
@@ -88,7 +88,7 @@ func (a *App) CheckExistingData() (bool, error) {
 			}
 		}
 	}
-	
+
 	// Check for SSTable files with actual data
 	if lsmConfig != nil {
 		if lsmPath, exists := lsmConfig["lsm_path"].(string); exists && lsmPath != "" {
@@ -98,9 +98,9 @@ func (a *App) CheckExistingData() (bool, error) {
 					if !entry.IsDir() {
 						name := entry.Name()
 						// Check for database files with actual size
-						if strings.HasSuffix(name, ".sst") || 
-						   strings.HasSuffix(name, ".db") || 
-						   strings.Contains(name, "lsm") {
+						if strings.HasSuffix(name, ".sst") ||
+							strings.HasSuffix(name, ".db") ||
+							strings.Contains(name, "lsm") {
 							fullPath := filepath.Join(dir, name)
 							if stat, err := os.Stat(fullPath); err == nil && stat.Size() > 0 {
 								return true, nil
@@ -111,7 +111,7 @@ func (a *App) CheckExistingData() (bool, error) {
 			}
 		}
 	}
-	
+
 	return false, nil
 }
 
@@ -270,29 +270,29 @@ func isKeyNotFoundError(err error) bool {
 // configJSON: JSON string containing the complete configuration
 func (a *App) SaveConfig(configJSON string) error {
 	configPath := "utils/config/app.json"
-	
+
 	// Validate JSON format by trying to parse it
 	var config map[string]interface{}
 	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
 		return fmt.Errorf("invalid JSON format: %w", err)
 	}
-	
+
 	// Write the configuration to file
 	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
-	
+
 	return nil
 }
 
 // GetConfig retrieves the current configuration from app.json file
 func (a *App) GetConfig() (string, error) {
 	configPath := "utils/config/app.json"
-	
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read config file: %w", err)
 	}
-	
+
 	return string(data), nil
 }

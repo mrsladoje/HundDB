@@ -169,48 +169,48 @@ func Deserialize(data []byte) *HLL {
 
 // SaveToDisk saves the HyperLogLog to disk with the given name
 func (hll *HLL) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("hyperloglog_%s", name)
-	
+	filename := fmt.Sprintf("hyperloglog_%s.db", name)
+
 	// Serialize the HLL data
 	serializedData := hll.Serialize()
-	
+
 	// Create file data: [size (8B) + serialized data]
 	totalSize := 8 + len(serializedData)
 	fileData := make([]byte, totalSize)
-	
+
 	// Write size header
 	binary.LittleEndian.PutUint64(fileData[0:8], uint64(len(serializedData)))
-	
+
 	// Copy serialized data
 	copy(fileData[8:], serializedData)
-	
+
 	// Add CRC blocks and write to disk
 	dataWithCRC := crc_util.AddCRCsToData(fileData)
-	
+
 	blockManager := block_manager.GetBlockManager()
 	return blockManager.WriteToDisk(dataWithCRC, filename, 0)
 }
 
 // LoadHyperLogLogFromDisk loads a HyperLogLog from disk with the given name
 func LoadHyperLogLogFromDisk(name string) (*HLL, error) {
-	filename := fmt.Sprintf("hyperloglog_%s", name)
+	filename := fmt.Sprintf("hyperloglog_%s.db", name)
 	blockManager := block_manager.GetBlockManager()
-	
+
 	// Read size header (first 8 bytes)
 	sizeBytes, _, err := blockManager.ReadFromDisk(filename, 0, 8)
 	if err != nil {
 		return nil, fmt.Errorf("file not found or corrupted: %v", err)
 	}
-	
+
 	dataSize := binary.LittleEndian.Uint64(sizeBytes)
-	
+
 	// Read serialized data starting from offset 8 + CRC_SIZE
 	// (BlockManager accounts for CRC internally)
 	serializedData, _, err := blockManager.ReadFromDisk(filename, 8+4, dataSize)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read data: %v", err)
 	}
-	
+
 	// Deserialize and return
 	return Deserialize(serializedData), nil
 }

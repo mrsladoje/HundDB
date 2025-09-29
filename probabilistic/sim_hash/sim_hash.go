@@ -3,6 +3,7 @@ package sim_hash
 import (
 	"encoding/binary"
 	"encoding/hex"
+
 	"fmt"
 	"hash/fnv"
 	"math/bits"
@@ -174,18 +175,15 @@ func LoadSimHashFromDisk(name string) ([16]byte, error) {
 	if err != nil {
 		return result, fmt.Errorf("file not found or corrupted: %v", err)
 	}
-
 	dataSize := binary.LittleEndian.Uint64(sizeBytes)
 	if dataSize != 16 {
 		return result, fmt.Errorf("invalid SimHash size: expected 16, got %d", dataSize)
 	}
-
 	// Read hash data starting from offset 8
 	hashData, _, err := blockManager.ReadFromDisk(filename, 8, 16)
 	if err != nil {
 		return result, fmt.Errorf("failed to read hash data: %v", err)
 	}
-
 	// Copy to result array
 	copy(result[:], hashData)
 	return result, nil
@@ -219,18 +217,15 @@ func (f SimHashFingerprint) SaveToDisk(name string) error {
 func (f *SimHashFingerprint) LoadFromDisk(name string) error {
 	filename := fmt.Sprintf("sim_hash_fingerprint_%s", name)
 	blockManager := block_manager.GetBlockManager()
-
 	// Read size header (first 8 bytes)
 	sizeBytes, _, err := blockManager.ReadFromDisk(filename, 0, 8)
 	if err != nil {
 		return fmt.Errorf("file not found or corrupted: %v", err)
 	}
-
 	dataSize := binary.LittleEndian.Uint64(sizeBytes)
 	if dataSize != 16 {
 		return fmt.Errorf("invalid SimHash size: expected 16, got %d", dataSize)
 	}
-
 	// Read hash data starting from offset 8 + CRC_SIZE
 	// (BlockManager accounts for CRC internally)
 	hashData, _, err := blockManager.ReadFromDisk(filename, 8+4, 16)
@@ -251,18 +246,15 @@ func LoadSimHashFingerprintFromDisk(name string) (SimHashFingerprint, error) {
 	filename := fmt.Sprintf("sim_hash_fingerprint_%s", name)
 	blockManager := block_manager.GetBlockManager()
 	var result SimHashFingerprint
-
 	// Read size header (first 8 bytes)
 	sizeBytes, _, err := blockManager.ReadFromDisk(filename, 0, 8)
 	if err != nil {
 		return result, fmt.Errorf("file not found or corrupted: %v", err)
 	}
-
 	dataSize := binary.LittleEndian.Uint64(sizeBytes)
 	if dataSize != 16 {
 		return result, fmt.Errorf("invalid SimHash size: expected 16, got %d", dataSize)
 	}
-
 	// Read hash data starting from offset 8 + CRC_SIZE
 	// (BlockManager accounts for CRC internally)
 	hashData, _, err := blockManager.ReadFromDisk(filename, 8+4, 16)

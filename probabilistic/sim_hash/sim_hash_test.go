@@ -76,7 +76,6 @@ func TestSimHashFingerprint(t *testing.T) {
 	// Test NewSimHashFingerprint
 	hash := [16]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
 	fingerprint := NewSimHashFingerprint(hash)
-
 	if fingerprint.Hash != hash {
 		t.Errorf("NewSimHashFingerprint failed: expected %x, got %x", hash, fingerprint.Hash)
 	}
@@ -87,7 +86,6 @@ func TestNewSimHashFingerprintFromText(t *testing.T) {
 	text := "hello world hello"
 	fingerprint := NewSimHashFingerprintFromText(text)
 	expectedHash := SimHash(text)
-
 	if fingerprint.Hash != expectedHash {
 		t.Errorf("NewSimHashFingerprintFromText failed: expected %x, got %x", expectedHash, fingerprint.Hash)
 	}
@@ -98,7 +96,6 @@ func TestSimHashFingerprintString(t *testing.T) {
 	hash := [16]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
 	fingerprint := NewSimHashFingerprint(hash)
 	expected := "123456789abcdef0123456789abcdef0"
-
 	result := fingerprint.String()
 	if result != expected {
 		t.Errorf("String() failed: expected %s, got %s", expected, result)
@@ -161,20 +158,17 @@ func TestSimHashFingerprintHammingDistance(t *testing.T) {
 func TestSimHashFingerprintMarshalUnmarshalText(t *testing.T) {
 	original := [16]byte{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
 	fingerprint := NewSimHashFingerprint(original)
-
 	// Test MarshalText
 	marshaled, err := fingerprint.MarshalText()
 	if err != nil {
 		t.Fatalf("MarshalText() failed: %v", err)
 	}
-
 	// Test UnmarshalText
 	var unmarshaled SimHashFingerprint
 	err = unmarshaled.UnmarshalText(marshaled)
 	if err != nil {
 		t.Fatalf("UnmarshalText() failed: %v", err)
 	}
-
 	if !fingerprint.Equal(unmarshaled) {
 		t.Errorf("Marshal/Unmarshal round trip failed: expected %x, got %x", fingerprint.Hash, unmarshaled.Hash)
 	}
@@ -194,7 +188,6 @@ func TestSimHashFingerprintSaveLoadDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SaveToDisk failed: %v", err)
 	}
-
 	// Test LoadSimHashFingerprintFromDisk
 	loaded, err := LoadSimHashFingerprintFromDisk("test_fingerprint")
 	if err != nil {
@@ -211,7 +204,6 @@ func TestSimHashFingerprintSaveLoadDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFromDisk method failed: %v", err)
 	}
-
 	if !original.Equal(instance) {
 		t.Errorf("LoadFromDisk method round trip failed: expected %x, got %x", original.Hash, instance.Hash)
 	}
@@ -224,26 +216,22 @@ func TestSimHashFingerprintJSONMarshal(t *testing.T) {
 		Title       string             `json:"title"`
 		Fingerprint SimHashFingerprint `json:"simhash"`
 	}
-
 	original := TestDoc{
 		ID:          "doc-123",
 		Title:       "Test Document",
 		Fingerprint: NewSimHashFingerprintFromText("this is a test document"),
 	}
-
 	// Marshal to JSON
 	jsonData, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("JSON Marshal failed: %v", err)
 	}
-
 	// Unmarshal from JSON
 	var unmarshaled TestDoc
 	err = json.Unmarshal(jsonData, &unmarshaled)
 	if err != nil {
 		t.Fatalf("JSON Unmarshal failed: %v", err)
 	}
-
 	// Verify round trip
 	if unmarshaled.ID != original.ID {
 		t.Errorf("JSON round trip failed for ID: expected %s, got %s", original.ID, unmarshaled.ID)
