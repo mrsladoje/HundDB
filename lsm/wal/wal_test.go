@@ -236,7 +236,7 @@ func TestWAL_RecordFitsInBlock(t *testing.T) {
 
 	initialOffset := wal.offsetInBlock
 
-	err := wal.WriteRecord(smallRecord)
+	_, err := wal.WriteRecord(smallRecord)
 	if err != nil {
 		t.Fatalf("Failed to write small record: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestWAL_SingleRecordPerBlock(t *testing.T) {
 	// Create a record that takes about half of a block
 	mediumRecord := createTestRecord("medium_key", 2000)
 
-	err := wal.WriteRecord(mediumRecord)
+	_, err := wal.WriteRecord(mediumRecord)
 	if err != nil {
 		t.Fatalf("Failed to write medium record: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestWAL_SingleRecordPerBlock(t *testing.T) {
 	// Write a second record that won't fit in the remaining space
 	largeRecord := createTestRecord("large_key", 2000)
 
-	err = wal.WriteRecord(largeRecord)
+	_, err = wal.WriteRecord(largeRecord)
 	if err != nil {
 		t.Fatalf("Failed to write large record: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestWAL_MultipleRecordsInBlock(t *testing.T) {
 
 	// Write all records
 	for _, rec := range records {
-		err := wal.WriteRecord(rec)
+		_, err := wal.WriteRecord(rec)
 		if err != nil {
 			t.Fatalf("Failed to write record %s: %v", rec.Key, err)
 		}
@@ -401,7 +401,7 @@ func TestWAL_RecordSpansMultipleBlocks(t *testing.T) {
 
 	initialBlocks := wal.blocksWrittenInLastLog
 
-	err := wal.WriteRecord(largeRecord)
+	_, err := wal.WriteRecord(largeRecord)
 	if err != nil {
 		t.Fatalf("Failed to write large spanning record: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestWAL_RecordSpansThreeBlocks(t *testing.T) {
 
 	initialBlocks := wal.blocksWrittenInLastLog
 
-	err := wal.WriteRecord(tripleSpanRecord)
+	_, err := wal.WriteRecord(tripleSpanRecord)
 	if err != nil {
 		t.Fatalf("Failed to write triple-spanning record: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestWAL_RecordLargerThanWholeLog(t *testing.T) {
 
 	t.Logf("Creating record of size %d bytes, remaining log capacity: %d blocks", len(hugeRecord.Serialize()), remainingBlocks)
 
-	err := wal.WriteRecord(hugeRecord)
+	_, err := wal.WriteRecord(hugeRecord)
 	if err != nil {
 		t.Fatalf("Failed to write huge record: %v", err)
 	}
@@ -553,7 +553,7 @@ func TestWAL_MultipleLargeRecords(t *testing.T) {
 
 	// Write all large records
 	for _, rec := range largeRecords {
-		err := wal.WriteRecord(rec)
+		_, err := wal.WriteRecord(rec)
 		if err != nil {
 			t.Fatalf("Failed to write large record %s: %v", rec.Key, err)
 		}
@@ -599,7 +599,7 @@ func TestWAL_DataFragmentation(t *testing.T) {
 
 	for _, tc := range testCases {
 		record := createTestRecord(tc.key, tc.size)
-		err := wal.WriteRecord(record)
+		_, err := wal.WriteRecord(record)
 		if err != nil {
 			t.Fatalf("Failed to write record %s: %v", tc.key, err)
 		}
@@ -651,7 +651,7 @@ func TestWAL_ExactBlockBoundary(t *testing.T) {
 	totalRecordSize := HEADER_TOTAL_SIZE + len(exactFitRecord.Serialize())
 	t.Logf("Exact fit record total size: %d, block size: %d, available: %d", totalRecordSize, BLOCK_SIZE, BLOCK_SIZE-crcSize)
 
-	err := wal.WriteRecord(exactFitRecord)
+	_, err := wal.WriteRecord(exactFitRecord)
 	if err != nil {
 		t.Fatalf("Failed to write exact-fit record: %v", err)
 	}
@@ -664,7 +664,7 @@ func TestWAL_ExactBlockBoundary(t *testing.T) {
 
 	// Write another record to verify block handling
 	smallRecord := createTestRecord("after_exact", 100)
-	err = wal.WriteRecord(smallRecord)
+	_, err = wal.WriteRecord(smallRecord)
 	if err != nil {
 		t.Fatalf("Failed to write record after exact fit: %v", err)
 	}
@@ -692,12 +692,12 @@ func TestWAL_TombstoneRecords(t *testing.T) {
 	normalRecord := createTestRecord("key_to_delete", 200)
 	tombstoneRecord := createTombstoneRecord("key_to_delete")
 
-	err := wal.WriteRecord(normalRecord)
+	_, err := wal.WriteRecord(normalRecord)
 	if err != nil {
 		t.Fatalf("Failed to write normal record: %v", err)
 	}
 
-	err = wal.WriteRecord(tombstoneRecord)
+	_, err = wal.WriteRecord(tombstoneRecord)
 	if err != nil {
 		t.Fatalf("Failed to write tombstone record: %v", err)
 	}
@@ -743,7 +743,7 @@ func TestWAL_EmptyRecords(t *testing.T) {
 
 	emptyRecord := createTestRecordWithValue("empty_key", []byte{})
 
-	err := wal.WriteRecord(emptyRecord)
+	_, err := wal.WriteRecord(emptyRecord)
 	if err != nil {
 		t.Fatalf("Failed to write empty record: %v", err)
 	}
@@ -787,7 +787,7 @@ func TestWAL_LogRollover(t *testing.T) {
 
 	for i := 0; i < recordsPerLog; i++ {
 		record := createTestRecord(fmt.Sprintf("log1_record_%d", i), maxPayloadPerBlock)
-		err := wal.WriteRecord(record)
+		_, err := wal.WriteRecord(record)
 		if err != nil {
 			t.Fatalf("Failed to write record %d: %v", i, err)
 		}
@@ -798,7 +798,7 @@ func TestWAL_LogRollover(t *testing.T) {
 
 	// Write one more record - this should definitely be on the new log
 	rolloverRecord := createTestRecord("rollover_record", maxPayloadPerBlock)
-	err := wal.WriteRecord(rolloverRecord)
+	_, err := wal.WriteRecord(rolloverRecord)
 	if err != nil {
 		t.Fatalf("Failed to write rollover record: %v", err)
 	}
@@ -848,7 +848,7 @@ func TestWAL_CorruptionDetection(t *testing.T) {
 	wal, _ := setupTestWAL(t)
 
 	record := createTestRecord("corruption_test", 1000)
-	err := wal.WriteRecord(record)
+	_, err := wal.WriteRecord(record)
 	if err != nil {
 		t.Fatalf("Failed to write record: %v", err)
 	}
@@ -931,7 +931,7 @@ func TestWAL_RecordLargerThanEntireLog(t *testing.T) {
 	t.Logf("Writing 20 large records of ~%d bytes each", maxPayloadPerBlock*3)
 
 	for i, rec := range records {
-		err := wal.WriteRecord(rec)
+		_, err := wal.WriteRecord(rec)
 		if err != nil {
 			t.Fatalf("Failed to write record %d: %v", i, err)
 		}
@@ -986,7 +986,7 @@ func TestWAL_MultipleRecordsLargerThanLog(t *testing.T) {
 	// Write all large records
 	for i, rec := range largeRecords {
 		t.Logf("Writing large record %d of size %d", i, len(rec.Serialize()))
-		err := wal.WriteRecord(rec)
+		_, err := wal.WriteRecord(rec)
 		if err != nil {
 			t.Fatalf("Failed to write large record %d: %v", i, err)
 		}
@@ -1052,7 +1052,7 @@ func TestWAL_ExtremeLargeRecord(t *testing.T) {
 	t.Logf("Writing %d records of varying sizes", len(records))
 
 	for i, rec := range records {
-		err := wal.WriteRecord(rec)
+		_, err := wal.WriteRecord(rec)
 		if err != nil {
 			t.Fatalf("Failed to write varied size record %d: %v", i, err)
 		}
@@ -1125,7 +1125,7 @@ func TestWAL_RecordExactlyFillsOneBlock(t *testing.T) {
 
 	initialBlocks := wal.blocksWrittenInLastLog
 
-	err := wal.WriteRecord(exactRecord)
+	_, err := wal.WriteRecord(exactRecord)
 	if err != nil {
 		t.Fatalf("Failed to write exact block record: %v", err)
 	}
@@ -1201,7 +1201,7 @@ func TestWAL_RecordExactlyFillsMultipleBlocks(t *testing.T) {
 
 	initialBlocks := wal.blocksWrittenInLastLog
 
-	err := wal.WriteRecord(exactRecord)
+	_, err := wal.WriteRecord(exactRecord)
 	if err != nil {
 		t.Fatalf("Failed to write 3-block exact record: %v", err)
 	}
@@ -1255,7 +1255,7 @@ func TestWAL_RecordExactlyFillsOneLog(t *testing.T) {
 
 	initialLogIndex := wal.lastLogIndex
 
-	err := wal.WriteRecord(exactRecord)
+	_, err := wal.WriteRecord(exactRecord)
 	if err != nil {
 		t.Fatalf("Failed to write one-log exact record: %v", err)
 	}
@@ -1296,7 +1296,7 @@ func TestWAL_RecordLargerThanOneLogByOneByte(t *testing.T) {
 
 	initialLogIndex := wal.lastLogIndex
 
-	err := wal.WriteRecord(overRecord)
+	_, err := wal.WriteRecord(overRecord)
 	if err != nil {
 		t.Fatalf("Failed to write over-by-one-byte record: %v", err)
 	}
@@ -1355,7 +1355,7 @@ func TestWAL_BlockAndLogBoundaryStress(t *testing.T) {
 			initialLogIndex := testWal.lastLogIndex
 			initialBlocks := testWal.blocksWrittenInLastLog
 
-			err := testWal.WriteRecord(record)
+			_, err := testWal.WriteRecord(record)
 			if err != nil {
 				t.Fatalf("Failed to write %s record: %v", tc.name, err)
 			}
@@ -1421,17 +1421,17 @@ func TestWAL_GracefulShutdownBehavior(t *testing.T) {
 	record2 := createTestRecord("key2", 200)
 	record3 := createTestRecord("key3", 150)
 
-	err := wal.WriteRecord(record1)
+	_, err := wal.WriteRecord(record1)
 	if err != nil {
 		t.Fatalf("Failed to write record1: %v", err)
 	}
 
-	err = wal.WriteRecord(record2)
+	_, err = wal.WriteRecord(record2)
 	if err != nil {
 		t.Fatalf("Failed to write record2: %v", err)
 	}
 
-	err = wal.WriteRecord(record3)
+	_, err = wal.WriteRecord(record3)
 	if err != nil {
 		t.Fatalf("Failed to write record3: %v", err)
 	}
@@ -1482,7 +1482,7 @@ func TestWAL_GracefulShutdownBehavior(t *testing.T) {
 
 	// The reconstructed WAL should be able to continue writing from where it left off
 	record4 := createTestRecord("key4", 300)
-	err = reconstructedWAL.WriteRecord(record4)
+	_, err = reconstructedWAL.WriteRecord(record4)
 	if err != nil {
 		t.Fatalf("Failed to write to reconstructed WAL: %v", err)
 	}
@@ -1516,15 +1516,15 @@ func TestWAL_CrashScenarioBehavior(t *testing.T) {
 	record2 := createTestRecord("key2", 600) // Small record - stays in lastBlock
 	record3 := createTestRecord("key3", 400) // Small record - stays in lastBlock
 
-	err := wal.WriteRecord(record1)
+	_, err := wal.WriteRecord(record1)
 	if err != nil {
 		t.Fatalf("Failed to write record1: %v", err)
 	}
-	err = wal.WriteRecord(record2)
+	_, err = wal.WriteRecord(record2)
 	if err != nil {
 		t.Fatalf("Failed to write record2: %v", err)
 	}
-	err = wal.WriteRecord(record3)
+	_, err = wal.WriteRecord(record3)
 	if err != nil {
 		t.Fatalf("Failed to write record3: %v", err)
 	}
@@ -1609,7 +1609,7 @@ func TestWAL_CrashScenarioBehavior(t *testing.T) {
 
 	// The crash recovery should position us to continue writing
 	record4 := createTestRecord("key4_after_crash", 100)
-	err = crashedWAL.WriteRecord(record4)
+	_, err = crashedWAL.WriteRecord(record4)
 	if err != nil {
 		t.Fatalf("Failed to write after crash recovery: %v", err)
 	}
@@ -1734,7 +1734,7 @@ func TestWAL_FlushBehaviorExplanation(t *testing.T) {
 		largeRecord := createTestRecord("large_record", 5000) // > BLOCK_SIZE
 
 		blocksBefore := wal.blocksWrittenInLastLog
-		err := wal.WriteRecord(largeRecord)
+		_, err := wal.WriteRecord(largeRecord)
 		if err != nil {
 			t.Fatalf("Failed to write large record: %v", err)
 		}
@@ -1758,7 +1758,7 @@ func TestWAL_FlushBehaviorExplanation(t *testing.T) {
 		blocksBefore := wal.blocksWrittenInLastLog
 		offsetBefore := wal.offsetInBlock
 
-		err := wal.WriteRecord(record)
+		_, err := wal.WriteRecord(record)
 		if err != nil {
 			t.Fatalf("Failed to write boundary record: %v", err)
 		}
@@ -1795,7 +1795,7 @@ func TestWAL_CompleteScenarioWithFlushAndCrash(t *testing.T) {
 	// Step 1: Write a large record that forces flush
 	t.Logf("=== STEP 1: Write large record (will force flush) ===")
 	largeRecord := createTestRecord("large_data", 4500) // Forces flush
-	err := wal.WriteRecord(largeRecord)
+	_, err := wal.WriteRecord(largeRecord)
 	if err != nil {
 		t.Fatalf("Failed to write large record: %v", err)
 	}
@@ -2051,7 +2051,7 @@ func TestWAL_BlockIncrementBehavior(t *testing.T) {
 	// Write a large record that will definitely cause a block flush
 	largeRecord := createTestRecord("large_key", 5000) // Definitely > BLOCK_SIZE (4096)
 
-	err := wal.WriteRecord(largeRecord)
+	_, err := wal.WriteRecord(largeRecord)
 	if err != nil {
 		t.Fatalf("Failed to write large record: %v", err)
 	}
@@ -2069,7 +2069,7 @@ func TestWAL_BlockIncrementBehavior(t *testing.T) {
 	previousBlocks := wal.blocksWrittenInLastLog
 	anotherRecord := createTestRecord("another_key", 2000)
 
-	err = wal.WriteRecord(anotherRecord)
+	_, err = wal.WriteRecord(anotherRecord)
 	if err != nil {
 		t.Fatalf("Failed to write another record: %v", err)
 	}
@@ -2103,7 +2103,7 @@ func TestWAL_MetadataSyncBehavior(t *testing.T) {
 	// Write some records to establish state
 	for i := uint64(0); i < 5; i++ {
 		record := createTestRecord(fmt.Sprintf("key_%d", i), 300+i*100)
-		err := wal.WriteRecord(record)
+		_, err := wal.WriteRecord(record)
 		if err != nil {
 			t.Fatalf("Failed to write record %d: %v", i, err)
 		}
@@ -2167,7 +2167,7 @@ func TestWAL_LogTransitionBehavior(t *testing.T) {
 	for i := 0; i < recordsNeeded; i++ {
 		// Use large records (> BLOCK_SIZE) to force multiple blocks per record
 		record := createTestRecord(fmt.Sprintf("large_key_%d", i), 5000) // Forces ~2 blocks
-		err := wal.WriteRecord(record)
+		_, err := wal.WriteRecord(record)
 		if err != nil {
 			t.Fatalf("Failed to write record %d: %v", i, err)
 		}
@@ -2226,7 +2226,7 @@ func TestWAL_DetectBehavioralIssues(t *testing.T) {
 		recordSizes := []uint64{10, 100, 1000, 50, 2000, 5, 500}
 		for i, size := range recordSizes {
 			record := createTestRecord(fmt.Sprintf("mixed_%d", i), size)
-			err := wal.WriteRecord(record)
+			_, err := wal.WriteRecord(record)
 			if err != nil {
 				t.Errorf("Failed to write mixed record %d (size %d): %v", i, size, err)
 			}
@@ -2298,7 +2298,7 @@ func TestWAL_DetectBehavioralIssues(t *testing.T) {
 			t.Errorf("Failed reconstruction: %v", err)
 		}
 
-		err = newWAL.WriteRecord(createTestRecord("continuous_2", 200))
+		_, err = newWAL.WriteRecord(createTestRecord("continuous_2", 200))
 		if err != nil {
 			t.Errorf("Failed to write after reconstruction: %v", err)
 		}
@@ -2326,7 +2326,7 @@ func TestWAL_RecoverMemtables(t *testing.T) {
 
 	// Write all records
 	for _, rec := range testRecords {
-		err := wal.WriteRecord(rec)
+		_, err := wal.WriteRecord(rec)
 		if err != nil {
 			t.Fatalf("Failed to write record %s: %v", rec.Key, err)
 		}
