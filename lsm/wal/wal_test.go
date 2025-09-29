@@ -8,6 +8,7 @@ import (
 	"time"
 
 	bm "hunddb/lsm/block_manager"
+	memtable "hunddb/lsm/memtable"
 	block_location "hunddb/model/block_location"
 	record "hunddb/model/record"
 )
@@ -1324,4 +1325,446 @@ func TestWAL_BlockAndLogBoundaryStress(t *testing.T) {
 				float64(serializedSize)/(float64(actualBlocks)*float64(availableSpacePerBlock))*100)
 		})
 	}
+}
+
+// ============================================================================
+// WAL RECOVERY TESTS
+// ============================================================================
+
+// TestWAL_RecoverySingleRecord tests recovery of a single complete record
+func TestWAL_RecoverySingleRecord(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Write a single record
+	originalRecord := createTestRecord("test_key", 100)
+	err := wal.WriteRecord(originalRecord)
+	if err != nil {
+		t.Fatalf("Failed to write record: %v", err)
+	}
+
+	// Close to flush all data to disk before recovery
+	t.Logf("Before close: offsetInBlock=%d, blocksInCurrentLog=%d", wal.offsetInBlock, wal.blocksInCurrentLog)
+	err = wal.Close()
+	if err != nil {
+		t.Fatalf("Failed to close WAL: %v", err)
+	}
+	t.Logf("After close: metadata should be synced")
+
+	// Create fresh memtable for recovery using the actual memtable type
+	memtableInstance, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable: %v", err)
+	}
+
+	// Create a new WAL instance pointing to the same directory for recovery
+	recoveryWAL, err := BuildWAL()
+	if err != nil {
+		t.Fatalf("Failed to create recovery WAL: %v", err)
+	}
+
+	// Perform recovery
+	err = recoveryWAL.RecoverMemtables([]*memtable.MemTable{memtableInstance})
+	if err != nil {
+		t.Fatalf("Failed to recover memtable: %v", err)
+	}
+
+	// Verify recovery
+	recoveredRecord := memtableInstance.Get("test_key")
+	if recoveredRecord == nil {
+		t.Fatalf("Record not found after recovery")
+	}
+
+	if recoveredRecord.Key != originalRecord.Key {
+		t.Errorf("Key mismatch: expected %s, got %s", originalRecord.Key, recoveredRecord.Key)
+	}
+
+	if len(recoveredRecord.Value) != len(originalRecord.Value) {
+		t.Errorf("Value length mismatch: expected %d, got %d", len(originalRecord.Value), len(recoveredRecord.Value))
+	}
+
+	t.Logf("Successfully recovered record: key=%s, value_len=%d", recoveredRecord.Key, len(recoveredRecord.Value))
+}
+
+// TestWAL_RecoveryMultipleRecords tests recovery of multiple records
+func TestWAL_RecoveryMultipleRecords(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Write multiple records with different sizes
+	testRecords := map[string]int{
+		"small_record":  50,
+		"medium_record": 500,
+		"large_record":  2000,
+		"tiny_record":   1,
+		"empty_record":  0,
+	}
+
+	for key, size := range testRecords {
+		record := createTestRecord(key, size)
+		err := wal.WriteRecord(record)
+		if err != nil {
+			t.Fatalf("Failed to write record %s: %v", key, err)
+		}
+	}
+
+	// Close to flush all data to disk before recovery
+	err := wal.Close()
+	if err != nil {
+		t.Fatalf("Failed to close WAL: %v", err)
+	}
+
+	// Create fresh memtable for recovery
+	memtableInstance, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable: %v", err)
+	}
+
+	// Create new WAL instance for recovery
+	recoveryWAL, err := BuildWAL()
+	if err != nil {
+		t.Fatalf("Failed to create recovery WAL: %v", err)
+	}
+
+	// Use recovery WAL for recovery
+	err = recoveryWAL.RecoverMemtables([]*memtable.MemTable{memtableInstance})
+	if err != nil {
+		t.Fatalf("Failed to recover memtable: %v", err)
+	}
+
+	// Verify all records were recovered
+	for key, expectedSize := range testRecords {
+		recoveredRecord := memtableInstance.Get(key)
+		if recoveredRecord == nil {
+			t.Errorf("Record %s not found after recovery", key)
+			continue
+		}
+
+		if len(recoveredRecord.Value) != expectedSize {
+			t.Errorf("Record %s value length mismatch: expected %d, got %d",
+				key, expectedSize, len(recoveredRecord.Value))
+		}
+	}
+
+	// Verify exact count
+	if memtableInstance.Size() != len(testRecords) {
+		t.Errorf("Memtable size mismatch: expected %d, got %d", len(testRecords), memtableInstance.Size())
+	}
+
+	t.Logf("Successfully recovered %d records", len(testRecords))
+}
+
+// TestWAL_RecoveryFragmentedRecord tests recovery of fragmented records
+func TestWAL_RecoveryFragmentedRecord(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Create a record that will definitely be fragmented (larger than one block)
+	largeSize := 8000 // Much larger than block capacity
+	originalRecord := createTestRecord("fragmented_key", largeSize)
+
+	err := wal.WriteRecord(originalRecord)
+	if err != nil {
+		t.Fatalf("Failed to write fragmented record: %v", err)
+	}
+
+	// Close to flush all data to disk before recovery
+	err = wal.Close()
+	if err != nil {
+		t.Fatalf("Failed to close WAL: %v", err)
+	}
+
+	// Create fresh memtable for recovery
+	memtableInstance, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable: %v", err)
+	}
+
+	// Create new WAL instance for recovery
+	recoveryWAL, err := BuildWAL()
+	if err != nil {
+		t.Fatalf("Failed to create recovery WAL: %v", err)
+	}
+
+	// Use recovery WAL for recovery
+	err = recoveryWAL.RecoverMemtables([]*memtable.MemTable{memtableInstance})
+	if err != nil {
+		t.Fatalf("Failed to recover fragmented record: %v", err)
+	}
+
+	// Verify recovery
+	recoveredRecord := memtableInstance.Get("fragmented_key")
+	if recoveredRecord == nil {
+		t.Fatalf("Fragmented record not found after recovery")
+	}
+
+	if len(recoveredRecord.Value) != largeSize {
+		t.Errorf("Fragmented record value length mismatch: expected %d, got %d",
+			largeSize, len(recoveredRecord.Value))
+	}
+
+	// Verify the actual content integrity
+	for i := 0; i < largeSize; i++ {
+		expected := byte(i % 256)
+		if recoveredRecord.Value[i] != expected {
+			t.Errorf("Content mismatch at position %d: expected %d, got %d",
+				i, expected, recoveredRecord.Value[i])
+			break
+		}
+	}
+
+	t.Logf("Successfully recovered fragmented record of size %d bytes", largeSize)
+}
+
+// TestWAL_RecoveryTombstoneRecords tests recovery of tombstone records
+func TestWAL_RecoveryTombstoneRecords(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Write a regular record first
+	regularRecord := createTestRecord("test_key", 100)
+	err := wal.WriteRecord(regularRecord)
+	if err != nil {
+		t.Fatalf("Failed to write regular record: %v", err)
+	}
+
+	// Write a tombstone record for the same key
+	tombstoneRecord := createTombstoneRecord("test_key")
+	err = wal.WriteRecord(tombstoneRecord)
+	if err != nil {
+		t.Fatalf("Failed to write tombstone record: %v", err)
+	}
+
+	// Close to flush all data to disk before recovery
+	err = wal.Close()
+	if err != nil {
+		t.Fatalf("Failed to close WAL: %v", err)
+	}
+
+	// Create fresh memtable for recovery
+	memtableInstance, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable: %v", err)
+	}
+
+	// Create new WAL instance for recovery
+	recoveryWAL, err := BuildWAL()
+	if err != nil {
+		t.Fatalf("Failed to create recovery WAL: %v", err)
+	}
+
+	// Use recovery WAL for recovery
+	err = recoveryWAL.RecoverMemtables([]*memtable.MemTable{memtableInstance})
+	if err != nil {
+		t.Fatalf("Failed to recover memtable with tombstones: %v", err)
+	}
+
+	// Verify the key is tombstoned (should return nil on Get)
+	recoveredRecord := memtableInstance.Get("test_key")
+	if recoveredRecord != nil {
+		t.Errorf("Expected tombstoned key to return nil, but got record with value length %d",
+			len(recoveredRecord.Value))
+	}
+
+	// But total entries should include the tombstoned entry
+	if memtableInstance.TotalEntries() == 0 {
+		t.Errorf("Expected non-zero total entries including tombstones")
+	}
+
+	t.Logf("Successfully verified tombstone recovery: TotalEntries=%d, Size=%d",
+		memtableInstance.TotalEntries(), memtableInstance.Size())
+}
+
+// TestWAL_RecoveryMultipleLogs tests recovery across multiple log files
+func TestWAL_RecoveryMultipleLogs(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Write enough records to span multiple logs
+	recordCount := 50
+	recordsWritten := make(map[string]int)
+
+	for i := 0; i < recordCount; i++ {
+		key := fmt.Sprintf("record_%03d", i)
+		size := 1000 + (i * 50) // Varying sizes to create realistic scenario
+		record := createTestRecord(key, size)
+		recordsWritten[key] = size
+
+		err := wal.WriteRecord(record)
+		if err != nil {
+			t.Fatalf("Failed to write record %s: %v", key, err)
+		}
+
+		// Log progress for debugging
+		if i%10 == 0 {
+			t.Logf("Written %d records, current log: %d, blocks: %d",
+				i+1, wal.lastLogIndex, wal.blocksInCurrentLog)
+		}
+	}
+
+	finalLogIndex := wal.lastLogIndex
+	finalBlockCount := wal.blocksInCurrentLog
+	t.Logf("Final state: log %d, blocks %d, total records %d",
+		finalLogIndex, finalBlockCount, recordCount)
+
+	// Close to flush all data to disk before recovery
+	err := wal.Close()
+	if err != nil {
+		t.Fatalf("Failed to close WAL: %v", err)
+	}
+
+	// Create fresh memtable for recovery
+	memtableInstance, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable: %v", err)
+	}
+
+	// Create new WAL instance for recovery
+	recoveryWAL, err := BuildWAL()
+	if err != nil {
+		t.Fatalf("Failed to create recovery WAL: %v", err)
+	}
+
+	// Use recovery WAL for recovery
+	err = recoveryWAL.RecoverMemtables([]*memtable.MemTable{memtableInstance})
+	if err != nil {
+		t.Fatalf("Failed to recover memtable: %v", err)
+	}
+
+	// Verify all records were recovered
+	recoveredCount := 0
+	for key, expectedSize := range recordsWritten {
+		recoveredRecord := memtableInstance.Get(key)
+		if recoveredRecord == nil {
+			t.Errorf("Record %s not found after recovery", key)
+			continue
+		}
+
+		if len(recoveredRecord.Value) != expectedSize {
+			t.Errorf("Record %s value length mismatch: expected %d, got %d",
+				key, expectedSize, len(recoveredRecord.Value))
+		}
+		recoveredCount++
+	}
+
+	if recoveredCount != recordCount {
+		t.Errorf("Recovery count mismatch: expected %d, recovered %d", recordCount, recoveredCount)
+	}
+
+	if memtableInstance.Size() != recordCount {
+		t.Errorf("Memtable size mismatch: expected %d, got %d", recordCount, memtableInstance.Size())
+	}
+
+	t.Logf("Successfully recovered %d records across %d logs", recoveredCount, finalLogIndex)
+}
+
+// TestWAL_RecoveryMultipleMemtables tests recovery across multiple memtables
+func TestWAL_RecoveryMultipleMemtables(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Write many records to potentially fill multiple memtables
+	recordCount := 100 // Reduced from 200 to fit within reasonable memtable limits
+	recordsWritten := make([]string, recordCount)
+
+	for i := 0; i < recordCount; i++ {
+		key := fmt.Sprintf("multi_record_%03d", i)
+		record := createTestRecord(key, 100)
+		recordsWritten[i] = key
+
+		err := wal.WriteRecord(record)
+		if err != nil {
+			t.Fatalf("Failed to write record %s: %v", key, err)
+		}
+	}
+
+	err := wal.Close()
+	if err != nil {
+		t.Fatalf("Failed to close WAL: %v", err)
+	}
+
+	// Create multiple memtables for recovery
+	memtable1, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable1: %v", err)
+	}
+	memtable2, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable2: %v", err)
+	}
+	memtable3, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable3: %v", err)
+	}
+
+	memtables := []*memtable.MemTable{memtable1, memtable2, memtable3}
+
+	// Use the same WAL instance for recovery
+	err = wal.RecoverMemtables(memtables)
+	if err != nil {
+		t.Fatalf("Failed to recover multiple memtables: %v", err)
+	}
+
+	// Verify records are distributed across memtables
+	totalRecovered := 0
+	for i, mt := range memtables {
+		size := mt.Size()
+		t.Logf("Memtable %d: %d records", i+1, size)
+		totalRecovered += size
+	}
+
+	if totalRecovered != recordCount {
+		t.Errorf("Total recovery count mismatch: expected %d, recovered %d", recordCount, totalRecovered)
+	}
+
+	// Verify all records exist somewhere
+	allRecords := make(map[string]bool)
+	for _, mt := range memtables {
+		for _, key := range recordsWritten {
+			if record := mt.Get(key); record != nil {
+				allRecords[key] = true
+			}
+		}
+	}
+
+	if len(allRecords) != recordCount {
+		t.Errorf("Not all records found across memtables: found %d, expected %d", len(allRecords), recordCount)
+	}
+
+	t.Logf("Successfully distributed %d records across %d memtables", len(allRecords), len(memtables))
+}
+
+// TestWAL_RecoveryEmptyWAL tests recovery from empty WAL
+func TestWAL_RecoveryEmptyWAL(t *testing.T) {
+	wal, _ := setupTestWAL(t)
+
+	// Create fresh memtable for recovery
+	memtableInstance, err := memtable.NewMemtable()
+	if err != nil {
+		t.Fatalf("Failed to create memtable: %v", err)
+	}
+
+	// Recovery from empty WAL should succeed but not add any records
+	err = wal.RecoverMemtables([]*memtable.MemTable{memtableInstance})
+	if err != nil {
+		t.Fatalf("Failed to recover from empty WAL: %v", err)
+	}
+
+	// Memtable should be empty
+	if memtableInstance.Size() != 0 {
+		t.Errorf("Expected empty memtable after empty WAL recovery, got size %d", memtableInstance.Size())
+	}
+
+	t.Logf("Successfully handled empty WAL recovery")
+}
+
+// Helper function to check if string contains substring
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr ||
+		(len(s) > len(substr) &&
+			(s[:len(substr)] == substr || s[len(s)-len(substr):] == substr ||
+				findSubstring(s, substr))))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
