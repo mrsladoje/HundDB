@@ -199,7 +199,7 @@ func TestNewTokenBucket_NoExistingData(t *testing.T) {
 	// verify the constants are correct
 
 	if TOKEN_CAPACITY != 5 {
-		t.Errorf("Expected TOKEN_CAPACITY 5, got %d", TOKEN_CAPACITY)
+		t.Errorf("Expected TOKEN_CAPACITY 25, got %d", TOKEN_CAPACITY)
 	}
 
 	if REFILL_INTERVAL != 20 {

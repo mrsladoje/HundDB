@@ -43,7 +43,7 @@ func init() {
 	cfg := config.GetConfig()
 	if cfg != nil {
 		COMPRESSION_ENABLED = cfg.SSTable.CompressionEnabled
-		BLOCK_SIZE = uint64(cfg.SSTable.BlockSize)
+		BLOCK_SIZE = uint64(cfg.BlockManager.BlockSize)
 		USE_SEPARATE_FILES = cfg.SSTable.UseSeparateFiles
 		SPARSE_STEP_INDEX = cfg.SSTable.SparseStepIndex
 	}

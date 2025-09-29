@@ -33,3 +33,6 @@ structures/**/*.mod
 # wails build
 build/
 wailsjs/
+
+# config json
+app.json
