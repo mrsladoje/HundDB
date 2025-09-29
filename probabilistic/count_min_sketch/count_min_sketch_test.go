@@ -488,3 +488,112 @@ func TestMixedConcurrentOperations(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestSaveToDisk tests saving Count-Min Sketch to disk
+func TestSaveToDisk(t *testing.T) {
+	cms := NewCMS(0.01, 0.05)
+	
+	// Add some test data
+	testKeys := []string{"apple", "banana", "cherry", "apple", "banana", "apple"}
+	for _, key := range testKeys {
+		cms.Add([]byte(key))
+	}
+	
+	// Save to disk
+	err := cms.SaveToDisk("test_cms")
+	if err != nil {
+		t.Fatalf("Failed to save CMS to disk: %v", err)
+	}
+}
+
+// TestLoadFromDisk tests loading Count-Min Sketch from disk
+func TestLoadFromDisk(t *testing.T) {
+	// Create and populate original CMS
+	original := NewCMS(0.01, 0.05)
+	testKeys := []string{"apple", "banana", "cherry", "apple", "banana", "apple"}
+	for _, key := range testKeys {
+		original.Add([]byte(key))
+	}
+	
+	// Save to disk
+	err := original.SaveToDisk("test_cms_load")
+	if err != nil {
+		t.Fatalf("Failed to save original CMS: %v", err)
+	}
+	
+	// Load from disk
+	loaded, err := LoadCountMinSketchFromDisk("test_cms_load")
+	if err != nil {
+		t.Fatalf("Failed to load CMS from disk: %v", err)
+	}
+	
+	// Verify loaded CMS has same structure
+	if loaded.m != original.m {
+		t.Errorf("Loaded m=%d, expected %d", loaded.m, original.m)
+	}
+	if loaded.k != original.k {
+		t.Errorf("Loaded k=%d, expected %d", loaded.k, original.k)
+	}
+	
+	// Verify counts are preserved
+	for _, key := range []string{"apple", "banana", "cherry", "nonexistent"} {
+		originalCount := original.Count([]byte(key))
+		loadedCount := loaded.Count([]byte(key))
+		if originalCount != loadedCount {
+			t.Errorf("Count mismatch for key '%s': original=%d, loaded=%d", 
+				key, originalCount, loadedCount)
+		}
+	}
+}
+
+// TestSaveLoadRoundTrip tests complete save/load cycle
+func TestSaveLoadRoundTrip(t *testing.T) {
+	original := NewCMS(0.001, 0.01)
+	
+	// Add diverse test data
+	testData := []struct {
+		key   string
+		count int
+	}{
+		{"user:1", 10},
+		{"user:2", 5},
+		{"event:click", 100},
+		{"event:view", 50},
+		{"product:abc", 25},
+	}
+	
+	for _, item := range testData {
+		for i := 0; i < item.count; i++ {
+			original.Add([]byte(item.key))
+		}
+	}
+	
+	// Save to disk
+	err := original.SaveToDisk("test_cms_roundtrip")
+	if err != nil {
+		t.Fatalf("Failed to save CMS: %v", err)
+	}
+	
+	// Load from disk
+	loaded, err := LoadCountMinSketchFromDisk("test_cms_roundtrip")
+	if err != nil {
+		t.Fatalf("Failed to load CMS: %v", err)
+	}
+	
+	// Verify all data is preserved
+	for _, item := range testData {
+		originalCount := original.Count([]byte(item.key))
+		loadedCount := loaded.Count([]byte(item.key))
+		
+		// CMS can overestimate, but should never underestimate
+		if loadedCount < uint32(item.count) {
+			t.Errorf("Loaded count for '%s' is %d, should be at least %d", 
+				item.key, loadedCount, item.count)
+		}
+		
+		if originalCount != loadedCount {
+			t.Errorf("Count mismatch for '%s': original=%d, loaded=%d", 
+				item.key, originalCount, loadedCount)
+		}
+	}
+}

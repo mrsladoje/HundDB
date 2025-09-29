@@ -354,3 +354,125 @@ func BenchmarkConcurrentSerialization(b *testing.B) {
 		}
 	})
 }
+
+// TestSaveToDisk tests saving HyperLogLog to disk
+func TestSaveToDisk(t *testing.T) {
+	hll, err := NewHLL(10)
+	if err != nil {
+		t.Fatalf("Failed to create HLL: %v", err)
+	}
+	
+	// Add some test data
+	testElements := []string{"user1", "user2", "user3", "user1", "user4", "user2"}
+	for _, element := range testElements {
+		hll.Add([]byte(element))
+	}
+	
+	// Save to disk
+	err = hll.SaveToDisk("test_hll")
+	if err != nil {
+		t.Fatalf("Failed to save HLL to disk: %v", err)
+	}
+}
+
+// TestLoadFromDisk tests loading HyperLogLog from disk
+func TestLoadFromDisk(t *testing.T) {
+	// Create and populate original HLL
+	original, err := NewHLL(8)
+	if err != nil {
+		t.Fatalf("Failed to create original HLL: %v", err)
+	}
+	
+	testElements := []string{"item1", "item2", "item3", "item1", "item4", "item5"}
+	for _, element := range testElements {
+		original.Add([]byte(element))
+	}
+	
+	// Save to disk
+	err = original.SaveToDisk("test_hll_load")
+	if err != nil {
+		t.Fatalf("Failed to save original HLL: %v", err)
+	}
+	
+	// Load from disk
+	loaded, err := LoadHyperLogLogFromDisk("test_hll_load")
+	if err != nil {
+		t.Fatalf("Failed to load HLL from disk: %v", err)
+	}
+	
+	// Verify loaded HLL has same structure
+	if loaded.m != original.m {
+		t.Errorf("Loaded m=%d, expected %d", loaded.m, original.m)
+	}
+	if loaded.p != original.p {
+		t.Errorf("Loaded p=%d, expected %d", loaded.p, original.p)
+	}
+	if len(loaded.reg) != len(original.reg) {
+		t.Errorf("Loaded reg length=%d, expected %d", len(loaded.reg), len(original.reg))
+	}
+	
+	// Verify registers are preserved
+	for i := 0; i < len(original.reg); i++ {
+		if loaded.reg[i] != original.reg[i] {
+			t.Errorf("Register mismatch at index %d: original=%d, loaded=%d", 
+				i, original.reg[i], loaded.reg[i])
+		}
+	}
+	
+	// Verify estimates are preserved
+	originalEstimate := original.Estimate()
+	loadedEstimate := loaded.Estimate()
+	if originalEstimate != loadedEstimate {
+		t.Errorf("Estimate mismatch: original=%.2f, loaded=%.2f", 
+			originalEstimate, loadedEstimate)
+	}
+}
+
+// TestSaveLoadRoundTrip tests complete save/load cycle for HyperLogLog
+func TestSaveLoadRoundTrip(t *testing.T) {
+	original, err := NewHLL(12)
+	if err != nil {
+		t.Fatalf("Failed to create original HLL: %v", err)
+	}
+	
+	// Add a large diverse dataset
+	for i := 0; i < 1000; i++ {
+		element := fmt.Sprintf("element_%d", i)
+		original.Add([]byte(element))
+	}
+	
+	originalEstimate := original.Estimate()
+	
+	// Save to disk
+	err = original.SaveToDisk("test_hll_roundtrip")
+	if err != nil {
+		t.Fatalf("Failed to save HLL: %v", err)
+	}
+	
+	// Load from disk
+	loaded, err := LoadHyperLogLogFromDisk("test_hll_roundtrip")
+	if err != nil {
+		t.Fatalf("Failed to load HLL: %v", err)
+	}
+	
+	loadedEstimate := loaded.Estimate()
+	
+	// Verify estimates match exactly (they should be identical after load)
+	if originalEstimate != loadedEstimate {
+		t.Errorf("Estimate mismatch after roundtrip: original=%.2f, loaded=%.2f", 
+			originalEstimate, loadedEstimate)
+	}
+	
+	// Verify we can still add elements and get reasonable estimates
+	loaded.Add([]byte("new_element"))
+	newEstimate := loaded.Estimate()
+	
+	// Should be close to original + 1, allowing for HLL approximation
+	expectedMin := originalEstimate
+	expectedMax := originalEstimate + 10 // Allow some variance due to HLL approximation
+	
+	if newEstimate < expectedMin || newEstimate > expectedMax {
+		t.Errorf("New estimate %.2f not in expected range [%.2f, %.2f]", 
+			newEstimate, expectedMin, expectedMax)
+	}
+}
