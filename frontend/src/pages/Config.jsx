@@ -467,7 +467,7 @@ export const Config = () => {
       {/* Peeking Dog */}
       <img
         src={isConfigLocked ? SleepyCousin : HyperRokica}
-        alt="Config Dog"
+        alt="Rodney"
         className={`config-dog hidden sm:block absolute -bottom-2 -right-2 w-auto h-[7.5rem] hover:h-[9.25rem] -rotate-[8deg] hover:-rotate-3 object-contain transform translate-x-1/4 translate-y-1/4 opacity-95 transition-all duration-[465ms] hover:translate-x-0 hover:translate-y-0 hover:scale-110 hover:opacity-100 cursor-pointer ${
           isConfigLocked ? 'grayscale' : ''
         }`}
@@ -490,7 +490,7 @@ export const Config = () => {
         <div className="flex items-start">
           <div>
             <p className={`font-semibold mb-2 text-lg ${isConfigLocked ? 'text-red-700' : 'text-sloth-brown'}`}>
-              {isConfigLocked ? 'Guard Dog says:' : 'Config Dog says:'}
+              {isConfigLocked ? 'Rodney says protectively:' : 'Rodney says:'}
             </p>
             <p className={`italic ${isConfigLocked ? 'text-red-600' : 'text-gray-600'}`} dangerouslySetInnerHTML={{ __html: dogTip}} />
           </div>
@@ -577,13 +577,14 @@ const ConfigSelect = ({ label, name, options, setValue, watch, error, descriptio
       <label className={`block text-sm font-bold mb-2 ${disabled ? 'text-gray-500' : 'text-sloth-brown-dark'}`}>
         {label}
       </label>
-      <div className={error ? 'border-4 border-red-500 rounded-lg' : ''}>
+      <div className={`${error ? 'border-4 border-red-500 rounded-lg' : ''} z-[100]`}>
         <StyledOperationSelect
           value={selectedOption?.value}
           onChange={handleChange}
           options={options}
           isSearchable={false}
           isDisabled={disabled}
+          
         />
       </div>
       {description && (
