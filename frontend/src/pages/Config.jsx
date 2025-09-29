@@ -130,16 +130,16 @@ const configSchema = yup.object().shape({
   token_bucket: yup.object().shape({
     capacity: yup
       .number()
-      .min(0, "Minimum capacity is 0")
-      .max(1000, "Maximum capacity is 1000")
+      .min(1, "Minimum capacity is 1")
+      .max(1000, "Maximum capacity is 200")
       .required("Token bucket capacity is required"),
     refill_interval: yup
       .number()
-      .min(0, "Minimum interval is 0 seconds")
+      .min(1, "Minimum interval is 1 seconds")
       .required("Refill interval is required"),
     refill_amount: yup
       .number()
-      .min(0, "Minimum refill amount is 0")
+      .min(1, "Minimum refill amount is 1")
       .required("Refill amount is required"),
   }),
   crc: yup.object().shape({
@@ -462,6 +462,8 @@ export const Config = () => {
                 name="lsm.max_levels"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.lsm?.max_levels}
                 description="Maximum LSM tree levels (1-20)"
                 min={1}
@@ -473,6 +475,8 @@ export const Config = () => {
                 name="lsm.max_tables_per_level"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.lsm?.max_tables_per_level}
                 description="Maximum SSTables per level (1-100)"
                 min={1}
@@ -484,6 +488,8 @@ export const Config = () => {
                 name="lsm.max_memtables"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.lsm?.max_memtables}
                 description="Maximum memtables (1-20)"
                 min={1}
@@ -515,6 +521,8 @@ export const Config = () => {
               name="cache.read_path_capacity"
               type="number"
               register={register}
+              setValue={setValue}
+              watch={watch}
               error={errors.cache?.read_path_capacity}
               description="Cache capacity for read operations"
               min={1}
@@ -534,6 +542,8 @@ export const Config = () => {
               name="wal.log_size"
               type="number"
               register={register}
+              setValue={setValue}
+              watch={watch}
               error={errors.wal?.log_size}
               description="Maximum WAL log size (in blocks)"
               min={1}
@@ -572,6 +582,8 @@ export const Config = () => {
                 name="sstable.sparse_step_index"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.sstable?.sparse_step_index}
                 description="Sparse index step size"
                 min={1}
@@ -594,6 +606,8 @@ export const Config = () => {
                 name="memtable.capacity"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.memtable?.capacity}
                 description="Memtable capacity"
                 min={1}
@@ -653,6 +667,8 @@ export const Config = () => {
                 name="block_manager.cache_size"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.block_manager?.cache_size}
                 description="Block cache size"
                 min={1}
@@ -674,9 +690,11 @@ export const Config = () => {
                 name="token_bucket.capacity"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.token_bucket?.capacity}
-                description="Max token capacity (1-1000)"
-                min={1}
+                description="Max token capacity (0-1000)"
+                min={0}
                 max={1000}
                 disabled={isConfigLocked}
               />
@@ -685,9 +703,11 @@ export const Config = () => {
                 name="token_bucket.refill_interval"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.token_bucket?.refill_interval}
                 description="Token refill interval"
-                min={1}
+                min={0}
                 disabled={isConfigLocked}
               />
               <ConfigInput
@@ -695,9 +715,11 @@ export const Config = () => {
                 name="token_bucket.refill_amount"
                 type="number"
                 register={register}
+                setValue={setValue}
+                watch={watch}
                 error={errors.token_bucket?.refill_amount}
                 description="Tokens added per interval"
-                min={1}
+                min={0}
                 disabled={isConfigLocked}
               />
             </div>
@@ -901,46 +923,78 @@ const ConfigInput = ({
   description,
   className = "",
   disabled = false,
+  setValue,
+  watch,
+  min = 0,
   ...props
-}) => (
-  <div className={className}>
-    <label
-      className={`block text-sm font-bold mb-2 ${
-        disabled ? "text-gray-500" : "text-sloth-brown-dark"
-      }`}
-    >
-      {label}
-    </label>
-    <input
-      {...register(name)}
-      type={type}
-      disabled={disabled}
-      className={`w-full px-4 py-3 border-4 rounded-lg font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] transition-all duration-200 ${
-        disabled
-          ? "border-gray-400 bg-gray-100 text-gray-500 cursor-not-allowed"
-          : error
-          ? "border-red-500 text-sloth-brown-dark placeholder-sloth-brown focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px]"
-          : "border-sloth-brown-dark text-sloth-brown-dark placeholder-sloth-brown focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px]"
-      }`}
-      {...props}
-    />
-    {description && (
-      <p
-        className={`text-xs mt-1 ${
-          disabled ? "text-gray-400" : "text-sloth-brown"
+}) => {
+  const currentValue = watch?.(name);
+  
+  const handleKeyDown = (e) => {
+    if (type === "number" && !disabled) {
+      const value = e.target.value;
+      // Prevent deletion if it would make the input empty or result in a value less than min
+      if ((e.key === "Backspace" || e.key === "Delete") && 
+          (value.length === 1 || (parseFloat(value) <= min && value.length <= 2))) {
+        e.preventDefault();
+      }
+    }
+  };
+
+  const handleChange = (e) => {
+    if (type === "number" && !disabled && setValue) {
+      let value = e.target.value;
+      // If empty or invalid, set to minimum value
+      if (value === "" || isNaN(parseFloat(value)) || parseFloat(value) < min) {
+        setValue(name, min, { shouldValidate: true });
+        return;
+      }
+      setValue(name, parseFloat(value), { shouldValidate: true });
+    }
+  };
+
+  return (
+    <div className={className}>
+      <label
+        className={`block text-sm font-bold mb-2 ${
+          disabled ? "text-gray-500" : "text-sloth-brown-dark"
         }`}
       >
-        {description}
-      </p>
-    )}
-    {error && (
-      <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
-        <FaExclamationTriangle className="text-xs" />
-        {error.message}
-      </p>
-    )}
-  </div>
-);
+        {label}
+      </label>
+      <input
+        {...register(name)}
+        type={type}
+        disabled={disabled}
+        onKeyDown={handleKeyDown}
+        onChange={type === "number" ? handleChange : undefined}
+        className={`w-full px-4 py-3 border-4 rounded-lg font-medium shadow-[3px_3px_0px_0px_rgba(139,119,95,1)] transition-all duration-200 ${
+          disabled
+            ? "border-gray-400 bg-gray-100 text-gray-500 cursor-not-allowed"
+            : error
+            ? "border-red-500 text-sloth-brown-dark placeholder-sloth-brown focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px]"
+            : "border-sloth-brown-dark text-sloth-brown-dark placeholder-sloth-brown focus:shadow-[1px_1px_0px_0px_rgba(139,119,95,1)] focus:outline-none focus:translate-x-[1px] focus:translate-y-[1px]"
+        }`}
+        {...props}
+      />
+      {description && (
+        <p
+          className={`text-xs mt-1 ${
+            disabled ? "text-gray-400" : "text-sloth-brown"
+          }`}
+        >
+          {description}
+        </p>
+      )}
+      {error && (
+        <p className="text-red-500 text-sm mt-1 flex items-center gap-1">
+          <FaExclamationTriangle className="text-xs" />
+          {error.message}
+        </p>
+      )}
+    </div>
+  );
+};
 
 // Config Select Component
 const ConfigSelect = ({
