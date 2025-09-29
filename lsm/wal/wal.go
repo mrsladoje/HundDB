@@ -174,7 +174,7 @@ func (wal *WAL) reloadWAL() error {
 }
 
 // WriteRecord writes a WAL record to the log, handling both complete and fragmented records.
-func (wal *WAL) WriteRecord(record *record.Record) error {
+func (wal *WAL) WriteRecord(record *record.Record) (uint64, error) {
 	payload := record.Serialize()
 	spaceNeeded := HEADER_TOTAL_SIZE + len(payload)
 
@@ -182,7 +182,7 @@ func (wal *WAL) WriteRecord(record *record.Record) error {
 	if int(BLOCK_SIZE-wal.offsetInBlock) < spaceNeeded {
 		err := wal.flushBlock()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		wal.makeNewBlock()
 
@@ -191,12 +191,12 @@ func (wal *WAL) WriteRecord(record *record.Record) error {
 			return wal.writeFragmentedRecord(payload)
 		}
 	}
-	return wal.writeToBlock(payload, FRAGMENT_FULL)
+	return wal.lastLogIndex, wal.writeToBlock(payload, FRAGMENT_FULL)
 }
 
 // writeFragmentedRecord handles records larger than a single block by splitting them into fragments.
 // All fragments for a record are kept within the same log file.
-func (wal *WAL) writeFragmentedRecord(payload []byte) error {
+func (wal *WAL) writeFragmentedRecord(payload []byte) (uint64, error) {
 	maxPayloadSize := int(BLOCK_SIZE) - HEADER_TOTAL_SIZE - crc.CRC_SIZE
 	numberOfFragments := int(math.Ceil(float64(len(payload)) / float64(maxPayloadSize)))
 
@@ -218,10 +218,10 @@ func (wal *WAL) writeFragmentedRecord(payload []byte) error {
 		}
 		err := wal.writeToBlock(payloadFragment, fragmentType)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return wal.lastLogIndex, nil
 }
 
 // writeToBlock writes a record or record fragment to the current block.

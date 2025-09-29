@@ -10,6 +10,7 @@ import (
 	wal "hunddb/lsm/wal"
 	model "hunddb/model/record"
 	"hunddb/utils/config"
+	crc_util "hunddb/utils/crc"
 	"os"
 	"sync"
 	"time"
@@ -24,6 +25,8 @@ var (
 	LSM_PATH             string
 	CRC_SIZE             uint64
 )
+
+const LWM_PATH = "lwm.db"
 
 // init loads the LSM settings into global variables from the config
 func init() {
@@ -41,10 +44,11 @@ LSM represents a Log-Structured Merge Tree
 */
 type LSM struct {
 	// Each level holds the indexes of its SSTables
-	levels    [][]uint64
-	memtables []*memtable.MemTable
-	wal       *wal.WAL
-	cache     *cache.ReadPathCache
+	levels       [][]uint64
+	memtables    []*memtable.MemTable
+	lowWaterMark []uint64 // low water mark per memtable for log truncation
+	wal          *wal.WAL
+	cache        *cache.ReadPathCache
 
 	// Flag to indicate if previous data was lost during loading
 	DataLost bool
@@ -91,6 +95,53 @@ func (lsm *LSM) serialize() []byte {
 	return finalBytes
 }
 
+// loadLowWaterMarks attempts to load the low water marks from disk, creating the file if it doesn't exist.
+func loadLowWaterMarks() ([]uint64, error) {
+	lowWaterMarks := make([]uint64, MAX_MEMTABLES)
+
+	// Try to open the file
+	file, err := os.OpenFile(LWM_PATH, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	// Check file size
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	// If file is smaller than expected, initialize with zeros and write back
+	if stat.Size() < int64(MAX_MEMTABLES*8) {
+		data := make([]byte, MAX_MEMTABLES*8)
+		crc_data := crc_util.AddCRCsToData(data)
+		block_manager.GetBlockManager().WriteToDisk(crc_data, LWM_PATH, 0)
+		return lowWaterMarks, nil
+	}
+
+	// Read the uint64 values
+	data, _, err := block_manager.GetBlockManager().
+		ReadFromDisk(LWM_PATH, 0, crc_util.SizeAfterAddingCRCs(8*MAX_MEMTABLES))
+	if err != nil {
+		return nil, err
+	}
+	for i := uint64(0); i < MAX_MEMTABLES; i++ {
+		lowWaterMarks[i] = binary.LittleEndian.Uint64(data[i*8 : (i+1)*8])
+	}
+
+	return lowWaterMarks, nil
+}
+
+func saveLowWaterMarks(lowWaterMarks []uint64) error {
+	data := make([]byte, MAX_MEMTABLES*8)
+	for i := uint64(0); i < MAX_MEMTABLES; i++ {
+		binary.LittleEndian.PutUint64(data[i*8:(i+1)*8], lowWaterMarks[i])
+	}
+	crc_data := crc_util.AddCRCsToData(data)
+	return block_manager.GetBlockManager().WriteToDisk(crc_data, LWM_PATH, 0)
+}
+
 /*
 PersistLSM persists the LSM parts that need to be persisted (the levels and their SSTable indexes).
 */
@@ -101,8 +152,16 @@ func (lsm *LSM) PersistLSM() error {
 	blockManager := block_manager.GetBlockManager()
 
 	err := blockManager.WriteToDisk(data, LSM_PATH, 0)
+	if err != nil {
+		return err
+	}
+	// Also persist low water marks
+	err = saveLowWaterMarks(lsm.lowWaterMark)
+	if err != nil {
+		return err
+	}
 
-	return err
+	return nil
 }
 
 /*
@@ -178,13 +237,14 @@ func LoadLSM() *LSM {
 		dataLost = true
 	}
 	lsm := &LSM{
-		levels:     make([][]uint64, MAX_LEVELS),
-		memtables:  make([]*memtable.MemTable, 0, MAX_MEMTABLES),
-		wal:        wal,
-		cache:      cache.NewReadPathCache(),
-		DataLost:   dataLost, // Initially assume no data loss
-		flushPool:  nil,
-		levelLocks: make([]sync.Mutex, int(MAX_LEVELS)),
+		levels:       make([][]uint64, MAX_LEVELS),
+		memtables:    make([]*memtable.MemTable, 0, MAX_MEMTABLES),
+		lowWaterMark: make([]uint64, MAX_MEMTABLES),
+		wal:          wal,
+		cache:        cache.NewReadPathCache(),
+		DataLost:     dataLost, // Initially assume no data loss
+		flushPool:    nil,
+		levelLocks:   make([]sync.Mutex, int(MAX_LEVELS)),
 	}
 
 	blockManager := block_manager.GetBlockManager()
@@ -207,6 +267,12 @@ func LoadLSM() *LSM {
 		// WAL recovery failed - consider it data loss
 		lsm.DataLost = true
 		return lsm
+	}
+
+	// Try to load low water marks
+	lsm.lowWaterMark, err = loadLowWaterMarks()
+	if err != nil {
+		lsm.DataLost = true
 	}
 
 	// File exists, so any errors from here on are considered data corruption
@@ -349,13 +415,14 @@ func (lsm *LSM) Put(key string, value []byte) error {
 
 	record := model.NewRecord(key, value, uint64(time.Now().UnixNano()), false)
 
-	// TODO: WAL write ahead logging - I removed it because it was failing for larger values
-	// err := lsm.wal.WriteRecord(record)
-	// if err != nil {
-	// 	return err
-	// }
+	logIndex, err := lsm.wal.WriteRecord(record)
+	if err != nil {
+		return err
+	}
+	// Update low water mark for the current memtable
+	lsm.lowWaterMark[len(lsm.memtables)-1] = logIndex
 
-	err := lsm.memtables[len(lsm.memtables)-1].Put(record)
+	err = lsm.memtables[len(lsm.memtables)-1].Put(record)
 	if err != nil {
 		return err
 	}
@@ -376,15 +443,16 @@ func (lsm *LSM) Delete(key string) (bool, error) {
 
 	record := model.NewRecord(key, nil, uint64(time.Now().UnixNano()), true)
 
-	// TODO: WAL write ahead logging - I removed it because it was failing for larger values
-	// err := lsm.wal.WriteRecord(record)
-	// if err != nil {
-	// 	return err
-	// }
+	logIndex, err := lsm.wal.WriteRecord(record)
+	if err != nil {
+		return false, err
+	}
+	// Update low water mark for the current memtable
+	lsm.lowWaterMark[len(lsm.memtables)-1] = logIndex
 
 	keyExists := lsm.memtables[len(lsm.memtables)-1].Delete(record)
 
-	err := lsm.checkIfToFlush(key)
+	err = lsm.checkIfToFlush(key)
 	if err != nil {
 		return keyExists, err
 	}
@@ -668,6 +736,10 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 		batch := make([]*memtable.MemTable, len(lsm.memtables))
 		copy(batch, lsm.memtables)
 
+		// Copy low water marks for the memtables being flushed
+		lowWaterMarks := make([]uint64, len(batch))
+		copy(lowWaterMarks, lsm.lowWaterMark[:len(batch)])
+
 		// Assign indices for each memtable using the monotonic counter
 		indexes := make([]int, len(batch))
 		for i := 0; i < len(batch); i++ {
@@ -678,11 +750,16 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 		fresh, _ := memtable.NewMemtable()
 		lsm.memtables = []*memtable.MemTable{fresh}
 
+		// Reset low water marks - keep the array but initialize first element to 0 for the fresh memtable
+		for i := range lsm.lowWaterMark {
+			lsm.lowWaterMark[i] = 0
+		}
+
 		// Ensure flush pool exists (lazy init) with 4 workers
 		lsm.initFlushPoolOnce(4)
 
 		// Submit batch to pool (concurrently flushed, but committed oldest->newest)
-		lsm.flushPool.submitBatch(lsm, batch, indexes)
+		lsm.flushPool.submitBatch(lsm, batch, indexes, lowWaterMarks)
 	}
 	return nil
 }
