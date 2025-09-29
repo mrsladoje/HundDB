@@ -1,3 +1,5 @@
+import { FaDog } from "react-icons/fa";
+
 const RokicaRunning = "../../pics/rokica_running.png";
 const Bone = "../../pics/bone.png";
 

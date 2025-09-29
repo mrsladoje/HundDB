@@ -12,9 +12,11 @@ import (
 	"hunddb/probabilistic/hyperloglog"
 	"hunddb/probabilistic/independent_bloom_filter"
 	"hunddb/probabilistic/sim_hash"
+	"hunddb/token_bucket"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -25,16 +27,19 @@ var (
 
 // App struct - application layer wrapper for LSM
 type App struct {
-	ctx context.Context
-	lsm *lsm.LSM
+	ctx         context.Context
+	lsm         *lsm.LSM
+	tokenBucket *token_bucket.TokenBucket
 }
 
 // NewApp creates a new App application struct and loads the LSM instance
 func NewApp() *App {
 	lsmInstance := lsm.LoadLSM()
+	tokenBucketInstance := token_bucket.NewTokenBucket()
 
 	return &App{
-		lsm: lsmInstance,
+		lsm:         lsmInstance,
+		tokenBucket: tokenBucketInstance,
 	}
 }
 
@@ -329,6 +334,59 @@ func (a *App) CheckSSTableIntegrity(sstableIndex int) map[string]interface{} {
 	}
 
 	return result
+}
+
+// ======== TOKEN BUCKET RATE LIMITING ========
+
+// CheckRateLimit checks if a request is allowed based on the token bucket algorithm
+// Returns true if the request is allowed, false if rate limited
+func (a *App) CheckRateLimit() (bool, error) {
+	allowed := a.tokenBucket.AllowRequest()
+
+	// Save the token bucket state to disk after each check
+	if err := a.tokenBucket.SaveToDisk(); err != nil {
+		return allowed, fmt.Errorf("failed to save token bucket state: %w", err)
+	}
+
+	return allowed, nil
+}
+
+// GetTokenBucketStatus returns the current status of the token bucket
+func (a *App) GetTokenBucketStatus() (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"remainingTokens": a.tokenBucket.RemainingTokens,
+		"lastReset":       a.tokenBucket.LastReset.Unix(),
+		"maxCapacity":     token_bucket.TOKEN_CAPACITY,
+		"refillInterval":  token_bucket.REFILL_INTERVAL,
+		"refillAmount":    token_bucket.REFILL_AMOUNT,
+	}, nil
+}
+
+// ResetTokenBucket resets the token bucket to full capacity (for testing/admin purposes)
+func (a *App) ResetTokenBucket() error {
+	a.tokenBucket.RemainingTokens = token_bucket.TOKEN_CAPACITY
+	a.tokenBucket.LastReset = time.Now()
+
+	if err := a.tokenBucket.SaveToDisk(); err != nil {
+		return fmt.Errorf("failed to save token bucket state: %w", err)
+	}
+
+	return nil
+}
+
+// ExecuteWithRateLimit executes a function only if rate limiting allows it
+// This is a helper method that can be used by frontend to check rate limits before operations
+func (a *App) ExecuteWithRateLimit(operation string) (bool, string, error) {
+	allowed, err := a.CheckRateLimit()
+	if err != nil {
+		return false, "", fmt.Errorf("failed to check rate limit: %w", err)
+	}
+
+	if !allowed {
+		return false, fmt.Sprintf("Rate limit exceeded for operation: %s. Please wait before trying again.", operation), nil
+	}
+
+	return true, fmt.Sprintf("Operation '%s' allowed", operation), nil
 }
 
 // ======== PROBABILISTIC DATA STRUCTURES ========
