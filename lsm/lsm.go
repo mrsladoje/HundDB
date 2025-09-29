@@ -14,6 +14,27 @@ import (
 	"time"
 )
 
+// Global configuration variables loaded from config in init()
+var (
+	MAX_LEVELS           uint64
+	MAX_TABLES_PER_LEVEL uint64
+	MAX_MEMTABLES        uint64
+	COMPACTION_TYPE      string
+	LSM_PATH             string
+	CRC_SIZE             uint64
+)
+
+// init loads the LSM settings into global variables from the config
+func init() {
+	cfg := config.GetConfig()
+	MAX_LEVELS = cfg.LSM.MaxLevels
+	MAX_TABLES_PER_LEVEL = cfg.LSM.MaxTablesPerLevel
+	MAX_MEMTABLES = cfg.LSM.MaxMemtables
+	COMPACTION_TYPE = cfg.LSM.CompactionType
+	LSM_PATH = cfg.LSM.LSMPath
+	CRC_SIZE = cfg.CRC.Size
+}
+
 /*
 LSM represents a Log-Structured Merge Tree
 */
@@ -23,14 +44,6 @@ type LSM struct {
 	memtables []*memtable.MemTable
 	wal       *wal.WAL
 	cache     *cache.ReadPathCache
-
-	// Configuration attributes - loaded from config file
-	maxLevels         uint64
-	maxTablesPerLevel uint64
-	maxMemtables      uint64
-	compactionType    string
-	lsmPath           string
-	crcSize           uint64
 
 	// Flag to indicate if previous data was lost during loading
 	DataLost bool
@@ -71,7 +84,7 @@ func (lsm *LSM) PersistLSM() error {
 
 	blockManager := block_manager.GetBlockManager()
 
-	err := blockManager.WriteToDisk(data, lsm.lsmPath, 0)
+	err := blockManager.WriteToDisk(data, LSM_PATH, 0)
 
 	return err
 }
@@ -88,7 +101,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 	stringifiedLevels := string(data)
 
 	// Parse the stringified levels back into the levels slice
-	lsm.levels = make([][]int, lsm.maxLevels)
+	lsm.levels = make([][]int, int(MAX_LEVELS))
 
 	i := 0
 	for i < len(stringifiedLevels) {
@@ -128,7 +141,7 @@ func (lsm *LSM) deserialize(data []byte) error {
 			i++ // skip ']'
 		}
 
-		if uint64(levelNum) < lsm.maxLevels {
+		if uint64(levelNum) < MAX_LEVELS {
 			lsm.levels[levelNum] = tableIndexes
 		}
 	}
@@ -142,18 +155,10 @@ Always returns an LSM instance. If previous data couldn't be loaded, the DataLos
 */
 func LoadLSM() *LSM {
 	// Create a new LSM instance with config values
-	cfg := config.GetConfig()
 	lsm := &LSM{
-		// Initialize config attributes
-		maxLevels:         cfg.LSM.MaxLevels,
-		maxTablesPerLevel: cfg.LSM.MaxTablesPerLevel,
-		maxMemtables:      cfg.LSM.MaxMemtables,
-		compactionType:    cfg.LSM.CompactionType,
-		lsmPath:           cfg.LSM.LSMPath,
-		crcSize:           cfg.CRC.Size,
 		// Initialize slices with config values
-		levels:    make([][]int, int(cfg.LSM.MaxLevels)),
-		memtables: make([]*memtable.MemTable, 0, int(cfg.LSM.MaxMemtables)),
+		levels:    make([][]int, int(MAX_LEVELS)),
+		memtables: make([]*memtable.MemTable, 0, int(MAX_MEMTABLES)),
 		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
 		cache:     cache.NewReadPathCache(),
 		DataLost:  false, // Initially assume no data loss
@@ -162,7 +167,7 @@ func LoadLSM() *LSM {
 	blockManager := block_manager.GetBlockManager()
 
 	// Check if the file exists using os.Stat
-	_, err := os.Stat(lsm.lsmPath)
+	_, err := os.Stat(LSM_PATH)
 	if os.IsNotExist(err) {
 		// File doesn't exist - this is a fresh start (not data loss)
 		firstMemtable, _ := memtable.NewMemtable()
@@ -173,7 +178,7 @@ func LoadLSM() *LSM {
 	// File exists, so any errors from here on are considered data corruption
 
 	// Try to read the levels size
-	levelsSizeBytes, _, err := blockManager.ReadFromDisk(lsm.lsmPath, 0, 8)
+	levelsSizeBytes, _, err := blockManager.ReadFromDisk(LSM_PATH, 0, 8)
 	if err != nil {
 		// File exists but can't read size header - corruption
 		lsm.DataLost = true
@@ -183,7 +188,7 @@ func LoadLSM() *LSM {
 	levelsSize := binary.LittleEndian.Uint64(levelsSizeBytes)
 
 	// Try to read the actual levels data
-	data, _, err := blockManager.ReadFromDisk(lsm.lsmPath, 8+uint64(lsm.crcSize), uint64(levelsSize))
+	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8+uint64(CRC_SIZE), uint64(levelsSize))
 	if err != nil {
 		// File exists but can't read data - corruption
 		lsm.DataLost = true
@@ -533,7 +538,7 @@ func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]strin
 
 func (lsm *LSM) checkIfToFlush(key string) error {
 	n := lsm.memtables[len(lsm.memtables)-1]
-	if uint64(len(lsm.memtables)) == lsm.maxMemtables && n.IsFull() {
+	if uint64(len(lsm.memtables)) == MAX_MEMTABLES && n.IsFull() {
 		// Flush the memtable to disk
 		// TODO: concurrently flush
 	}
