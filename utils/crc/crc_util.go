@@ -8,17 +8,23 @@ import (
 )
 
 // TODO: Displace CRC_SIZE to config, load BLOCK_SIZE from config
-const CRC_SIZE = 4
 const BLOCK_SIZE = 1024 * uint64(4)
+const CRC_SIZE = 4
+
+// GetCRC calculates CRC32 checksum over a byte array.
+func GetCRC(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
+}
 
 // AddCRCToData adds a CRC32 checksum to the beginning of the block data.
+// Assumes that the data slice has left space for the CRC in the first 4 bytes.
 func AddCRCToBlockData(data []byte) []byte {
 	if len(data) < CRC_SIZE {
-		return data // Safety check
+		return data // Safety check, should not happen because data always leaves space for CRC
 	}
 
 	// Calculate CRC for everything after the CRC field
-	crc := crc32.ChecksumIEEE(data[CRC_SIZE:])
+	crc := GetCRC(data[CRC_SIZE:])
 
 	// Put CRC at the beginning using little endian
 	binary.LittleEndian.PutUint32(data[:CRC_SIZE], crc)
@@ -28,12 +34,11 @@ func AddCRCToBlockData(data []byte) []byte {
 
 /*
 Adds CRC at the beginning of each block therefore making the the data ready to be written.
+The data slice given does not leave space for CRCs, this function handles that internally.
+
+returns a slice of bytes ready to be written to disk with CRCs added at the beginning of each block.
 */
 func AddCRCsToData(serializedData []byte) []byte {
-
-	if len(serializedData) < CRC_SIZE {
-		return serializedData // Safety check
-	}
 
 	dataPerBlock := BLOCK_SIZE - CRC_SIZE
 	numBlocks := int(math.Ceil(float64(len(serializedData)) / float64(dataPerBlock)))
