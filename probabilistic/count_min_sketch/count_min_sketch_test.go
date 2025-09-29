@@ -3,6 +3,7 @@ package count_min_sketch
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 	"testing"
@@ -491,6 +492,11 @@ func TestMixedConcurrentOperations(t *testing.T) {
 
 // TestSaveToDisk tests saving Count-Min Sketch to disk
 func TestSaveToDisk(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("count_min_sketch_test_cms")
+	}()
+	
 	cms := NewCMS(0.01, 0.05)
 	
 	// Add some test data
@@ -508,6 +514,11 @@ func TestSaveToDisk(t *testing.T) {
 
 // TestLoadFromDisk tests loading Count-Min Sketch from disk
 func TestLoadFromDisk(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("count_min_sketch_test_cms_load")
+	}()
+	
 	// Create and populate original CMS
 	original := NewCMS(0.01, 0.05)
 	testKeys := []string{"apple", "banana", "cherry", "apple", "banana", "apple"}
@@ -548,6 +559,11 @@ func TestLoadFromDisk(t *testing.T) {
 
 // TestSaveLoadRoundTrip tests complete save/load cycle
 func TestSaveLoadRoundTrip(t *testing.T) {
+	// Cleanup test files after test completes
+	defer func() {
+		os.Remove("count_min_sketch_test_cms_roundtrip")
+	}()
+	
 	original := NewCMS(0.001, 0.01)
 	
 	// Add diverse test data
