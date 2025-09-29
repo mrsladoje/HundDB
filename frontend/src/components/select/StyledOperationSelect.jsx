@@ -47,6 +47,11 @@ const customSelectStyles = {
       color: '#6b5e4a', // darker brown
     }
   }),
+  // Ensure the portaled menu is above all other UI
+  menuPortal: (base) => ({
+    ...base,
+    zIndex: 9999,
+  }),
   menu: (provided) => ({
     ...provided,
     border: '4px solid #4b4436',
@@ -55,6 +60,7 @@ const customSelectStyles = {
     backgroundColor: 'white',
     overflow: 'hidden',
     marginTop: '4px',
+    zIndex: 9999,
   }),
   menuList: (provided) => ({
     ...provided,
