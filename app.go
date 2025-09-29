@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hunddb/lsm"
 	model "hunddb/model/record"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -51,6 +54,65 @@ func (a *App) recordToMap(record *model.Record) map[string]interface{} {
 		"timestamp": record.Timestamp,
 		"deleted":   record.Tombstone,
 	}
+}
+
+// CheckExistingData checks if there are existing database files with actual data
+func (a *App) CheckExistingData() (bool, error) {
+	// Get current config to check paths
+	configData, err := a.GetConfig()
+	if err != nil {
+		return false, err
+	}
+	
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(configData), &config); err != nil {
+		return false, err
+	}
+	
+	// Check LSM path - only if file exists AND has size > 0
+	lsmConfig, ok := config["lsm"].(map[string]interface{})
+	if ok {
+		if lsmPath, exists := lsmConfig["lsm_path"].(string); exists && lsmPath != "" {
+			if stat, err := os.Stat(lsmPath); err == nil && stat.Size() > 0 {
+				return true, nil
+			}
+		}
+	}
+	
+	// Check WAL path - only if file exists AND has size > 0  
+	walConfig, ok := config["wal"].(map[string]interface{})
+	if ok {
+		if walPath, exists := walConfig["wal_path"].(string); exists && walPath != "" {
+			if stat, err := os.Stat(walPath); err == nil && stat.Size() > 0 {
+				return true, nil
+			}
+		}
+	}
+	
+	// Check for SSTable files with actual data
+	if lsmConfig != nil {
+		if lsmPath, exists := lsmConfig["lsm_path"].(string); exists && lsmPath != "" {
+			dir := filepath.Dir(lsmPath)
+			if entries, err := os.ReadDir(dir); err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() {
+						name := entry.Name()
+						// Check for database files with actual size
+						if strings.HasSuffix(name, ".sst") || 
+						   strings.HasSuffix(name, ".db") || 
+						   strings.Contains(name, "lsm") {
+							fullPath := filepath.Join(dir, name)
+							if stat, err := os.Stat(fullPath); err == nil && stat.Size() > 0 {
+								return true, nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return false, nil
 }
 
 // LSM Wrapper Methods - Convert complex types to Wails-compatible types
@@ -202,4 +264,35 @@ func isKeyNotFoundError(err error) bool {
 	// Check if the error message contains the ErrKeyNotFound message
 	// This handles cases like "some context: key not found"
 	return strings.Contains(err.Error(), ErrKeyNotFound.Error())
+}
+
+// SaveConfig saves the provided configuration to app.json file
+// configJSON: JSON string containing the complete configuration
+func (a *App) SaveConfig(configJSON string) error {
+	configPath := "utils/config/app.json"
+	
+	// Validate JSON format by trying to parse it
+	var config map[string]interface{}
+	if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+		return fmt.Errorf("invalid JSON format: %w", err)
+	}
+	
+	// Write the configuration to file
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	
+	return nil
+}
+
+// GetConfig retrieves the current configuration from app.json file
+func (a *App) GetConfig() (string, error) {
+	configPath := "utils/config/app.json"
+	
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read config file: %w", err)
+	}
+	
+	return string(data), nil
 }
