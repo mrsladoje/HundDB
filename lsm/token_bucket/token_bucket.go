@@ -3,15 +3,28 @@ package token_bucket
 import (
 	"encoding/binary"
 	"hunddb/lsm/block_manager"
+	"hunddb/utils/config"
 	"time"
 )
 
+// Configuration variables loaded from config file
+var (
+	TOKEN_CAPACITY  uint16 // Maximum amount of tokens
+	REFILL_INTERVAL uint   // Refills tokens on every passed interval (seconds)
+	REFILL_AMOUNT   uint16 // Amount to be refilled
+)
+
+// init loads TokenBucket configuration from config file
+func init() {
+	cfg := config.GetConfig()
+	TOKEN_CAPACITY = cfg.TokenBucket.Capacity
+	REFILL_INTERVAL = cfg.TokenBucket.RefillInterval
+	REFILL_AMOUNT = cfg.TokenBucket.RefillAmount
+}
+
 const (
-	TOKEN_CAPACITY        uint16 = 5  // Maximum amount of tokens
-	REFILL_INTERVAL       uint64 = 20 // Refills tokens on every passed interval
-	REFILL_AMOUNT         uint16 = 1  // Amount to be refilled
-	LAST_RESET_SIZE       uint16 = 8  // Size of LastReset in bytes
-	REMAINING_TOKENS_SIZE uint16 = 2  // Size of RemainingTokens in bytes
+	LAST_RESET_SIZE       uint16 = 8 // Size of LastReset in bytes
+	REMAINING_TOKENS_SIZE uint16 = 2 // Size of RemainingTokens in bytes
 	FILEPATH              string = "lsm/token_bucket/token_bucket.db"
 )
 
@@ -22,7 +35,8 @@ type TokenBucket struct {
 }
 
 // NewTokenBucket creates a new TokenBucket instance
-func NewTokenBucket(capacity uint8, refillInterval uint64) *TokenBucket {
+// Parameters are loaded from configuration file
+func NewTokenBucket() *TokenBucket {
 	BlockManager := block_manager.GetBlockManager()
 	data, _, _ := BlockManager.ReadFromDisk(FILEPATH, 0, uint64(LAST_RESET_SIZE+REMAINING_TOKENS_SIZE))
 

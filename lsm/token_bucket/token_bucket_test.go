@@ -651,7 +651,7 @@ func TestDiskIO_ErrorHandling(t *testing.T) {
 
 	// Test recovery from no file
 	os.Remove("lsm/token_bucket/token_bucket.db")
-	tb2 := NewTokenBucket(0, 0)
+	tb2 := NewTokenBucket()
 
 	// Should create default instance
 	if tb2.RemainingTokens != TOKEN_CAPACITY {

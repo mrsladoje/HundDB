@@ -2,9 +2,12 @@ package count_min_sketch
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
 	"sync"
 
+	block_manager "hunddb/lsm/block_manager"
+	crc_util "hunddb/utils/crc"
 	sh "hunddb/utils/seeded_hash"
 )
 
@@ -146,5 +149,64 @@ func Deserialize(data []byte) *CMS {
 		k:     k,
 		h:     h,
 		table: table,
+		mu:    sync.RWMutex{}, // Initialize the mutex
 	}
+}
+
+// GetM returns the m parameter (number of columns)
+func (cms *CMS) GetM() uint32 {
+	return cms.m
+}
+
+// GetK returns the k parameter (number of hash functions)
+func (cms *CMS) GetK() uint32 {
+	return cms.k
+}
+
+// SaveToDisk saves the Count-Min Sketch to disk with the given name
+func (cms *CMS) SaveToDisk(name string) error {
+	filename := fmt.Sprintf("count_min_sketch_%s", name)
+	
+	// Serialize the CMS data
+	serializedData := cms.Serialize()
+	
+	// Create file data: [size (8B) + serialized data]
+	totalSize := 8 + len(serializedData)
+	fileData := make([]byte, totalSize)
+	
+	// Write size header
+	binary.LittleEndian.PutUint64(fileData[0:8], uint64(len(serializedData)))
+	
+	// Copy serialized data
+	copy(fileData[8:], serializedData)
+	
+	// Add CRC blocks and write to disk
+	dataWithCRC := crc_util.AddCRCsToData(fileData)
+	
+	blockManager := block_manager.GetBlockManager()
+	return blockManager.WriteToDisk(dataWithCRC, filename, 0)
+}
+
+// LoadCountMinSketchFromDisk loads a Count-Min Sketch from disk with the given name
+func LoadCountMinSketchFromDisk(name string) (*CMS, error) {
+	filename := fmt.Sprintf("count_min_sketch_%s", name)
+	blockManager := block_manager.GetBlockManager()
+	
+	// Read size header (first 8 bytes)
+	sizeBytes, _, err := blockManager.ReadFromDisk(filename, 0, 8)
+	if err != nil {
+		return nil, fmt.Errorf("file not found or corrupted: %v", err)
+	}
+	
+	dataSize := binary.LittleEndian.Uint64(sizeBytes)
+	
+	// Read serialized data starting from offset 8 + CRC_SIZE
+	// (BlockManager accounts for CRC internally)
+	serializedData, _, err := blockManager.ReadFromDisk(filename, 8+4, dataSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read data: %v", err)
+	}
+	
+	// Deserialize and return
+	return Deserialize(serializedData), nil
 }

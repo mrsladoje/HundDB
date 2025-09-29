@@ -34,5 +34,10 @@
   },
   "crc": {
     "size": 4
+  },
+  "token_bucket": {
+    "capacity": 5,
+    "refill_interval": 20,
+    "refill_amount": 1
   }
 }
