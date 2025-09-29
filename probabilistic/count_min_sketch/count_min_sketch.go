@@ -165,7 +165,7 @@ func (cms *CMS) GetK() uint32 {
 
 // SaveToDisk saves the Count-Min Sketch to disk with the given name
 func (cms *CMS) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("count_min_sketch_%s", name)
+	filename := fmt.Sprintf("count_min_sketch_%s.db", name)
 	
 	// Serialize the CMS data
 	serializedData := cms.Serialize()
@@ -189,7 +189,7 @@ func (cms *CMS) SaveToDisk(name string) error {
 
 // LoadCountMinSketchFromDisk loads a Count-Min Sketch from disk with the given name
 func LoadCountMinSketchFromDisk(name string) (*CMS, error) {
-	filename := fmt.Sprintf("count_min_sketch_%s", name)
+	filename := fmt.Sprintf("count_min_sketch_%s.db", name)
 	blockManager := block_manager.GetBlockManager()
 	
 	// Read size header (first 8 bytes)
