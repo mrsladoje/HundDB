@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"fmt"
 	memtable "hunddb/lsm/memtable"
 	"sync"
 )
@@ -55,7 +56,7 @@ func (p *FlushPool) Stop() {
 }
 
 // submitBatch submits a batch of flush jobs and commits results to level 0 in-order (oldest to newest)
-func (p *FlushPool) submitBatch(lsm *LSM, memtables []*memtable.MemTable, indexes []int) {
+func (p *FlushPool) submitBatch(lsm *LSM, memtables []*memtable.MemTable, indexes []int, lowWaterMarks []uint64) {
 	n := len(memtables)
 	resCh := make(chan flushResult, n)
 
@@ -83,6 +84,20 @@ func (p *FlushPool) submitBatch(lsm *LSM, memtables []*memtable.MemTable, indexe
 					lsm.levelLocks[0].Lock()
 					lsm.mu.Lock()
 					lsm.levels[0] = append(lsm.levels[0], uint64(rr.index))
+
+					// After successful flush, use the memtable's low water mark to clean up WAL segments
+					// The low water mark for this memtable position tells us which WAL segments can be deleted
+					if rr.pos < len(lowWaterMarks) {
+						lowWaterMark := lowWaterMarks[rr.pos]
+						if lowWaterMark > 0 {
+							// Clean up WAL segments below this low water mark
+							if err := lsm.wal.DeleteOldLogs(lowWaterMark); err != nil {
+								// Log error but don't fail the flush
+								fmt.Printf("Warning: Failed to delete old WAL logs below watermark %d: %v\n", lowWaterMark, err)
+							}
+						}
+					}
+
 					lsm.mu.Unlock()
 					lsm.levelLocks[0].Unlock()
 

@@ -415,10 +415,12 @@ func (lsm *LSM) Put(key string, value []byte) error {
 
 	record := model.NewRecord(key, value, uint64(time.Now().UnixNano()), false)
 
-	err := lsm.wal.WriteRecord(record)
+	logIndex, err := lsm.wal.WriteRecord(record)
 	if err != nil {
 		return err
 	}
+	// Update low water mark for the current memtable
+	lsm.lowWaterMark[len(lsm.memtables)-1] = logIndex
 
 	err = lsm.memtables[len(lsm.memtables)-1].Put(record)
 	if err != nil {
@@ -441,10 +443,12 @@ func (lsm *LSM) Delete(key string) (bool, error) {
 
 	record := model.NewRecord(key, nil, uint64(time.Now().UnixNano()), true)
 
-	err := lsm.wal.WriteRecord(record)
+	logIndex, err := lsm.wal.WriteRecord(record)
 	if err != nil {
 		return false, err
 	}
+	// Update low water mark for the current memtable
+	lsm.lowWaterMark[len(lsm.memtables)-1] = logIndex
 
 	keyExists := lsm.memtables[len(lsm.memtables)-1].Delete(record)
 
@@ -724,6 +728,10 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 		batch := make([]*memtable.MemTable, len(lsm.memtables))
 		copy(batch, lsm.memtables)
 
+		// Copy low water marks for the memtables being flushed
+		lowWaterMarks := make([]uint64, len(batch))
+		copy(lowWaterMarks, lsm.lowWaterMark[:len(batch)])
+
 		// Assign indices for each memtable using the monotonic counter
 		indexes := make([]int, len(batch))
 		for i := 0; i < len(batch); i++ {
@@ -734,11 +742,16 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 		fresh, _ := memtable.NewMemtable()
 		lsm.memtables = []*memtable.MemTable{fresh}
 
+		// Reset low water marks - keep the array but initialize first element to 0 for the fresh memtable
+		for i := range lsm.lowWaterMark {
+			lsm.lowWaterMark[i] = 0
+		}
+
 		// Ensure flush pool exists (lazy init) with 4 workers
 		lsm.initFlushPoolOnce(4)
 
 		// Submit batch to pool (concurrently flushed, but committed oldest->newest)
-		lsm.flushPool.submitBatch(lsm, batch, indexes)
+		lsm.flushPool.submitBatch(lsm, batch, indexes, lowWaterMarks)
 	}
 	return nil
 }
