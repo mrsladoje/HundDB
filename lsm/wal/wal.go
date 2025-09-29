@@ -55,10 +55,12 @@ func (wal *WAL) WriteRecord(record *record.Record) error {
 
 	// Checks if there is enough space left in the block.
 	if int(BLOCK_SIZE-wal.offsetInBlock) < spaceNeeded {
-		err := wal.flushCurrentAndMakeNewBlock()
+		err := wal.flushBlock()
 		if err != nil {
 			return err
 		}
+		wal.makeNewBlock()
+
 		// If the record is larger than a whole block, fragment it
 		if spaceNeeded > int(BLOCK_SIZE) {
 			return wal.writeFragmentedRecord(payload)
@@ -119,14 +121,18 @@ func (wal *WAL) writeToBlock(payload []byte, fragmentType byte) error {
 
 	// If the block is exactly full, flush it
 	if wal.offsetInBlock == BLOCK_SIZE {
-		return wal.flushCurrentAndMakeNewBlock()
+		err := wal.flushBlock()
+		if err != nil {
+			return err
+		}
+		wal.makeNewBlock()
 	}
 
 	return nil
 }
 
-// flushCurrentAndMakeNewBlock writes the current block to storage and prepares for the next block.
-func (wal *WAL) flushCurrentAndMakeNewBlock() error {
+// flushBlock writes the current block to storage and prepares for the next block.
+func (wal *WAL) flushBlock() error {
 	wal.lastBlock = crc.AddCRCToBlockData(wal.lastBlock)
 	err := bm.GetBlockManager().WriteBlock(block_location.BlockLocation{
 		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, wal.lastLogIndex),
@@ -135,24 +141,26 @@ func (wal *WAL) flushCurrentAndMakeNewBlock() error {
 	if err != nil {
 		return fmt.Errorf("failed to write block to disk: %w", err)
 	}
+	wal.blocksWrittenInLastLog++
+	return nil
+	}
 
+// makeNewBlock initializes a new block for writing and updates WAL state accordingly.
+func (wal *WAL) makeNewBlock() {
 	wal.lastBlock = make([]byte, BLOCK_SIZE)
 	wal.offsetInBlock = crc.CRC_SIZE
-	wal.blocksInCurrentLog++
 
 	// Start new log if current log is full
-	if wal.blocksInCurrentLog >= LOG_SIZE {
+	if wal.blocksWrittenInLastLog >= LOG_SIZE {
 		wal.lastLogIndex++
-		wal.blocksInCurrentLog = 0
+		wal.blocksWrittenInLastLog = 0
 	}
-	return nil
 }
 
 // Close flushes any remaining data and closes the WAL.
 // Should be called during graceful shutdown to avoid data loss.
 func (wal *WAL) Close() error {
-	if wal.offsetInBlock > crc.CRC_SIZE {
-		err := wal.flushCurrentAndMakeNewBlock()
+	err := wal.flushBlock()
 		if err != nil {
 			return fmt.Errorf("failed to flush current block: %w", err)
 		}
