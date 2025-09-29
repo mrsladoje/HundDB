@@ -11,6 +11,5 @@
   },
   "postBuildHooks": {
     "*/*": "go run -C ../.. ./utils/icon/delete"
-  },
-  "frontend:dev:serverUrl": "http://localhost:5173"
+  }
 }
