@@ -140,6 +140,11 @@ func getDefaultConfig() *DBConfig {
 	// CRC defaults
 	config.CRC.Size = 4
 
+	// TokenBucket defaults
+	config.TokenBucket.Capacity = 25
+	config.TokenBucket.RefillInterval = 20
+	config.TokenBucket.RefillAmount = 1
+
 	return config
 }
 
