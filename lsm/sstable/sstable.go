@@ -1061,6 +1061,45 @@ func Get(key string, index int) (record *record.Record, err error) {
 	}
 }
 
+// GetSSBoundaries returns the first (smallest) and last (largest) keys stored in the SSTable for the provided index.
+// It loads the SSTable config, locates the index component and reads the first and last entries directly.
+func GetSSBoundaries(index int) (string, string, error) {
+	// 0. Deserialize SSTable Config
+	config, _, offsets, err := deserializeSSTableConfig(index)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to deserialize SSTable config: %v", err)
+	}
+
+	// 1. Prepare Index component path and offset
+	indexPath := fmt.Sprintf(INDEX_FILE_NAME_FORMAT, index)
+	indexFileOffset := uint64(CRC_SIZE) + uint64(STANDARD_FLAG_SIZE)
+	if !config.UseSeparateFiles {
+		indexPath = fmt.Sprintf(FILE_NAME_FORMAT, index)
+		indexFileOffset = offsets[1] + CRC_SIZE
+	}
+
+	// 2. Read first entry key (skip the 8B last-entry-offset header)
+	firstKey, _, err := readIndexMetadataEntry(indexPath, indexFileOffset+STANDARD_FLAG_SIZE)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read first index entry: %v", err)
+	}
+
+	// 3. Read last entry offset header, then the last entry key
+	blockManager := block_manager.GetBlockManager()
+	lastEntryOffsetBytes, _, err := blockManager.ReadFromDisk(indexPath, indexFileOffset, STANDARD_FLAG_SIZE)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read last entry offset: %v", err)
+	}
+	lastEntryOffset := binary.LittleEndian.Uint64(lastEntryOffsetBytes)
+
+	lastKey, _, err := readIndexMetadataEntry(indexPath, lastEntryOffset)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to read last index entry: %v", err)
+	}
+
+	return firstKey, lastKey, nil
+}
+
 /*
 GetNextForPrefix retrieves the next record for a given prefix from the SSTable
 */

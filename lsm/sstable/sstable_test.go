@@ -1117,6 +1117,79 @@ func TestGet_InvalidSSTableIndex(t *testing.T) {
 	}
 }
 
+// Tests for GetSSBoundaries
+func TestGetSSBoundaries_Basic(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = true
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 5
+
+	recs := createTestRecords(10) // keys key_000 .. key_009
+	if err := PersistMemtable(recs, 300); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	first, last, err := GetSSBoundaries(300)
+	if err != nil {
+		t.Fatalf("GetSSBoundaries error: %v", err)
+	}
+	if first != "key_000" || last != "key_009" {
+		t.Errorf("unexpected boundaries: first=%s last=%s", first, last)
+	}
+}
+
+func TestGetSSBoundaries_SingleFile(t *testing.T) {
+	setupTestDir(t)
+
+	// Save original config values
+	originalUseSeparateFiles := USE_SEPARATE_FILES
+	originalCompressionEnabled := COMPRESSION_ENABLED
+	originalSparseStepIndex := SPARSE_STEP_INDEX
+
+	defer func() {
+		USE_SEPARATE_FILES = originalUseSeparateFiles
+		COMPRESSION_ENABLED = originalCompressionEnabled
+		SPARSE_STEP_INDEX = originalSparseStepIndex
+	}()
+
+	USE_SEPARATE_FILES = false
+	COMPRESSION_ENABLED = false
+	SPARSE_STEP_INDEX = 10
+
+	recs := createTestRecords(5) // key_000 .. key_004
+	if err := PersistMemtable(recs, 301); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	first, last, err := GetSSBoundaries(301)
+	if err != nil {
+		t.Fatalf("GetSSBoundaries error: %v", err)
+	}
+	if first != "key_000" || last != "key_004" {
+		t.Errorf("unexpected boundaries in single-file: first=%s last=%s", first, last)
+	}
+}
+
+func TestGetSSBoundaries_InvalidIndex(t *testing.T) {
+	setupTestDir(t)
+	_, _, err := GetSSBoundaries(999)
+	if err == nil {
+		t.Errorf("expected error for invalid index")
+	}
+}
+
 //  Benchmark tests for Get method
 
 func BenchmarkGet_Found(b *testing.B) {

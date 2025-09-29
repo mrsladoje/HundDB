@@ -671,11 +671,14 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 
 // maybeStartCompactions checks compaction triggers after a flush; left empty for now
 func (lsm *LSM) maybeStartCompactions() {
-	if COMPACTION_TYPE != "size" {
-		return
+	switch COMPACTION_TYPE {
+	case "size":
+		go lsm.sizeTieredCompaction()
+	case "level", "leveled":
+		go lsm.leveledCompaction()
+	default:
+		// unsupported type: do nothing
 	}
-	// Run compaction asynchronously to avoid blocking flush completion
-	go lsm.sizeTieredCompaction()
 }
 
 // sizeTieredCompaction performs size-tiered compaction starting from level 0 and cascading upwards
@@ -765,4 +768,141 @@ func (lsm *LSM) sizeTieredCompaction() {
 			lsm.levelLocks[lvl].Unlock()
 		}
 	}
+}
+
+// leveledCompaction compacts oldest table(s) from level L with overlapping tables from level L+1
+// and places the result into level L+1, cascading upwards if levels exceed capacity.
+func (lsm *LSM) leveledCompaction() {
+	maxLevels := int(MAX_LEVELS)
+	maxPer := int(MAX_TABLES_PER_LEVEL)
+	if maxLevels < 2 || maxPer < 1 {
+		return
+	}
+
+	// Iterate from L0 upwards (up to the second-to-last level, since we promote to next)
+	for lvl := 0; lvl < maxLevels-1; lvl++ {
+		for {
+			// Exclusively reserve source level
+			lsm.levelLocks[lvl].Lock()
+
+			// Check current count
+			lsm.mu.RLock()
+			count := len(lsm.levels[lvl])
+			lsm.mu.RUnlock()
+
+			// Trigger rule: compact while level exceeds capacity
+			if count <= maxPer {
+				lsm.levelLocks[lvl].Unlock()
+				break
+			}
+
+			target := lvl + 1
+			// Lock target level as well to avoid races with its compactions
+			lsm.levelLocks[target].Lock()
+
+			// Snapshot candidate from source (oldest first)
+			var srcIdx uint64
+			lsm.mu.RLock()
+			if len(lsm.levels[lvl]) > 0 {
+				srcIdx = lsm.levels[lvl][0]
+			} else {
+				srcIdx = 0
+			}
+			lsm.mu.RUnlock()
+
+			if srcIdx == 0 && count == 0 {
+				// nothing to do
+				lsm.levelLocks[target].Unlock()
+				lsm.levelLocks[lvl].Unlock()
+				break
+			}
+
+			// Determine overlap window for candidate
+			minK, maxK, err := sstable.GetSSBoundaries(int(srcIdx))
+			if err != nil {
+				// On error, give up this round for safety
+				lsm.levelLocks[target].Unlock()
+				lsm.levelLocks[lvl].Unlock()
+				return
+			}
+
+			// Collect overlapping tables from target level
+			overlaps := make([]int, 0)
+			lsm.mu.RLock()
+			targetSlice := lsm.levels[target]
+			lsm.mu.RUnlock()
+			for _, tIdx := range targetSlice {
+				tMin, tMax, e := sstable.GetSSBoundaries(int(tIdx))
+				if e != nil {
+					// Skip this table if boundaries are unreadable
+					continue
+				}
+				// Overlap if ranges intersect
+				if !(maxK < tMin || tMax < minK) {
+					overlaps = append(overlaps, int(tIdx))
+				}
+			}
+
+			// Build compaction list: candidate + overlaps
+			// Order newest first as required by sstable.Compact
+			compactionList := make([]int, 0, 1+len(overlaps))
+			// Candidate from lvl is newer than those in target level typically; put first
+			compactionList = append(compactionList, int(srcIdx))
+			// For target overlaps, add newest first by scanning from end to start
+			if len(overlaps) > 1 {
+				// overlaps order currently matches targetSlice order; we need newest first (end to start)
+				// Create a set for quick membership test
+				overlapSet := make(map[int]struct{}, len(overlaps))
+				for _, v := range overlaps {
+					overlapSet[v] = struct{}{}
+				}
+				for i := len(targetSlice) - 1; i >= 0; i-- {
+					idx := int(targetSlice[i])
+					if _, ok := overlapSet[idx]; ok {
+						compactionList = append(compactionList, idx)
+					}
+				}
+			} else if len(overlaps) == 1 {
+				compactionList = append(compactionList, overlaps[0])
+			}
+
+			// Assign new SSTable index
+			newIndex := int(lsm.GetNextSSTableIndexWithIncrement())
+
+			// Perform compaction with both levels reserved
+			if err := sstable.Compact(compactionList, newIndex); err != nil {
+				lsm.levelLocks[target].Unlock()
+				lsm.levelLocks[lvl].Unlock()
+				return
+			}
+
+			// Remove src and overlaps; append newIndex to target level
+			lsm.mu.Lock()
+			// Remove source candidate from level lvl (first occurrence)
+			lsm.levels[lvl] = removeFirstOccurrence(lsm.levels[lvl], uint64(srcIdx))
+
+			// Remove each overlap in target level
+			for _, oi := range overlaps {
+				lsm.levels[target] = removeFirstOccurrence(lsm.levels[target], uint64(oi))
+			}
+
+			// Append new compacted table to target level
+			lsm.levels[target] = append(lsm.levels[target], uint64(newIndex))
+			lsm.mu.Unlock()
+
+			// Release locks and iterate again while over capacity
+			lsm.levelLocks[target].Unlock()
+			lsm.levelLocks[lvl].Unlock()
+		}
+	}
+}
+
+// removeFirstOccurrence removes the first match of val from slice s, if present
+func removeFirstOccurrence(s []uint64, val uint64) []uint64 {
+	for i, v := range s {
+		if v == val {
+			return append(s[:i], s[i+1:]...)
+		}
+	}
+	return s
 }
