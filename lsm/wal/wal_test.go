@@ -732,7 +732,7 @@ func TestWAL_TombstoneRecords(t *testing.T) {
 	if records[1].Key != "key_to_delete" {
 		t.Errorf("Expected tombstone key 'key_to_delete', got %s", records[1].Key)
 	}
-	if records[1].Value != nil && len(records[1].Value) != 0 {
+	if len(records[1].Value) != 0 {
 		t.Errorf("Expected tombstone to have nil or empty value, got %d bytes", len(records[1].Value))
 	}
 }
