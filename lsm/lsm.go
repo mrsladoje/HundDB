@@ -55,6 +55,9 @@ type LSM struct {
 
 	// mu protects concurrent access to LSM shared state (levels, memtables metadata, DataLost, NextSSTableIndex)
 	mu sync.RWMutex
+
+	// flushPool is the worker pool used for concurrent memtable flushes (lazy-initialized)
+	flushPool *FlushPool
 }
 
 /*
@@ -174,6 +177,7 @@ func LoadLSM() *LSM {
 		wal:       wal.NewWAL("wal.db", 0), // TODO: implement actual logic here
 		cache:     cache.NewReadPathCache(),
 		DataLost:  false, // Initially assume no data loss
+		flushPool: nil,
 	}
 
 	blockManager := block_manager.GetBlockManager()
@@ -236,6 +240,15 @@ func LoadLSM() *LSM {
 	lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
 	lsm.mu.Unlock()
 	return lsm
+}
+
+// initFlushPoolOnce lazily initializes the flush worker pool
+func (lsm *LSM) initFlushPoolOnce(workers int) {
+	lsm.mu.Lock()
+	defer lsm.mu.Unlock()
+	if lsm.flushPool == nil {
+		lsm.flushPool = NewFlushPool(workers)
+	}
 }
 
 /*
@@ -629,8 +642,30 @@ func (lsm *LSM) GetNextSSTableIndexWithIncrement() uint64 {
 func (lsm *LSM) checkIfToFlush(key string) error {
 	n := lsm.memtables[len(lsm.memtables)-1]
 	if uint64(len(lsm.memtables)) == MAX_MEMTABLES && n.IsFull() {
-		// Flush the memtable to disk
-		// TODO: concurrently flush
+		// Prepare batch: copy current memtables in order (oldest->newest)
+		batch := make([]*memtable.MemTable, len(lsm.memtables))
+		copy(batch, lsm.memtables)
+
+		// Assign indices for each memtable using the monotonic counter
+		indexes := make([]int, len(batch))
+		for i := 0; i < len(batch); i++ {
+			indexes[i] = int(lsm.GetNextSSTableIndexWithIncrement())
+		}
+
+		// Reset memtables with a fresh empty one so writers can continue immediately
+		fresh, _ := memtable.NewMemtable()
+		lsm.memtables = []*memtable.MemTable{fresh}
+
+		// Ensure flush pool exists (lazy init) with 4 workers
+		lsm.initFlushPoolOnce(4)
+
+		// Submit batch to pool (concurrently flushed, but committed oldest->newest)
+		lsm.flushPool.submitBatch(lsm, batch, indexes)
 	}
 	return nil
+}
+
+// maybeStartCompactions checks compaction triggers after a flush; left empty for now
+func (lsm *LSM) maybeStartCompactions() {
+	// TODO: compaction logic will be implemented later
 }
