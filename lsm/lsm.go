@@ -226,7 +226,7 @@ func LoadLSM() *LSM {
 	levelsSize := binary.LittleEndian.Uint64(levelsSizeBytes)
 
 	// Try to read the actual levels data
-	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8, uint64(levelsSize))
+	data, _, err := blockManager.ReadFromDisk(LSM_PATH, 8+CRC_SIZE, uint64(levelsSize))
 	if err != nil {
 		// File exists but can't read data - corruption
 		lsm.mu.Lock()

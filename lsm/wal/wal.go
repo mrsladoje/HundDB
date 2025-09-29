@@ -64,6 +64,12 @@ func BuildWAL() (*WAL, error) {
 		return nil, fmt.Errorf("failed to reload WAL: %w", err)
 	}
 
+	// Ensure the WAL directory exists for metadata file
+	err = os.MkdirAll("hunddb/lsm/wal", 0755)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create WAL directory for metadata: %w", err)
+	}
+
 	// If Overwrite metadata file to indicate unclean shutdown
 	// This is done because if the program crashes, we want to know that it was not a graceful exit
 	// and we need to recover the offset from the metadata file
@@ -87,6 +93,12 @@ func BuildWAL() (*WAL, error) {
 
 // reloadWAL loads WAL metadata from a file to restore state after a crash or restart.
 func (wal *WAL) reloadWAL() error {
+	// Create logs directory if it doesn't exist
+	err := os.MkdirAll(wal.logsPath, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create WAL directory: %w", err)
+	}
+
 	logs, err := os.ReadDir(wal.logsPath)
 	if err != nil {
 		return fmt.Errorf("failed to read WAL directory: %w", err)

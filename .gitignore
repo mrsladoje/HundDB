@@ -36,3 +36,6 @@ wailsjs/
 
 # config json
 app.json
+
+# binaries
+*.bin
