@@ -22,13 +22,13 @@ const (
 // WAL represents a Write-Ahead Log implementation for database persistence.
 // It manages record writing, fragmentation across blocks, and crash recovery.
 type WAL struct {
-	lastBlock          []byte // Current block being written to
-	offsetInBlock      uint64 // Current write position within the block
-	blocksInCurrentLog uint64 // Number of blocks written in current log
-	firstLogIndex      uint64 // First log segment index
-	lastLogIndex       uint64 // Last log segment index
-	logSize            uint64 // Maximum number of blocks per log file
-	logsPath           string // Path to logs directory
+	lastBlock              []byte // Current block being written to
+	offsetInBlock          uint64 // Current write position within the block
+	blocksWrittenInLastLog uint64 // Number of blocks written in last log
+	firstLogIndex          uint64 // First log segment index
+	lastLogIndex           uint64 // Last log segment index
+	logSize                uint64 // Maximum number of blocks per log file
+	logsPath               string // Path to logs directory
 }
 
 // BuildWAL creates a new WAL instance with the specified directory path and starting log index,
@@ -38,7 +38,7 @@ func BuildWAL() (*WAL, error) {
 	wal := &WAL{
 		lastBlock:          make([]byte, BLOCK_SIZE),
 		offsetInBlock:      crc.CRC_SIZE,
-		blocksInCurrentLog: 0,
+		blocksWrittenInLastLog: 0,
 		firstLogIndex:      1,
 		lastLogIndex:       1,
 		logSize:            LOG_SIZE,
@@ -136,7 +136,7 @@ func (wal *WAL) flushBlock() error {
 	wal.lastBlock = crc.AddCRCToBlockData(wal.lastBlock)
 	err := bm.GetBlockManager().WriteBlock(block_location.BlockLocation{
 		FilePath:   fmt.Sprintf("%s/wal_%d.log", wal.logsPath, wal.lastLogIndex),
-		BlockIndex: wal.blocksInCurrentLog,
+		BlockIndex: wal.blocksWrittenInLastLog,
 	}, wal.lastBlock)
 	if err != nil {
 		return fmt.Errorf("failed to write block to disk: %w", err)
@@ -280,7 +280,7 @@ func (wal *WAL) recoverMemtable(memtable *memtable.MemTable, position *WalPositi
 	for position.LogIndex <= wal.lastLogIndex {
 		endBlockIndex := wal.logSize
 		if position.LogIndex == wal.lastLogIndex {
-			endBlockIndex = wal.blocksInCurrentLog
+			endBlockIndex = wal.blocksWrittenInLastLog
 		}
 
 		for position.BlockIndex < endBlockIndex {
