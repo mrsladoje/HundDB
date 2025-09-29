@@ -161,6 +161,33 @@ func (a *App) RangeIterate(rangeStart string, rangeEnd string, key string) (map[
 	return a.recordToMap(record), nil
 }
 
+// GetSSTableLevels returns the current SSTable level structure from the LSM
+func (a *App) GetSSTableLevels() [][]int {
+	return a.lsm.GetLevels()
+}
+
+// GetSSTableStats returns statistics about the SSTable structure
+func (a *App) GetSSTableStats() map[string]interface{} {
+	levels := a.lsm.GetLevels()
+
+	totalSSTables := 0
+	maxTablesPerLevel := 0
+
+	for _, level := range levels {
+		totalSSTables += len(level)
+		if len(level) > maxTablesPerLevel {
+			maxTablesPerLevel = len(level)
+		}
+	}
+
+	return map[string]interface{}{
+		"totalLevels":       len(levels),
+		"totalSSTables":     totalSSTables,
+		"maxTablesPerLevel": maxTablesPerLevel,
+		"levelDetails":      levels,
+	}
+}
+
 // Helper function to check if an error is or contains ErrKeyNotFound
 func isKeyNotFoundError(err error) bool {
 	if err == nil {

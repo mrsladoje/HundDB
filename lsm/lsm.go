@@ -29,8 +29,8 @@ type LSM struct {
 	maxTablesPerLevel uint64
 	maxMemtables      uint64
 	compactionType    string
-	lsmPath          string
-	crcSize          uint64
+	lsmPath           string
+	crcSize           uint64
 
 	// Flag to indicate if previous data was lost during loading
 	DataLost bool
@@ -149,8 +149,8 @@ func LoadLSM() *LSM {
 		maxTablesPerLevel: cfg.LSM.MaxTablesPerLevel,
 		maxMemtables:      cfg.LSM.MaxMemtables,
 		compactionType:    cfg.LSM.CompactionType,
-		lsmPath:          cfg.LSM.LSMPath,
-		crcSize:          cfg.CRC.Size,
+		lsmPath:           cfg.LSM.LSMPath,
+		crcSize:           cfg.CRC.Size,
 		// Initialize slices with config values
 		levels:    make([][]int, int(cfg.LSM.MaxLevels)),
 		memtables: make([]*memtable.MemTable, 0, int(cfg.LSM.MaxMemtables)),
@@ -541,4 +541,17 @@ func (lsm *LSM) checkIfToFlush(key string) error {
 		// TODO: concurrently flush
 	}
 	return nil
+}
+
+// GetLevels returns a copy of the current SSTable levels structure
+func (lsm *LSM) GetLevels() [][]int {
+	// Create a deep copy to prevent external modification
+	levelsCopy := make([][]int, len(lsm.levels))
+	for i, level := range lsm.levels {
+		if level != nil {
+			levelsCopy[i] = make([]int, len(level))
+			copy(levelsCopy[i], level)
+		}
+	}
+	return levelsCopy
 }
