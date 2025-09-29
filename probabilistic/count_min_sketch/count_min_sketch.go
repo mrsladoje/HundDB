@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sync"
 
 	block_manager "hunddb/lsm/block_manager"
@@ -165,7 +167,14 @@ func (cms *CMS) GetK() uint32 {
 
 // SaveToDisk saves the Count-Min Sketch to disk with the given name
 func (cms *CMS) SaveToDisk(name string) error {
-	filename := fmt.Sprintf("count_min_sketch_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("count_min_sketch_%s.db", name))
+
+	// Ensure the directory exists
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
+		return fmt.Errorf("failed to create directory: %v", err)
+	}
 
 	// Serialize the CMS data
 	serializedData := cms.Serialize()
@@ -189,7 +198,8 @@ func (cms *CMS) SaveToDisk(name string) error {
 
 // LoadCountMinSketchFromDisk loads a Count-Min Sketch from disk with the given name
 func LoadCountMinSketchFromDisk(name string) (*CMS, error) {
-	filename := fmt.Sprintf("count_min_sketch_%s.db", name)
+	// Construct the file path relative to the current working directory
+	filename := filepath.Join("probabilistic", fmt.Sprintf("count_min_sketch_%s.db", name))
 	blockManager := block_manager.GetBlockManager()
 
 	// Read size header (first 8 bytes)

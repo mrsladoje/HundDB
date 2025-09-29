@@ -133,7 +133,7 @@ export const Data = () => {
 
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header Sign */}
-        <div className="bg-sloth-brown rounded-2xl p-8 border-4 border-sloth-brown-dark shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden">
+        <div className="mb-3 md:mb-6 bg-sloth-brown rounded-2xl p-8 border-4 border-sloth-brown-dark shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-sloth-yellow via-sloth-yellow-lite to-sloth-yellow"></div>
           <div className="absolute bottom-0 left-0 w-full h-2 bg-gradient-to-r from-sloth-yellow via-sloth-yellow-lite to-sloth-yellow"></div>
           
