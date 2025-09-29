@@ -194,7 +194,7 @@ func LoadLSM() *LSM {
 		lsm.memtables = append(lsm.memtables, firstMemtable)
 		// Initialize next SSTable index on fresh start
 		lsm.mu.Lock()
-		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.NextSSTableIndex = lsm.getNextSSTableIndexUnsafe()
 		lsm.mu.Unlock()
 		return lsm
 	}
@@ -208,7 +208,7 @@ func LoadLSM() *LSM {
 		lsm.mu.Lock()
 		lsm.DataLost = true
 		// Initialize with current state
-		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.NextSSTableIndex = lsm.getNextSSTableIndexUnsafe()
 		lsm.mu.Unlock()
 		return lsm
 	}
@@ -222,7 +222,7 @@ func LoadLSM() *LSM {
 		lsm.mu.Lock()
 		lsm.DataLost = true
 		// Initialize with current state
-		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.NextSSTableIndex = lsm.getNextSSTableIndexUnsafe()
 		lsm.mu.Unlock()
 		return lsm
 	}
@@ -234,14 +234,14 @@ func LoadLSM() *LSM {
 		lsm.mu.Lock()
 		lsm.DataLost = true
 		// Initialize with current state
-		lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+		lsm.NextSSTableIndex = lsm.getNextSSTableIndexUnsafe()
 		lsm.mu.Unlock()
 		return lsm
 	}
 
 	// Successfully loaded previous data
 	lsm.mu.Lock()
-	lsm.NextSSTableIndex = lsm.GetNextSSTableIndex()
+	lsm.NextSSTableIndex = lsm.getNextSSTableIndexUnsafe()
 	lsm.mu.Unlock()
 	return lsm
 }
@@ -601,12 +601,10 @@ func (lsm *LSM) PrefixScan(prefix string, pageSize int, pageNumber int) ([]strin
 }
 
 /*
-GetNextSSTableIndex returns the next available SSTable index by finding the largest
-existing index across all levels and adding 1. Returns 0 if no SSTables exist.
+getNextSSTableIndexUnsafe returns the next available SSTable index without acquiring locks.
+This is an internal helper method that should only be called when locks are already held.
 */
-func (lsm *LSM) GetNextSSTableIndex() uint64 {
-	lsm.mu.RLock()
-	defer lsm.mu.RUnlock()
+func (lsm *LSM) getNextSSTableIndexUnsafe() uint64 {
 	var maxIndex uint64 = 0
 	var hasAnyTables bool = false
 
@@ -627,6 +625,16 @@ func (lsm *LSM) GetNextSSTableIndex() uint64 {
 		return 0
 	}
 	return maxIndex + 1
+}
+
+/*
+GetNextSSTableIndex returns the next available SSTable index by finding the largest
+existing index across all levels and adding 1. Returns 0 if no SSTables exist.
+*/
+func (lsm *LSM) GetNextSSTableIndex() uint64 {
+	lsm.mu.RLock()
+	defer lsm.mu.RUnlock()
+	return lsm.getNextSSTableIndexUnsafe()
 }
 
 /*
