@@ -1,0 +1,15 @@
+{
+  "_comment": "To enable fast hot-reloading for the frontend, we use 'frontend:dev:serverUrl'. This tells Wails to connect to our separate Vite dev server. This requires two commands to run: 'npm run dev' in the frontend directory and 'wails dev' in the project root. If you want to revert to a single-command workflow, remove this key.",
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "HundDB",
+  "outputfilename": "HundDB",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "wailsjsdir": "./frontend/wailsjs",
+  "preBuildHooks": {
+    "*/*": "go run -C ../.. ./utils/icon/copy"
+  },
+  "postBuildHooks": {
+    "*/*": "go run -C ../.. ./utils/icon/delete"
+  }
+}

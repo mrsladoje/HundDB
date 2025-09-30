@@ -1,0 +1,505 @@
+package skip_list
+
+import (
+	"errors"
+	memtable "hunddb/lsm/memtable/memtable_interface"
+	sstable "hunddb/lsm/sstable"
+	model "hunddb/model/record"
+	"math/rand"
+	"time"
+)
+
+// Compile-time assertion that SkipList implements the Memtable interface.
+var _ memtable.MemtableInterface = (*SkipList)(nil)
+
+// Node holds the latest model.Record for a key.
+// We do NOT physically remove nodes; Delete() sets tombstone (logical delete).
+type Node struct {
+	key       string
+	rec       *model.Record
+	nextNodes []*Node // i-th pointer is for level i
+}
+
+// newNode creates a node with given record and height.
+func newNode(rec *model.Record, height uint64) *Node {
+	return &Node{
+		key:       rec.Key,
+		rec:       rec,
+		nextNodes: make([]*Node, height),
+	}
+}
+
+// SkipList is a probabilistic, sorted in-memory structure that stores records by key.
+// It implements Memtable semantics with logical deletion (tombstones).
+type SkipList struct {
+	maxHeight     uint64
+	currentHeight uint64
+	head          *Node
+
+	// Capacity and counters (distinct keys)
+	capacity    int // max distinct keys (active + tombstoned)
+	totalCount  int // current distinct keys
+	activeCount int // current non-tombstoned keys
+
+	// RNG for level selection
+	rng *rand.Rand
+}
+
+// New creates a SkipList memtable with the given parameters.
+// maxHeight >= 1; capacity > 0.
+func New(maxHeight uint64, capacity int) *SkipList {
+	if maxHeight == 0 {
+		maxHeight = 1
+	}
+	headRec := &model.Record{Key: "", Value: nil, Tombstone: true, Timestamp: 0}
+	head := newNode(headRec, maxHeight)
+	return &SkipList{
+		maxHeight:     maxHeight,
+		currentHeight: 1,
+		head:          head,
+		capacity:      capacity,
+		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+// ===== Internal helpers =====
+
+func (s *SkipList) roll() uint64 {
+	h := uint64(1)
+	for s.rng.Int31n(2) == 1 && h < s.maxHeight {
+		h++
+	}
+	return h
+}
+
+// search returns update path and the found node (if any).
+func (s *SkipList) search(target string, update []*Node) (found *Node) {
+	cur := s.head
+	for lvl := int(s.currentHeight) - 1; lvl >= 0; lvl-- {
+		for cur.nextNodes[lvl] != nil && cur.nextNodes[lvl].key < target {
+			cur = cur.nextNodes[lvl]
+		}
+		if update != nil {
+			update[lvl] = cur
+		}
+	}
+	if cur.nextNodes[0] != nil && cur.nextNodes[0].key == target {
+		return cur.nextNodes[0]
+	}
+	return nil
+}
+
+func (s *SkipList) insert(rec *model.Record, update []*Node) *Node {
+	height := s.roll()
+	if height > s.currentHeight {
+		for i := s.currentHeight; i < height; i++ {
+			update[i] = s.head
+		}
+		s.currentHeight = height
+	}
+	n := newNode(rec, height)
+	for i := uint64(0); i < height; i++ {
+		n.nextNodes[i] = update[i].nextNodes[i]
+		update[i].nextNodes[i] = n
+	}
+	return n
+}
+
+// ===== Memtable interface =====
+
+var ErrCapacityExceeded = errors.New("memtable capacity exceeded")
+
+// Put inserts or updates a record for its key.
+// NEW key: if IsFull() -> error; else insert and update counters.
+// EXISTING key: replace record and adjust activeCount on tombstone transitions.
+// If record.Tombstone == true, this acts as a logical delete update.
+func (s *SkipList) Put(record *model.Record) error {
+	if record == nil {
+		return errors.New("nil record")
+	}
+	update := make([]*Node, s.maxHeight)
+	existing := s.search(record.Key, update)
+
+	if existing == nil {
+		// New distinct key
+		if s.IsFull() {
+			return ErrCapacityExceeded
+		}
+		s.insert(record, update)
+		s.totalCount++
+		if !record.Tombstone {
+			s.activeCount++
+		}
+		return nil
+	}
+
+	// Update existing key
+	prevDel := existing.rec.Tombstone
+	newDel := record.Tombstone
+	existing.rec = record
+	if prevDel && !newDel {
+		s.activeCount++
+	} else if !prevDel && newDel {
+		s.activeCount--
+	}
+	return nil
+}
+
+// Delete marks the key as tombstoned using the provided record.
+// record.Tombstone will be forced to true.
+// Returns true if the key existed before this call; false otherwise.
+// For a non-existing key, we insert a tombstone if capacity allows (returning false).
+func (s *SkipList) Delete(record *model.Record) bool {
+	if record == nil {
+		return false
+	}
+	record.Tombstone = true
+
+	update := make([]*Node, s.maxHeight)
+	existing := s.search(record.Key, update)
+
+	if existing == nil {
+		// Insert a tombstone for unseen key.
+		if s.IsFull() {
+			return false
+		}
+		s.insert(record, update)
+		s.totalCount++ // tombstoned new key
+		// activeCount unchanged
+		return false
+	}
+
+	// Key exists: if previously active, decrement activeCount.
+	if existing.rec != nil && !existing.rec.Tombstone {
+		s.activeCount--
+	}
+	existing.rec = record
+	return true
+}
+
+// Get returns the latest non-tombstoned record by key, or nil if absent/tombstoned.
+func (s *SkipList) Get(key string) *model.Record {
+	n := s.search(key, nil)
+	if n == nil || n.rec == nil || n.rec.IsDeleted() {
+		return nil
+	}
+	return n.rec
+}
+
+// GetNextForPrefix returns the next record in lexicographical order after the given key,
+// constrained to the given prefix, or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (s *SkipList) GetNextForPrefix(prefix string, key string, tombstonedKeys *[]string) *model.Record {
+
+	// Start from head and traverse level 0 (bottom level) which has all nodes in sorted order
+	current := s.head.nextNodes[0]
+
+	// Find the first node with key > afterKey
+	for current != nil && current.key <= key {
+		current = current.nextNodes[0]
+	}
+
+	// Now search for the first matching record that isn't tombstoned
+	for current != nil {
+		// Check if key matches prefix
+		if len(current.key) < len(prefix) || current.key[:len(prefix)] != prefix {
+			// If key > prefix and doesn't match prefix, we've gone too far
+			if current.key > prefix {
+				break
+			}
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Key matches prefix, check if record is valid
+		if current.rec == nil {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if record is tombstoned locally
+		if current.rec.IsDeleted() {
+			addToTombstoned(current.key, tombstonedKeys)
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if key is tombstoned in more recent structures
+		if isKeyTombstoned(current.key, tombstonedKeys) {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Found a valid, non-tombstoned record
+		return current.rec
+	}
+
+	return nil
+}
+
+// GetNextForRange returns the next record in lexicographical order after the given key,
+// constrained to the given range [rangeStart, rangeEnd] (inclusive), or nil if none exists.
+// tombstonedKeys is used to track keys that have been tombstoned in more recent structures.
+func (s *SkipList) GetNextForRange(rangeStart string, rangeEnd string, key string, tombstonedKeys *[]string) *model.Record {
+
+	// Start from head and traverse level 0 (bottom level) which has all nodes in sorted order
+	current := s.head.nextNodes[0]
+
+	// Find the first node with key > afterKey
+	for current != nil && current.key <= key {
+		current = current.nextNodes[0]
+	}
+
+	// Now search for the first matching record that isn't tombstoned and is within range
+	for current != nil {
+		// Check if key is within range [rangeStart, rangeEnd] (inclusive)
+		if current.key < rangeStart {
+			current = current.nextNodes[0]
+			continue
+		}
+		if current.key > rangeEnd {
+			// We've gone beyond the range
+			break
+		}
+
+		// Key is within range, check if record is valid
+		if current.rec == nil {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if record is tombstoned locally
+		if current.rec.IsDeleted() {
+			addToTombstoned(current.key, tombstonedKeys)
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Check if key is tombstoned in more recent structures
+		if isKeyTombstoned(current.key, tombstonedKeys) {
+			current = current.nextNodes[0]
+			continue
+		}
+
+		// Found a valid, non-tombstoned record within range
+		return current.rec
+	}
+
+	return nil
+}
+
+// ScanForPrefix scans records with the given prefix and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (s *SkipList) ScanForPrefix(
+	prefix string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if s.head == nil || s.head.nextNodes[0] == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		// Check if key matches prefix
+		if len(current.key) >= len(prefix) && current.key[:len(prefix)] == prefix {
+			if current.rec != nil {
+				s.processRecordForScan(current.rec, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+			}
+		}
+		current = current.nextNodes[0]
+	}
+}
+
+// processRecordForScan processes a single record during the scan operation
+func (s *SkipList) processRecordForScan(
+	record *model.Record,
+	tombstonedSet map[string]bool,
+	bestKeysSet map[string]bool,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+) {
+	// Skip if already tombstoned in newer structures
+	if tombstonedSet[record.Key] {
+		return
+	}
+
+	// Skip if already found in newer memtables
+	if bestKeysSet[record.Key] {
+		return
+	}
+
+	// If this record is a tombstone, add to tombstoned set
+	if record.IsDeleted() {
+		if tombstonedKeys != nil {
+			*tombstonedKeys = append(*tombstonedKeys, record.Key)
+			tombstonedSet[record.Key] = true
+		}
+		return
+	}
+
+	// Add to best keys (maintaining sorted order)
+	if bestKeys != nil {
+		*bestKeys = insertKeySorted(*bestKeys, record.Key)
+		bestKeysSet[record.Key] = true
+	}
+}
+
+// insertKeySorted inserts a key in sorted order into the slice
+func insertKeySorted(keys []string, newKey string) []string {
+	// Binary search for insertion point
+	left, right := 0, len(keys)
+	for left < right {
+		mid := (left + right) / 2
+		if keys[mid] < newKey {
+			left = mid + 1
+		} else {
+			right = mid
+		}
+	}
+
+	// Insert at the found position
+	keys = append(keys, "")
+	copy(keys[left+1:], keys[left:])
+	keys[left] = newKey
+	return keys
+}
+
+// isKeyTombstoned checks if a key is in the tombstoned keys slice
+func isKeyTombstoned(key string, tombstonedKeys *[]string) bool {
+	if tombstonedKeys == nil {
+		return false
+	}
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+// addToTombstoned adds a key to the tombstoned keys slice if it's not already there
+func addToTombstoned(key string, tombstonedKeys *[]string) {
+	if tombstonedKeys == nil {
+		return
+	}
+	// Check if already exists to avoid duplicates
+	for _, tombKey := range *tombstonedKeys {
+		if tombKey == key {
+			return
+		}
+	}
+	*tombstonedKeys = append(*tombstonedKeys, key)
+}
+
+func (s *SkipList) Size() int         { return s.activeCount }
+func (s *SkipList) Capacity() int     { return s.capacity }
+func (s *SkipList) TotalEntries() int { return s.totalCount }
+func (s *SkipList) IsFull() bool      { return s.totalCount >= s.capacity }
+
+// RetrieveSortedRecords returns all records (including tombstones) in sorted key order.
+// This is used for flushing the memtable to an SSTable.
+func (s *SkipList) RetrieveSortedRecords() []model.Record {
+	var records []model.Record
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		if current.rec != nil {
+			// Create a copy of the record to prevent external modification
+			recordCopy := model.Record{
+				Key:       current.rec.Key,
+				Value:     make([]byte, len(current.rec.Value)),
+				Timestamp: current.rec.Timestamp,
+				Tombstone: current.rec.Tombstone,
+			}
+			copy(recordCopy.Value, current.rec.Value)
+			records = append(records, recordCopy)
+		}
+		current = current.nextNodes[0]
+	}
+
+	return records
+}
+
+// Flush persists the memtable contents to disk (SSTable).
+func (s *SkipList) Flush(index int) error {
+
+	sortedRecords := s.RetrieveSortedRecords()
+
+	err := sstable.PersistMemtable(sortedRecords, index)
+	if err != nil {
+		return errors.New("failed to flush SkipList memtable: " + err.Error())
+	}
+
+	return nil
+}
+
+// ScanForRange scans records within the given range and adds keys to bestKeys.
+// Only keys are added for memory efficiency - use Get() to retrieve full records.
+func (s *SkipList) ScanForRange(
+	rangeStart string,
+	rangeEnd string,
+	tombstonedKeys *[]string,
+	bestKeys *[]string,
+	pageSize int,
+	pageNumber int,
+) {
+	if s.head == nil || s.head.nextNodes[0] == nil {
+		return
+	}
+
+	// Create a set of tombstoned keys for O(1) lookup
+	tombstonedSet := make(map[string]bool)
+	if tombstonedKeys != nil {
+		for _, key := range *tombstonedKeys {
+			tombstonedSet[key] = true
+		}
+	}
+
+	// Create a set of existing best keys to avoid duplicates
+	bestKeysSet := make(map[string]bool)
+	if bestKeys != nil {
+		for _, key := range *bestKeys {
+			bestKeysSet[key] = true
+		}
+	}
+
+	// Walk the bottom level (level 0) which contains all nodes in sorted order
+	current := s.head.nextNodes[0] // Skip the head node
+
+	for current != nil {
+		// Check if key is within range [rangeStart, rangeEnd] (inclusive)
+		if current.key >= rangeStart && current.key <= rangeEnd {
+			if current.rec != nil {
+				s.processRecordForScan(current.rec, tombstonedSet, bestKeysSet, tombstonedKeys, bestKeys)
+			}
+		}
+		// If we've gone past the end of the range, we can stop
+		if current.key > rangeEnd {
+			break
+		}
+		current = current.nextNodes[0]
+	}
+}

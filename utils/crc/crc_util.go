@@ -1,0 +1,122 @@
+package crc
+
+import (
+	"encoding/binary"
+	"errors"
+	"hash/crc32"
+	"math"
+)
+
+// TODO: Displace CRC_SIZE to config, load BLOCK_SIZE from config
+const BLOCK_SIZE = 1024 * uint64(4)
+const CRC_SIZE = 4
+
+// GetCRC calculates CRC32 checksum over a byte array.
+func GetCRC(data []byte) uint32 {
+	return crc32.ChecksumIEEE(data)
+}
+
+// AddCRCToData adds a CRC32 checksum to the beginning of the block data.
+// Assumes that the data slice has left space for the CRC in the first 4 bytes.
+func AddCRCToBlockData(data []byte) []byte {
+	if len(data) < CRC_SIZE {
+		return data // Safety check, should not happen because data always leaves space for CRC
+	}
+
+	// Calculate CRC for everything after the CRC field
+	crc := GetCRC(data[CRC_SIZE:])
+
+	// Put CRC at the beginning using little endian
+	binary.LittleEndian.PutUint32(data[:CRC_SIZE], crc)
+
+	return data
+}
+
+/*
+Adds CRC at the beginning of each block therefore making the the data ready to be written.
+The data slice given does not leave space for CRCs, this function handles that internally.
+
+returns a slice of bytes ready to be written to disk with CRCs added at the beginning of each block.
+*/
+func AddCRCsToData(serializedData []byte) []byte {
+
+	dataPerBlock := BLOCK_SIZE - CRC_SIZE
+	numBlocks := int(math.Ceil(float64(len(serializedData)) / float64(dataPerBlock)))
+
+	finalBytes := make([]byte, 0, uint64(numBlocks)*BLOCK_SIZE)
+
+	for i := uint64(0); i < uint64(len(serializedData)); i += dataPerBlock {
+
+		block := make([]byte, BLOCK_SIZE)
+
+		end := uint64(i) + dataPerBlock
+		if end > uint64(len(serializedData)) {
+			end = uint64(len(serializedData))
+		}
+
+		copy(block[CRC_SIZE:], serializedData[i:end])
+		block = AddCRCToBlockData(block)
+
+		finalBytes = append(finalBytes, block...)
+	}
+
+	return finalBytes
+}
+
+/*
+SizeAfterAddingCRCs calculates the size of the byte data after adding CRCs for each block.
+*/
+func SizeAfterAddingCRCs(originalSize uint64) uint64 {
+	dataPerBlock := BLOCK_SIZE - CRC_SIZE
+	numBlocks := int(math.Ceil(float64(originalSize) / float64(dataPerBlock)))
+
+	return originalSize + uint64(numBlocks)*CRC_SIZE
+}
+
+/*
+SizeWithoutCRCs calculates the size of the byte data after removing CRCs for each block.
+*/
+func SizeWithoutCRCs(originalSize uint64) uint64 {
+	numBlocks := uint64(math.Ceil(float64(originalSize) / float64(BLOCK_SIZE)))
+
+	return originalSize - numBlocks*CRC_SIZE
+}
+
+/*
+CheckBlockIntegrity checks the integrity of a block by verifying its CRC.
+*/
+func CheckBlockIntegrity(blockData []byte) error {
+	if len(blockData) < CRC_SIZE {
+		return errors.New("invalid block data")
+	}
+
+	storedCRC := binary.LittleEndian.Uint32(blockData[0:CRC_SIZE])
+	computedCRC := crc32.ChecksumIEEE(blockData[CRC_SIZE:])
+	if storedCRC != computedCRC {
+		return errors.New("CRC mismatch in block")
+	}
+
+	return nil
+}
+
+/*
+FixLastBlockCRC recalculates and fixes the CRC for the last block of the byte data.
+The function modifies the data slice in place.
+*/
+func FixLastBlockCRC(data []byte) error {
+	if len(data) < int(BLOCK_SIZE) {
+		return errors.New("data is too short to contain a complete block")
+	}
+
+	numCompleteBlocks := len(data) / int(BLOCK_SIZE)
+	if numCompleteBlocks == 0 {
+		return errors.New("data does not contain a complete block")
+	}
+
+	lastBlockStart := (numCompleteBlocks - 1) * int(BLOCK_SIZE)
+	lastBlock := data[lastBlockStart : lastBlockStart+int(BLOCK_SIZE)]
+
+	AddCRCToBlockData(lastBlock)
+
+	return nil
+}
