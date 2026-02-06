@@ -301,11 +301,10 @@ Check our [Issues](https://github.com/mrsladoje/HundDB/issues) tab to contribute
 
 ## 👥 Dreamteam
 
-- **[mrsladoje](https://github.com/mrsladoje)** - Lead Developer
-- **[Vukotije](https://github.com/Vukotije)** - Core Contributor
-- **[0vertake](https://github.com/0vertake)** - Core Contributor
-- **[nikolastevanovicc](https://github.com/nikolastevanovicc)** - Core Contributor
-
+- **[mrsladoje](https://github.com/mrsladoje)** 
+- **[Vukotije](https://github.com/Vukotije)** 
+- **[0vertake](https://github.com/0vertake)** 
+- **[nikolastevanovicc](https://github.com/nikolastevanovicc)** 
 ## 🐾 The Motto That Started It All
 
 *"Dachshund Data: Short on time but long on information? Hund-reds of Tables - fetching data faster than you can say 'Hundewurst, bitte!'"*
